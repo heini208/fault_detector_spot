@@ -20,11 +20,12 @@ class MapArtifactStore:
         validate_storage_name(map_id, "map ID")
         if not self.maps_dir.is_dir():
             return ()
-        return tuple(
-            path
-            for path in self.maps_dir.glob(f"{map_id}.*")
-            if path.is_file()
+        # Map IDs are literal names, including dots and glob characters.
+        candidates = (
+            self.maps_dir / f"{map_id}{suffix}"
+            for suffix in (".json", ".db", ".db-wal", ".db-shm", ".db-journal")
         )
+        return tuple(path for path in candidates if path.is_file())
 
     def delete(self, map_id: str) -> tuple:
         """Delete every file belonging to one map and return its paths."""
