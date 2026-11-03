@@ -141,6 +141,7 @@ class ProbeSetupCoordinator:
         self._closing_contexts = set()
         self._ending_refinements = set()
         self._closed = False
+        self._command_listener_attached = True
         self._close_cleanup_running = False
         self._state_listeners = []
         setup_coordinator.add_command_status_listener(self._handle_external_command_status)
@@ -1151,11 +1152,24 @@ class ProbeSetupCoordinator:
         """Close every probe context owned by this coordinator."""
         with self._lock:
             self._closed = True
+            detach_listener = self._command_listener_attached
+            self._command_listener_attached = False
             contexts = tuple(
                 draft.context
                 for draft in self._drafts.values()
             )
         first_error = None
+        # Stop observing external movement before taking any context lock.
+        # Own operation listeners remain attached until terminal completion.
+        if detach_listener:
+            try:
+                self.setup_coordinator.remove_command_status_listener(
+                    self._handle_external_command_status,
+                )
+            except Exception as exception:
+                with self._lock:
+                    self._command_listener_attached = True
+                first_error = exception
         for context in contexts:
             if self.setup_coordinator.is_current(context):
                 try:
@@ -1174,8 +1188,6 @@ class ProbeSetupCoordinator:
         first_error = None
         try:
             for cleanup in (
-                lambda: self.setup_coordinator.remove_command_status_listener(
-                    self._handle_external_command_status),
                 self._state_listeners.clear,
                 self.refinement_controller.clear,
                 self.finalization_controller.clear,

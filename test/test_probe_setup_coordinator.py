@@ -21,6 +21,7 @@ from fault_detector_spot.application.commanding.semantic_command import (
     StampedPose,
 )
 from fault_detector_spot.application.controllers.command_controller import (
+    CommandController,
     CommandControllerState,
     CommandControllerStatus,
 )
@@ -1187,6 +1188,84 @@ def test_closing_context_releases_refinement_attachment(tmp_path):
     probe.close_context(state.context)
 
     assert attachment_controller.active_reservations == 0
+
+
+@pytest.mark.parametrize("prepared_motion", [False, True])
+def test_shutdown_does_not_deadlock_with_external_status(
+    tmp_path, monkeypatch, prepared_motion,
+):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event, current_thread
+
+    listener_errors = []
+    commands = CommandController(listener_error_handler=listener_errors.append)
+    setup = SetupCoordinator(commands)
+    probe = ProbeSetupCoordinator(
+        setup,
+        multi_reference_view_repository.MultiReferenceViewRepository(tmp_path / "objects"),
+        FakeSensorAttachmentController(),
+        geometry=FakeGeometry(),
+        motion_state_source=FakeMotionStateSource(),
+        motion_command_factory=FakeMotionCommandFactory(),
+    )
+    state = probe.open_context("probe-ui")
+    if prepared_motion:
+        state = create_selected_routine(probe, state.context)
+        state = probe.begin_refinement(state.context, fully_custom=True)
+        probe.prepare_motion(
+            state.context, ProbeMotionRequest(kind=ProbeMotionKind.MOVE_SAFE_APPROACH),
+        )
+
+    status_started, removal_started = Event(), Event()
+    original_context_lock = probe._context_lock
+    original_remove = commands.remove_status_listener
+    removed = []
+
+    def context_lock(context):
+        lock = original_context_lock(context)
+        if current_thread().name.startswith("status"):
+            # Keep the real context lock in hand before shutdown can retire it.
+            status_started.set()
+            assert removal_started.wait(5)
+        return lock
+
+    def remove_listener(listener):
+        removal_started.set()
+        # Bound the real command-lock wait so a regression cannot hang pytest.
+        if not commands._lock.acquire(timeout=2):
+            raise TimeoutError("Probe shutdown deadlocked with status delivery")
+        try:
+            original_remove(listener)
+            removed.append(listener)
+        finally:
+            commands._lock.release()
+
+    monkeypatch.setattr(probe, "_context_lock", context_lock)
+    monkeypatch.setattr(commands, "remove_status_listener", remove_listener)
+    request = CommandRequest.create(
+        SemanticCommand(command_id=CommandID.MOVE_BASE_RELATIVE),
+        client_id="operator-ui", origin=CommandOrigin.OPERATIONAL,
+        recording_policy=RecordingPolicy.EXCLUDE,
+    )
+    with (
+        ThreadPoolExecutor(max_workers=1, thread_name_prefix="status") as status_worker,
+        ThreadPoolExecutor(max_workers=1) as shutdown_worker,
+    ):
+        delivery = status_worker.submit(commands.submit, request)
+        try:
+            assert status_started.wait(5)
+            shutdown_worker.submit(probe.close).result(timeout=5)
+        finally:
+            removal_started.set()
+        assert delivery.result(timeout=5) == request.request_id
+
+    probe.close()
+    assert listener_errors == []
+    assert removed == [probe._handle_external_command_status]
+    assert commands._listeners == [setup._handle_command_status]
+    assert setup.contexts == ()
+    assert not probe.refinement_controller.has_context(state.context)
+    assert probe.refinement_controller.sensor_attachment_controller.active_reservations == 0
 
 
 @pytest.mark.parametrize("close_kind", ["context", "coordinator", "abort"])
