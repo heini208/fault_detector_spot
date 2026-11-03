@@ -55,23 +55,26 @@ from fault_detector_spot.inspection.setup.probe_setup_motion import (
 from fault_detector_spot.navigation.body_height import validate_body_height
 
 
-def _serialized_transaction(method):
-    @wraps(method)
-    def wrapped(self, context, *args, **kwargs):
-        if method.__name__ == "close_context":
-            with self._lock:
-                if context.context_id not in self._drafts:
-                    return None
-        with self._context_lock(context):
-            # Abort must reach its cancellation path during motion or recovery.
-            # It checks for active finalization before discarding the draft.
-            if method.__name__ not in {
-                "snapshot", "close_context", "end_refinement",
-            }:
-                self._require_idle(context)
-            return method(self, context, *args, **kwargs)
+def _serialized_transaction(*, require_idle=True, allow_closed_context=False):
+    """Serialize context access, requiring idle setup unless explicitly disabled.
 
-    return wrapped
+    Allowing a closed context makes a repeated close a no-op.
+    """
+    def decorate(method):
+        @wraps(method)
+        def wrapped(self, context, *args, **kwargs):
+            if allow_closed_context:
+                with self._lock:
+                    if context.context_id not in self._drafts:
+                        return None
+            with self._context_lock(context):
+                if require_idle:
+                    self._require_idle(context)
+                return method(self, context, *args, **kwargs)
+
+        return wrapped
+
+    return decorate
 
 
 @dataclass(frozen=True)
@@ -280,7 +283,7 @@ class ProbeSetupCoordinator:
             raise LookupError(f"Unknown probe context: {context_id}")
         return context
 
-    @_serialized_transaction
+    @_serialized_transaction(require_idle=False, allow_closed_context=True)
     def close_context(self, context: SetupContextSnapshot) -> None:
         """Cancel one draft, retaining motion ownership through its result."""
         draft = self._draft(context)
@@ -318,7 +321,7 @@ class ProbeSetupCoordinator:
             self.setup_coordinator.close_context(draft.context)
         self._finish_close()
 
-    @_serialized_transaction
+    @_serialized_transaction(require_idle=False)
     def snapshot(
         self,
         context: SetupContextSnapshot,
@@ -399,7 +402,7 @@ class ProbeSetupCoordinator:
             routine_waypoint_names=routine_waypoint_names,
         )
 
-    @_serialized_transaction
+    @_serialized_transaction()
     def refresh(
         self,
         context: SetupContextSnapshot,
@@ -408,7 +411,7 @@ class ProbeSetupCoordinator:
         self._draft(context)
         return self.snapshot(context)
 
-    @_serialized_transaction
+    @_serialized_transaction()
     def select_routine(
         self,
         context: SetupContextSnapshot,
@@ -430,7 +433,7 @@ class ProbeSetupCoordinator:
             draft.clear_geometry()
         return self._advance(draft)
 
-    @_serialized_transaction
+    @_serialized_transaction()
     def select_object(
         self,
         context: SetupContextSnapshot,
@@ -448,7 +451,7 @@ class ProbeSetupCoordinator:
             draft.clear_geometry()
         return self._advance(draft)
 
-    @_serialized_transaction
+    @_serialized_transaction()
     def create_object(
         self,
         context: SetupContextSnapshot,
@@ -468,7 +471,7 @@ class ProbeSetupCoordinator:
             draft.clear_geometry()
         return self._advance(draft)
 
-    @_serialized_transaction
+    @_serialized_transaction()
     def delete_object(
         self,
         context: SetupContextSnapshot,
@@ -484,7 +487,7 @@ class ProbeSetupCoordinator:
                 draft.clear_selection()
         return self._advance(draft)
 
-    @_serialized_transaction
+    @_serialized_transaction()
     def create_routine(
         self,
         context: SetupContextSnapshot,
@@ -518,7 +521,7 @@ class ProbeSetupCoordinator:
             raise RuntimeError("Close probe refinement before changing routine navigation")
         return draft
 
-    @_serialized_transaction
+    @_serialized_transaction()
     def save_routine_map(self, context, object_id, routine_id, map_name):
         """Associate a saved map without changing the running navigation map."""
         draft = self._navigation_assignment_draft(context, object_id, routine_id)
@@ -531,7 +534,7 @@ class ProbeSetupCoordinator:
             self.definition_service.set_routine_map(object_id, routine_id, normalized)
         return self._advance(draft)
 
-    @_serialized_transaction
+    @_serialized_transaction()
     def save_routine_waypoint(self, context, object_id, routine_id, map_name, waypoint_name):
         """Associate only a waypoint belonging to the routine's saved map."""
         draft = self._navigation_assignment_draft(context, object_id, routine_id)
@@ -552,7 +555,7 @@ class ProbeSetupCoordinator:
             self.definition_service.set_routine_waypoint(object_id, routine_id, normalized)
         return self._advance(draft)
 
-    @_serialized_transaction
+    @_serialized_transaction()
     def save_base_position(
         self,
         context: SetupContextSnapshot,
@@ -586,7 +589,7 @@ class ProbeSetupCoordinator:
         )
         return self._advance(draft)
 
-    @_serialized_transaction
+    @_serialized_transaction()
     def save_routine_safe_approach_pose(self, context, position_tolerance_m=.1):
         """Capture the routine's shared, object-referenced probe-tip pose."""
         draft = self._draft(context)
@@ -606,7 +609,7 @@ class ProbeSetupCoordinator:
         draft.clear_geometry()
         return self._advance(draft)
 
-    @_serialized_transaction
+    @_serialized_transaction()
     def delete_routine(
         self,
         context: SetupContextSnapshot,
@@ -631,7 +634,7 @@ class ProbeSetupCoordinator:
                 draft.clear_geometry()
         return self._advance(draft)
 
-    @_serialized_transaction
+    @_serialized_transaction()
     def delete_probe_point(
         self,
         context: SetupContextSnapshot,
@@ -648,7 +651,7 @@ class ProbeSetupCoordinator:
         )
         return self._advance(draft)
 
-    @_serialized_transaction
+    @_serialized_transaction()
     def select_reference_pixel(
         self,
         context: SetupContextSnapshot,
@@ -670,7 +673,7 @@ class ProbeSetupCoordinator:
         )
         return self._advance(draft)
 
-    @_serialized_transaction
+    @_serialized_transaction()
     def clear_reference_pixel(
         self,
         context: SetupContextSnapshot,
@@ -680,7 +683,7 @@ class ProbeSetupCoordinator:
         self.geometry_editor.clear_reference_pixel(draft)
         return self._advance(draft)
 
-    @_serialized_transaction
+    @_serialized_transaction()
     def update_geometry(
         self,
         context: SetupContextSnapshot,
@@ -698,7 +701,7 @@ class ProbeSetupCoordinator:
         )
         return self._advance(draft)
 
-    @_serialized_transaction
+    @_serialized_transaction()
     def approve_safe_pose(
         self,
         context: SetupContextSnapshot,
@@ -711,7 +714,7 @@ class ProbeSetupCoordinator:
         )
         return self._advance(draft)
 
-    @_serialized_transaction
+    @_serialized_transaction()
     def approve_aligned_pose(
         self,
         context: SetupContextSnapshot,
@@ -736,7 +739,7 @@ class ProbeSetupCoordinator:
         draft.aligned_precision_mode = precision_mode
         return self._advance(draft)
 
-    @_serialized_transaction
+    @_serialized_transaction()
     def approve_probe_pose(
         self,
         context: SetupContextSnapshot,
@@ -760,7 +763,7 @@ class ProbeSetupCoordinator:
         draft.final_precision_mode = precision_mode
         return self._advance(draft)
 
-    @_serialized_transaction
+    @_serialized_transaction()
     def begin_refinement(
         self,
         context: SetupContextSnapshot,
@@ -783,12 +786,12 @@ class ProbeSetupCoordinator:
         self.refinement_controller.begin(draft)
         return self._advance(draft)
 
-    @_serialized_transaction
+    @_serialized_transaction(require_idle=False)
     def end_refinement(
         self,
         context: SetupContextSnapshot,
     ) -> ProbeSetupSnapshot:
-        """Abort the current unsaved probe-point creation."""
+        """Abort unsaved probe-point creation, including during motion or recovery."""
         draft = self._selected_draft(context)
         if draft.refinement is None:
             return self.snapshot(context)
@@ -968,7 +971,7 @@ class ProbeSetupCoordinator:
             self._finish_context_close(draft)
             return snapshot
 
-    @_serialized_transaction
+    @_serialized_transaction()
     def add_pathing_point(self, context, name, position_tolerance_m=.01,
                           arm_speed_scale=1.0, path_stage="alignment", precision_mode=False):
         """Capture a full tag-relative tip pose without changing final alignment."""
@@ -996,7 +999,7 @@ class ProbeSetupCoordinator:
         draft.dirty = True
         return self._advance(draft)
 
-    @_serialized_transaction
+    @_serialized_transaction()
     def delete_pathing_point(self, context, index, path_stage="alignment"):
         """Remove the selected waypoint without changing the final pose."""
         draft = self._selected_draft(context)
@@ -1008,7 +1011,7 @@ class ProbeSetupCoordinator:
         draft.dirty = True
         return self._advance(draft)
 
-    @_serialized_transaction
+    @_serialized_transaction()
     def reorder_pathing_point(self, context, index, direction, path_stage="alignment"):
         draft = self._selected_draft(context)
         self.refinement_controller.require_refinement(draft)
@@ -1025,7 +1028,7 @@ class ProbeSetupCoordinator:
         draft.dirty = True
         return self._advance(draft)
 
-    @_serialized_transaction
+    @_serialized_transaction()
     def set_pathing_point_speed(self, context, index, arm_speed_scale, path_stage="alignment"):
         validate_arm_speed_scale(arm_speed_scale)
         draft = self._selected_draft(context)
@@ -1037,7 +1040,7 @@ class ProbeSetupCoordinator:
         draft.dirty = True
         return self._advance(draft)
 
-    @_serialized_transaction
+    @_serialized_transaction()
     def set_pathing_point_settings(
         self, context, index, position_tolerance_m, arm_speed_scale,
         precision_mode=False, path_stage="alignment",
@@ -1122,7 +1125,7 @@ class ProbeSetupCoordinator:
         """Remove one probe motion status listener."""
         self.refinement_controller.remove_listener(listener)
 
-    @_serialized_transaction
+    @_serialized_transaction()
     def save_probe_point(
         self,
         context: SetupContextSnapshot,

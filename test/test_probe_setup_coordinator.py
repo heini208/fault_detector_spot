@@ -1031,6 +1031,38 @@ def test_context_ownership_and_stale_revisions_are_enforced(tmp_path):
         probe.refresh(opened.context)
 
 
+@pytest.mark.parametrize("busy_reason, error", [
+    ("motion", "active motion"),
+    ("recovery", "requires retraction"),
+    ("finalization", "active finalization"),
+])
+def test_busy_context_allows_snapshots_but_blocks_transactions(
+    tmp_path, monkeypatch, busy_reason, error,
+):
+    probe, _ = coordinator(tmp_path)
+    state = create_selected_routine(probe, probe.open_context("probe-ui").context)
+    state = probe.begin_refinement(state.context, fully_custom=True)
+    if busy_reason == "motion":
+        operation = probe.prepare_motion(
+            state.context, ProbeMotionRequest(kind=ProbeMotionKind.MOVE_SAFE_APPROACH),
+        )
+        probe.submit_motion(operation)
+    elif busy_reason == "recovery":
+        probe._drafts[state.context.context_id].refinement.require_recovery("Retract first")
+    else:
+        monkeypatch.setattr(
+            probe.finalization_controller, "active_request_id",
+            lambda _context: "finalization-request",
+        )
+
+    before = probe.snapshot(state.context)
+    with pytest.raises(RuntimeError, match=error):
+        probe.refresh(state.context)
+    with pytest.raises(RuntimeError, match=error):
+        probe.clear_reference_pixel(state.context)
+    assert probe.snapshot(state.context) == before
+
+
 def test_pure_authoring_core_has_no_execution_command_dependency():
     package = Path(__file__).parents[1] / "fault_detector_spot"
     paths = (
