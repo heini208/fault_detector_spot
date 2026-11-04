@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+import math
 from typing import TYPE_CHECKING
 
 from PyQt5.QtWidgets import QMessageBox
@@ -27,6 +28,24 @@ class UIControlHelper(ABC):
     def add_rows(self, layout):
         for row in self.make_rows():
             layout.addLayout(row)
+
+    def read_finite_fields(self, fields) -> dict[str, float] | None:
+        """Read numeric fields, leaving invalid input intact for correction."""
+        values = {}
+        for label, field in fields.items():
+            try:
+                value = float(field.text())
+            except ValueError:
+                value = None
+            if value is None or not math.isfinite(value):
+                self.show_warning(
+                    "Invalid Input", f"Enter a finite number for {label}.",
+                )
+                field.setFocus()
+                field.selectAll()
+                return None
+            values[label] = value
+        return values
 
     # Convenience dialog methods
     def show_info(self, title: str, message: str):

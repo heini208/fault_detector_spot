@@ -212,19 +212,18 @@ class BaseMovementControls(UIControlHelper):
 
     def _change_offset(self, axis, delta):
         fld = self.offset_fields[axis]
-        try:
-            val = float(fld.text())
-        except ValueError:
-            val = 0.0
+        values = self.read_finite_fields({axis: fld})
+        if values is None:
+            return
+        val = values[axis]
         fld.setText(f"{val + delta:.2f}")
 
     def _change_angle(self, axis, delta):
         fld = self.offset_fields[axis]
-        try:
-            val = float(fld.text())
-        except ValueError:
-            val = 0.0
-        val += delta
+        values = self.read_finite_fields({axis: fld})
+        if values is None:
+            return
+        val = values[axis] + delta
         if val > 180.0:
             val -= 360.0
         elif val < -180.0:
@@ -252,6 +251,9 @@ class BaseMovementControls(UIControlHelper):
     # ---------------------- Command Builders ----------------------
 
     def build_move_base_intent(self, intent_id):
+        offsets = self.read_finite_fields(self.offset_fields)
+        if offsets is None:
+            return None
         intent = OperationalIntent()
         intent.intent = intent_id
         intent.walking_profile = self.walking_profile_dropdown.currentData()
@@ -265,9 +267,9 @@ class BaseMovementControls(UIControlHelper):
             intent.tag = tag_element
 
         # offset & rotation
-        x = float(self.offset_fields["X"].text())
-        y = float(self.offset_fields["Y"].text())
-        yaw_deg = float(self.offset_fields["Yaw"].text())
+        x = offsets["X"]
+        y = offsets["Y"]
+        yaw_deg = offsets["Yaw"]
         yaw = math.radians(yaw_deg)
 
         q = Quaternion()
@@ -299,6 +301,8 @@ class BaseMovementControls(UIControlHelper):
         intent = self.build_move_base_intent(
             OperationalIntent.INTENT_MOVE_BASE_RELATIVE
         )
+        if intent is None:
+            return
         msg = (
             f"Move base relative by X={intent.offset.pose.position.x:.2f}, "
             f"Y={intent.offset.pose.position.y:.2f}, "
@@ -319,6 +323,8 @@ class BaseMovementControls(UIControlHelper):
         intent = self.build_move_base_intent(
             OperationalIntent.INTENT_MOVE_BASE_TO_TAG
         )
+        if intent is None:
+            return
         msg = (
             f"Move base to tag {intent.tag.id} "
             f"with offset X={intent.offset.pose.position.x:.2f}, "

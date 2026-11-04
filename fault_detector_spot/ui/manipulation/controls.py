@@ -563,7 +563,10 @@ class ManipulationControls(UIControlHelper):
 
     def _change_angle(self, axis: str, delta: float):
         field = self.offset_fields[axis]
-        val = float(field.text()) + delta
+        values = self.read_finite_fields({axis: field})
+        if values is None:
+            return
+        val = values[axis] + delta
         if val > 180.0:
             val -= 360.0
         elif val < -180.0:
@@ -578,11 +581,10 @@ class ManipulationControls(UIControlHelper):
 
     def _change_offset(self, axis: str, delta: float):
         fld = self.offset_fields[axis]
-        try:
-            val = float(fld.text())
-        except ValueError:
-            val = 0.0
-        val += delta
+        values = self.read_finite_fields({axis: fld})
+        if values is None:
+            return
+        val = values[axis] + delta
         fld.setText(f"{val:.2f}")
 
     def _make_control_row(self) -> QHBoxLayout:
@@ -611,14 +613,18 @@ class ManipulationControls(UIControlHelper):
             row.addWidget(btn)
         return row
 
-    def build_move_to_tag_intent(self) -> OperationalIntent:
+    def build_move_to_tag_intent(self) -> OperationalIntent | None:
         intent = OperationalIntent()
         intent.intent = OperationalIntent.INTENT_MOVE_ARM_TO_TAG
         return self.add_tag_info_to_intent(intent)
 
     def add_offset_to_intent(self, intent: OperationalIntent):
-        ox, oy, oz, roll_deg, pitch_deg, yaw_deg = (self._get_offset(a) for a in
-                                                    ("X", "Y", "Z", "Roll", "Pitch", "Yaw"))
+        offsets = self.read_finite_fields(self.offset_fields)
+        if offsets is None:
+            return None
+        ox, oy, oz, roll_deg, pitch_deg, yaw_deg = (
+            offsets[axis] for axis in ("X", "Y", "Z", "Roll", "Pitch", "Yaw")
+        )
         omode = self.orientation_combo.currentText()
         roll = math.radians(roll_deg)
         pitch = math.radians(pitch_deg)
@@ -675,12 +681,6 @@ class ManipulationControls(UIControlHelper):
         intent = self.add_tag_element_to_intent(intent)
         return self.add_offset_to_intent(intent)
 
-    def _get_offset(self, axis: str) -> float:
-        try:
-            return float(self.offset_fields[axis].text())
-        except Exception:
-            return 0.0
-
     def add_tag_element_to_intent(
         self,
         intent: OperationalIntent,
@@ -736,6 +736,8 @@ class ManipulationControls(UIControlHelper):
             intent = self.build_move_to_tag_intent()
         except TagNotFound:
             return
+        if intent is None:
+            return
         intent.intent = OperationalIntent.INTENT_MOVE_ARM_TO_TAG_AND_WAIT
         intent.duration_sec = self.duration_input.value()
 
@@ -760,6 +762,8 @@ class ManipulationControls(UIControlHelper):
         try:
             intent = self.build_move_to_tag_intent()
         except TagNotFound:
+            return
+        if intent is None:
             return
 
         pos = intent.tag.pose.pose.position
