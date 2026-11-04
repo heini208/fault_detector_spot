@@ -2,6 +2,8 @@ name: Automated baseline
 
 # Run this environment-heavy baseline explicitly from GitHub Actions.
 on:
+  push:
+    branches: [codex/validate-contract-fixes-20261104]
   workflow_dispatch:
 
 permissions:
