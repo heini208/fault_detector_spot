@@ -100,7 +100,9 @@ class MoveCloseToSurfaceConfig(MeasureSensorTipDistanceConfig):
                 node.declare_parameter(name, default)
             value = parameter_override(name, node.get_parameter(name).value)
             values[field.name] = (
-                value if type(default) is int else float(value)
+                value if type(default) in (bool, int)
+                or field.name in ("observation_reference_u", "observation_reference_v")
+                else float(value)
             )
         config = cls(**values)
         config.validate()

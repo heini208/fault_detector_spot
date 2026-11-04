@@ -7,6 +7,11 @@
     close_surface.sample_timeout_sec: 6.0
     # Slow camera excursion and verified return around the fixed probe target.
     close_surface.observation_speed_mps: 0.010
+    # Automatic viewing follows the mounted probe axis. Custom coordinates
+    # bound the target viewing region inside the full measurement patch margin.
+    close_surface.observation_custom_region_enabled: false
+    close_surface.observation_reference_u: 0.5
+    close_surface.observation_reference_v: 0.75
     # Include the slower round trip and bounded return corrections.
     close_surface.maximum_measurement_duration_sec: 120.0
 

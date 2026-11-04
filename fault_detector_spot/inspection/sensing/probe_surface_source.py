@@ -242,6 +242,7 @@ class ProbeSurfaceSource(RuntimeSource):
         target_plane_probe: SurfacePlane | None = None,
         allow_translation: bool = True,
         acquisition_not_before: float = 0.0,
+        reference_position: tuple[float, float] | None = None,
     ) -> SensorTipObservationView:
         """Align the camera with the saved probe ray, then measure fresh depth.
 
@@ -277,11 +278,13 @@ class ProbeSurfaceSource(RuntimeSource):
                     camera_intrinsics(camera_info, (depth_image.width, depth_image.height), "Depth CameraInfo"),
                     (depth_image.width, depth_image.height),
                     SURFACE_ORIENTATION_MAXIMUM_FIT_RADIUS_PX + TARGET_SUPPORT_RADIUS_PX + 1,
+                    reference_position=reference_position,
                 )
                 if math.hypot(translation.x, translation.y, translation.z) >= 0.001:
                     return SensorTipObservationView(
                         False, camera_pose, translation,
-                        "Align camera with the original sensor-tip +X axis using calibrated TF",
+                        "View the original sensor-tip +X axis using calibrated TF"
+                        + (" and the configured image region" if reference_position is not None else ""),
                     )
             sample = measure_sensor_tip_distance(
                 depth_image, camera_info, reference_probe_pose,

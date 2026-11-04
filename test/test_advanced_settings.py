@@ -151,6 +151,54 @@ def test_invalid_form_reports_problem_without_overwriting_saved_values(app):
     page.close()
 
 
+@pytest.mark.parametrize('horizontal,vertical', [(0., 100.), (100., 0.)])
+def test_sensor_observation_reference_roundtrips_image_edges(app, horizontal, vertical):
+    repo = BasicSettingsRepository()
+    page = AdvancedSettingsPage(repository=repo)
+    toggle = 'close_surface.observation_custom_region_enabled'
+    u = 'close_surface.observation_reference_u'
+    v = 'close_surface.observation_reference_v'
+    assert page.fields[toggle].isChecked() is False
+    assert not page.fields[u].isEnabled() and not page.fields[v].isEnabled()
+    page.save()
+    assert repo.load() == {}  # Opening settings retains automatic viewing.
+
+    page.fields[toggle].setChecked(True)
+    assert page.fields[u].isEnabled() and page.fields[v].isEnabled()
+    page.fields[u].setValue(horizontal)
+    page.fields[v].setValue(vertical)
+    page.save()
+    assert repo.load() == {toggle: True, u: horizontal / 100., v: vertical / 100.}
+    page.close()
+
+    restored = AdvancedSettingsPage(repository=repo)
+    assert restored.fields[toggle].isChecked() is True
+    assert restored.fields[u].isEnabled() and restored.fields[v].isEnabled()
+    assert restored.fields[u].value() == horizontal
+    assert restored.fields[v].value() == vertical
+    restored.close()
+
+
+def test_sensor_observation_toggle_tracks_reset_reload_and_keeps_custom_position(app):
+    repo = BasicSettingsRepository()
+    toggle = 'close_surface.observation_custom_region_enabled'
+    u = 'close_surface.observation_reference_u'
+    v = 'close_surface.observation_reference_v'
+    repo.save({toggle: True, u: .9, v: .8})
+    page = AdvancedSettingsPage(repository=repo)
+    page.reset_defaults()
+    assert not page.fields[u].isEnabled() and not page.fields[v].isEnabled()
+    assert page.fields[u].value() == 50. and page.fields[v].value() == 75.
+    page.reload()
+    assert page.fields[u].isEnabled() and page.fields[v].isEnabled()
+    assert page.fields[u].value() == 90. and page.fields[v].value() == 80.
+    page.fields[toggle].setChecked(False)
+    assert not page.fields[u].isEnabled() and not page.fields[v].isEnabled()
+    page.save()
+    assert repo.load() == {toggle: False, u: .9, v: .8}
+    page.close()
+
+
 def test_precision_execution_honours_zero_correction_setting(monkeypatch):
     from test_arm_precision_execution import precision_rig, finish_motion, stable_feedback
     from fault_detector_spot.manipulation.arm_movement_result import ArmMovementOutcome

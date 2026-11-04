@@ -6,7 +6,7 @@ from PyQt5.QtWidgets import QLabel
 
 from .basic_settings_page import BasicSettingsPage
 from fault_detector_spot.shared.persistence.basic_settings import factory_advanced_settings
-from fault_detector_spot.shared.persistence.advanced_settings import INTEGER_MINIMUMS, SCALING_KEYS
+from fault_detector_spot.shared.persistence.advanced_settings import FRACTION_KEYS, INTEGER_MINIMUMS, SCALING_KEYS
 
 
 DEGREES = 180. / math.pi
@@ -38,6 +38,12 @@ SECTIONS = (
         ('close_surface.approach_near_speed_mps', 'Speed near the surface', 1000., ' mm/s'),
         ('close_surface.approach_slowdown_distance_m', 'Distance used to select a slower speed', 1000., ' mm'),
         ('close_surface.contact_search_force_threshold_n', 'Force threshold for zero-distance contact', 1., ' N'),
+    )),
+    ('Sensor observation', 'Automatic viewing follows the mounted sensor axis. A custom reference point bounds '
+     'the viewing region; the measured target pixel still depends on distance. '
+     '0% is left/top and 100% is right/bottom, leaving room for the full measurement patch.', (
+        ('close_surface.observation_reference_u', 'Horizontal position (Left → Right)', 100., ' %'),
+        ('close_surface.observation_reference_v', 'Vertical position (Top → Bottom)', 100., ' %'),
     )),
     ('Navigation', 'Speed limits and arrival accuracy for autonomous navigation. '
      'Restart the robot application and navigation to apply.', (
@@ -78,6 +84,9 @@ class AdvancedSettingsPage(BasicSettingsPage):
             hint = QLabel(explanation)
             hint.setWordWrap(True)
             form.addRow(hint)
+            if title == 'Sensor observation':
+                self._boolean(form, 'close_surface.observation_custom_region_enabled',
+                              'Use custom reference point', explanation)
             for key, label, factor, suffix in entries:
                 self._number(form, key, label, factor, suffix)
                 field = self.fields[key]
@@ -87,6 +96,8 @@ class AdvancedSettingsPage(BasicSettingsPage):
                     field.setMinimum(INTEGER_MINIMUMS[key])
                 elif key in SCALING_KEYS:
                     field.setMaximum(100.)
+                elif key in FRACTION_KEYS:
+                    field.setRange(0., 100.)
                 elif key == 'arm.motion.position_tolerance_m':
                     field.setRange(1., 100.)
             if title == 'Force and contact':
@@ -104,3 +115,13 @@ class AdvancedSettingsPage(BasicSettingsPage):
                 self._boolean(form, 'arm.contact.telemetry.raw_logging_enabled',
                               'Save detailed force readings',
                               'Write raw contact telemetry for diagnosing and tuning force detection.')
+            elif title == 'Sensor observation':
+                self.fields['close_surface.observation_custom_region_enabled'].toggled.connect(
+                    self._update_observation_fields,
+                )
+                self._update_observation_fields()
+
+    def _update_observation_fields(self):
+        enabled = self.fields['close_surface.observation_custom_region_enabled'].isChecked()
+        for key in FRACTION_KEYS:
+            self.fields[key].setEnabled(enabled)

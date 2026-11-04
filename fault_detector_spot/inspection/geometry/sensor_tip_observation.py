@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 import math
+from numbers import Real
 
 import numpy as np
 
@@ -41,13 +42,17 @@ def probe_axis_in_camera(reference_probe_pose, camera_pose_odom):
 
 def probe_axis_observation_translation(
     reference_probe_pose, camera_pose_odom, intrinsics, image_size, patch_margin_px,
+    *, reference_position=None,
 ):
-    """Place the camera on the saved probe axis without knowing target depth.
+    """Bring the saved probe ray into view without knowing target depth.
 
     Translate perpendicular to the original probe +X and preserve orientation.
-    Once the optical center lies on that line, every forward target projects to
-    the same calibrated pixel. The pixel follows the mount direction, rather
-    than a surface estimate or an arbitrary image destination.
+    By default, place the optical center on that line so every forward target
+    projects to the mount's calibrated axis pixel. A custom normalized image
+    position instead places the original tip origin at the selected pixel,
+    inset by the patch margin. Positive-range targets then project along the
+    segment from that pixel toward the calibrated axis pixel; their exact
+    pixel depends on distance. Neither mode estimates a surface before moving.
     """
     reference_probe_pose.validate()
     camera_pose_odom.validate()
@@ -72,7 +77,28 @@ def probe_axis_observation_translation(
     # Ignore only floating-point transform noise at coincident axial positions.
     if axial_offset < -1e-9:
         raise ValueError("Camera is ahead of the original sensor tip along the saved probe axis")
-    translation_camera = origin - axial_offset * direction
+    if reference_position is None:
+        translation_camera = origin - axial_offset * direction
+    else:
+        try:
+            horizontal, vertical = reference_position
+        except (TypeError, ValueError) as error:
+            raise ValueError("Observation reference position must contain two normalized coordinates") from error
+        if (isinstance(reference_position, (str, bytes, dict))
+                or any(isinstance(value, bool) or not isinstance(value, Real)
+                       or not math.isfinite(value) or not 0.0 <= value <= 1.0
+                       for value in (horizontal, vertical))):
+            raise ValueError("Observation reference coordinates must be finite numbers from 0 to 1")
+        if axial_offset <= 0.0:
+            raise ValueError("Custom observation reference requires the camera behind the original sensor tip")
+        selected_u = patch_margin_px + float(horizontal) * (width - 1 - 2 * patch_margin_px)
+        selected_v = patch_margin_px + float(vertical) * (height - 1 - 2 * patch_margin_px)
+        _, _, cx, cy = intrinsics
+        selected_ray = np.array([(selected_u - cx) / fx, (selected_v - cy) / fy, 1.0])
+        denominator = float(np.dot(selected_ray, direction))
+        if not math.isfinite(denominator) or denominator <= 0.0:
+            raise ValueError("Observation reference ray does not face along the saved probe axis")
+        translation_camera = origin - axial_offset / denominator * selected_ray
     translation_odom = rotation_from_quaternion(camera_pose_odom.orientation).apply(
         translation_camera,
     )

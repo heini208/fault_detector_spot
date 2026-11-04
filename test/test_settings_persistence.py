@@ -70,6 +70,24 @@ def test_invalid_advanced_values_leave_saved_file_intact(values):
     assert repo.path.read_bytes() == previous
 
 
+@pytest.mark.parametrize('key', [
+    'close_surface.observation_reference_u', 'close_surface.observation_reference_v',
+])
+@pytest.mark.parametrize('value', [-.01, 1.01, float('nan'), float('inf'), True])
+def test_invalid_observation_reference_preserves_saved_settings(key, value):
+    repo = BasicSettingsRepository()
+    repo.save({'arm_mode': 'precision'})
+    previous = repo.path.read_bytes()
+    with pytest.raises(ValueError, match='Invalid advanced setting'):
+        repo.save({key: value})
+    assert repo.path.read_bytes() == previous
+
+
+def test_observation_reference_requires_boolean_mode():
+    with pytest.raises(ValueError, match='Invalid advanced setting'):
+        BasicSettingsRepository().save({'close_surface.observation_custom_region_enabled': 1})
+
+
 @pytest.mark.parametrize('kind,filename,root,values,paths', [
     ('moveit', 'moveit_sensors.yaml', '/move_group',
      {'moveit.octomap_resolution_m': .025, 'moveit.lidar_max_range_m': 4.},

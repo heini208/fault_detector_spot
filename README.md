@@ -870,7 +870,7 @@ before observation; later tag updates do not move the return target. It must
 be within 20 mm and 5 degrees of the actual hand and tip before observation
 can start. Standalone measurements keep the actual starting pose as their
 return target. The camera observation pose is calculated directly from the calibrated camera
-and saved probe-tip TF. The camera moves onto the saved probe +X line using the
+and saved probe-tip TF. In automatic mode the camera moves onto the saved probe +X line using the
 shortest translation perpendicular to that line, while retaining hand
 orientation. Every point ahead of the original tip then projects to the same
 image pixel, independent of the unknown surface distance. This pixel follows
@@ -878,6 +878,24 @@ the active mount's probe direction; it is not a hard-coded camera center.
 The forward axis must project inside the image with room for the full plane-fit
 patch, and the camera must be at or behind the original tip along that axis.
 An unsupported mount direction fails without substituting a guessed wall.
+
+**Settings → Advanced → Sensor observation** optionally enables a custom
+reference point. Horizontal position runs from Left (0%) to Right (100%);
+vertical position runs from Top (0%) to Bottom (100%). Coordinates span the
+usable image inside the full plane-fit margin, so 100%/100% selects its
+bottom-right corner. Save and restart the control window and robot application
+to apply the setting to distance tests, sensor-tip orientation and approaches.
+Automatic mode remains the default.
+
+Custom mode retains the hand orientation and uses only calibrated geometry.
+It places the original tip origin at the selected image pixel; positive-range
+surface targets project between that reference pixel and the automatic axis
+pixel. The actual target pixel therefore depends on distance. The selected
+reference is a viewing-region boundary, not a replacement surface target.
+A lower reference can reduce travel, while other positions may increase it.
+Both ends of the projected ray retain the full image margin. The camera must
+be strictly behind the saved tip for custom mode; depth and foreground checks
+still reject an occluded target after moving.
 
 No initial wall plane, visible depth patch or target-distance estimate selects
 the observation move. A nonzero displacement of at least 1 mm triggers one

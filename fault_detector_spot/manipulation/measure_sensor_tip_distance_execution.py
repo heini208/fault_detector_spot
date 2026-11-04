@@ -24,6 +24,7 @@ from fault_detector_spot.manipulation.pose_precision import PoseCorrectionBudget
 from fault_detector_spot.shared.geometry.models import PoseData, Vector3Data
 from fault_detector_spot.shared.geometry.rotation import rotation_distance_rad
 from fault_detector_spot.shared.geometry.transforms import pose_data_to_pose, pose_to_pose_data
+from fault_detector_spot.shared.persistence.basic_settings import parameter_override
 
 
 class MeasureSensorTipDistanceOutcome(Enum):
@@ -56,6 +57,9 @@ class MeasureSensorTipDistanceConfig:
     maximum_axis_error_rad: float = math.radians(5.0)
     maximum_observation_translation_m: float = 0.20
     observation_speed_mps: float = 0.010
+    observation_custom_region_enabled: bool = False
+    observation_reference_u: float = 0.5
+    observation_reference_v: float = 0.75
     return_position_tolerance_m: float = 0.010
     return_orientation_tolerance_rad: float = math.radians(2.0)
     tip_alignment_position_tolerance_m: float = 0.010
@@ -84,18 +88,35 @@ class MeasureSensorTipDistanceConfig:
         values = {}
         for field in fields(cls):
             name = f"close_surface.{field.name}"
+            default = getattr(defaults, field.name)
             if not node.has_parameter(name):
-                node.declare_parameter(name, getattr(defaults, field.name))
-            value = node.get_parameter(name).value
-            values[field.name] = value if type(getattr(defaults, field.name)) is int else float(value)
+                node.declare_parameter(name, default)
+            value = parameter_override(name, node.get_parameter(name).value)
+            values[field.name] = (
+                value if type(default) in (bool, int)
+                or field.name in ("observation_reference_u", "observation_reference_v")
+                else float(value)
+            )
         result = cls(**values)
         result.validate()
         return result
 
+    @property
+    def observation_reference_position(self):
+        if not self.observation_custom_region_enabled:
+            return None
+        return self.observation_reference_u, self.observation_reference_v
+
     def validate(self):
         for field in fields(MeasureSensorTipDistanceConfig):
             value = getattr(self, field.name)
-            if not math.isfinite(value) or value <= 0:
+            if field.name == "observation_custom_region_enabled":
+                if type(value) is not bool:
+                    raise ValueError("observation_custom_region_enabled must be a boolean")
+            elif field.name in ("observation_reference_u", "observation_reference_v"):
+                if type(value) not in (int, float) or not math.isfinite(value) or not 0.0 <= value <= 1.0:
+                    raise ValueError(f"{field.name} must be a finite image fraction between 0 and 1")
+            elif not math.isfinite(value) or value <= 0:
                 raise ValueError(f"{field.name} must be positive and finite")
         if (type(self.minimum_surface_samples) is not int
                 or self.minimum_surface_samples < 3):
@@ -371,7 +392,8 @@ class MeasureSensorTipDistanceExecution:
                 receipt_not_before=self._receipt_after,
                 target_plane_probe=self._target_plane_probe,
                 allow_translation=not self._moved,
-                acquisition_not_before=self._pose_acquisition_after)
+                acquisition_not_before=self._pose_acquisition_after,
+                reference_position=self.config.observation_reference_position)
         except Exception as error:
             return self._wait_or_fail(error)
         if view.visible:
@@ -402,7 +424,7 @@ class MeasureSensorTipDistanceExecution:
         # Geometry alone chooses this view. Freeze a surface association only
         # after fresh depth actually supports the original probe ray.
         self._phase = "observing"
-        self.feedback_message = f"Moving camera onto original sensor axis ({distance * 1000:.1f} mm translation)"
+        self.feedback_message = f"Moving camera to view original sensor axis ({distance * 1000:.1f} mm translation)"
         self._moved = True
         return self._motion_update(self._move_hand(hand))
 

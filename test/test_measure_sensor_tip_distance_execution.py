@@ -144,6 +144,7 @@ class Source:
         self.view_targets = []
         self.view_allow_translation = []
         self.view_acquisition_cutoffs = []
+        self.view_reference_positions = []
         self.snapshot_calls = []
         self.pose_sample_calls = []
         self.normal = Vector3Data(-1.0, 0.0, 0.0)
@@ -177,11 +178,13 @@ class Source:
     def observation_view(
         self, reference, expected_distance_m=None, *, receipt_not_before=0.0,
         target_plane_probe=None, allow_translation=True, acquisition_not_before=0.0,
+        reference_position=None,
     ):
         self.view_calls.append((deepcopy(reference), expected_distance_m, receipt_not_before))
         self.view_targets.append(target_plane_probe)
         self.view_allow_translation.append(allow_translation)
         self.view_acquisition_cutoffs.append(acquisition_not_before)
+        self.view_reference_positions.append(reference_position)
         visible = self.initially_visible or len(self.executor.calls) > 0
         return SensorTipObservationView(
             visible=visible,

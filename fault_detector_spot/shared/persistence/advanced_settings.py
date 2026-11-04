@@ -25,6 +25,8 @@ BASE_KEYS = (
 SURFACE_KEYS = (
     'close_surface.approach_far_speed_mps', 'close_surface.approach_near_speed_mps',
     'close_surface.approach_slowdown_distance_m', 'close_surface.contact_search_force_threshold_n',
+    'close_surface.observation_custom_region_enabled',
+    'close_surface.observation_reference_u', 'close_surface.observation_reference_v',
 )
 NAVIGATION_PATHS = {
     'navigation.forward_speed_mps': ('FollowPath', 'vx_max'),
@@ -39,7 +41,8 @@ MOVEIT_PATHS = {
     'moveit.lidar_max_range_m': ('lidar', 'max_range'),
 }
 KEYS = set(ARM_KEYS + BASE_KEYS + SURFACE_KEYS) | NAVIGATION_PATHS.keys() | MOVEIT_PATHS.keys()
-BOOL_KEYS = {'arm.contact.telemetry.raw_logging_enabled'}
+BOOL_KEYS = {'arm.contact.telemetry.raw_logging_enabled', 'close_surface.observation_custom_region_enabled'}
+FRACTION_KEYS = {'close_surface.observation_reference_u', 'close_surface.observation_reference_v'}
 INTEGER_MINIMUMS = {
     'arm.correction.maximum_attempts': 0,
     'base.correction.maximum_attempts': 0,
@@ -54,6 +57,8 @@ def validate(values):
             valid = type(value) is bool
         elif key in INTEGER_MINIMUMS:
             valid = type(value) is int and value >= INTEGER_MINIMUMS[key]
+        elif key in FRACTION_KEYS:
+            valid = type(value) in (int, float) and math.isfinite(value) and 0 <= value <= 1
         else:
             valid = type(value) in (int, float) and math.isfinite(value) and value > 0
             if valid and key in SCALING_KEYS:

@@ -134,3 +134,110 @@ def test_invalid_pose_is_rejected_before_planning(invalid_pose):
     (reference if invalid_pose == "reference" else camera).position.x = float("nan")
     with pytest.raises(ValueError, match="finite"):
         observation_delta(reference, camera)
+
+
+@pytest.mark.parametrize("reference_position", [(0.0, 0.0), (1.0, 1.0), (0.5, 0.8)])
+@pytest.mark.parametrize("origin,direction", [
+    ((0.02, 0.08, 0.09), (0.0, 0.0, 1.0)),
+    ((-0.06, 0.04, 0.12), (0.1, 0.14, 1.0)),
+    ((0.07, -0.03, 0.18), (-0.2, -0.1, 1.0)),
+])
+def test_custom_reference_keeps_unknown_forward_targets_on_inset_image_segment(
+    reference_position, origin, direction,
+):
+    reference = probe_pose(origin, direction)
+    delta = observation_delta(reference, reference_position=reference_position)
+    axis = rotation_from_quaternion(reference.orientation).apply([1.0, 0.0, 0.0])
+    assert np.dot(vector_array(delta), axis) == pytest.approx(0.0, abs=1e-12)
+    selected = np.array([
+        MARGIN + fraction * (dimension - 1 - 2 * MARGIN)
+        for fraction, dimension in zip(reference_position, IMAGE_SIZE)
+    ])
+    tip_after_move = np.asarray(origin) - vector_array(delta)
+    assert tip_after_move[2] > 0.0
+    assert project_camera_point(tip_after_move, INTRINSICS) == pytest.approx(selected)
+    vanishing_pixel = np.asarray(project_camera_point(axis, INTRINSICS))
+    moved_camera = PoseData(delta, PoseData.identity().orientation)
+    for distance in (0.001, 0.21, 1.0, 100.0):
+        target = target_camera_point(reference, moved_camera, distance)
+        pixel = np.asarray(project_camera_point(target, INTRINSICS))
+        weight = tip_after_move[2] / target[2]
+        assert 0.0 < weight < 1.0
+        assert pixel == pytest.approx(weight * selected + (1.0 - weight) * vanishing_pixel)
+        assert np.all(pixel >= MARGIN - 1e-10)
+        assert np.all(pixel <= np.asarray(IMAGE_SIZE) - 1 - MARGIN + 1e-10)
+
+
+def test_custom_reference_rotates_with_saved_frames_and_preserves_camera_orientation():
+    reference = probe_pose((0.02, 0.08, 0.09), (0.0, 0.14, 1.0))
+    anchor = PoseData(
+        Vector3Data(1.5, -2.0, 0.4),
+        quaternion_from_euler("xyz", (0.4, -0.7, 1.2)),
+    )
+    delta = observation_delta(reference, reference_position=(0.8, 0.75))
+    rotated_reference = compose_poses(anchor, reference)
+    rotated_camera = copy.deepcopy(anchor)
+    saved_orientation = copy.deepcopy(rotated_camera.orientation)
+    rotated_delta = observation_delta(
+        rotated_reference, rotated_camera, reference_position=(0.8, 0.75),
+    )
+    assert vector_array(rotated_delta) == pytest.approx(
+        rotation_from_quaternion(anchor.orientation).apply(vector_array(delta)),
+    )
+    rotated_camera.position = Vector3Data(*(
+        vector_array(rotated_camera.position) + vector_array(rotated_delta)
+    ))
+    moved_camera = PoseData(delta, PoseData.identity().orientation)
+    assert project_camera_point(
+        target_camera_point(rotated_reference, rotated_camera, 0.15), INTRINSICS,
+    ) == pytest.approx(project_camera_point(
+        target_camera_point(reference, moved_camera, 0.15), INTRINSICS,
+    ))
+    assert rotated_camera.orientation == saved_orientation
+
+
+def test_selecting_calibrated_axis_pixel_matches_automatic_observation():
+    reference = probe_pose((0.02, 0.08, 0.09), (0.0, 0.14, 1.0))
+    axis = rotation_from_quaternion(reference.orientation).apply([1.0, 0.0, 0.0])
+    pixel = project_camera_point(axis, INTRINSICS)
+    normalized = tuple(
+        (coordinate - MARGIN) / (dimension - 1 - 2 * MARGIN)
+        for coordinate, dimension in zip(pixel, IMAGE_SIZE)
+    )
+    assert vector_array(observation_delta(reference, reference_position=normalized)) == pytest.approx(
+        vector_array(observation_delta(reference)),
+    )
+
+
+def test_lower_reference_reduces_translation_for_tip_below_camera():
+    reference = probe_pose((0.021, 0.084, 0.089), (0.0, 0.136, 0.991))
+    normalized = ((320.0 - MARGIN) / 567.0, (350.0 - MARGIN) / 407.0)
+    automatic = vector_array(observation_delta(reference))
+    custom = vector_array(observation_delta(reference, reference_position=normalized))
+    assert np.linalg.norm(custom) < np.linalg.norm(automatic)
+    assert custom[1] < automatic[1]
+
+
+@pytest.mark.parametrize("reference_position", [
+    0.5, (), (0.5,), (0.5, 0.5, 0.5), "01", {0.0: 1.0, 1.0: 0.0},
+    (True, 0.5), (0.5, False), (np.bool_(True), 0.5), ("0.5", 0.5),
+    (float("nan"), 0.5), (0.5, float("inf")), (-0.01, 0.5), (0.5, 1.01),
+])
+def test_invalid_custom_reference_is_rejected(reference_position):
+    with pytest.raises(ValueError, match="reference"):
+        observation_delta(
+            probe_pose((0.02, 0.08, 0.09)), reference_position=reference_position,
+        )
+
+
+def test_custom_reference_requires_camera_strictly_behind_original_tip():
+    with pytest.raises(ValueError, match="camera behind"):
+        observation_delta(probe_pose((0.02, 0.08, 0.0)), reference_position=(0.5, 0.5))
+
+
+def test_custom_reference_ray_must_face_saved_axis():
+    with pytest.raises(ValueError, match="reference ray"):
+        observation_delta(
+            probe_pose((0.1, 0.0, 0.1), (200.0, 0.0, 1.0)),
+            reference_position=(0.0, 0.5), intrinsics=(1.0, 1.0, 320.0, 240.0),
+        )
