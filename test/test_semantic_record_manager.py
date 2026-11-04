@@ -33,6 +33,7 @@ from fault_detector_spot.application.ros.command_request_adapter import (
     command_request_from_message,
     command_request_to_message,
 )
+from fault_detector_spot.shared.persistence import file_storage
 
 
 class FakePublisher:
@@ -429,6 +430,77 @@ def test_valid_recording_storage_lifecycle(tmp_path):
     assert not (tmp_path / "inspection run-1.json").exists()
     assert manager.list_pub.messages[-1].names == []
     assert not manager.logger.error_messages
+
+
+def test_recording_start_rejects_directory_without_changing_state(tmp_path):
+    destination = tmp_path / "session.json"
+    destination.mkdir()
+    manager = RecordingStorageHarness(tmp_path)
+
+    manager.control("start", "session")
+
+    assert not manager.recording
+    assert manager.current_name is None
+    assert destination.is_dir()
+    assert manager.logger.error_messages
+    manager.publish_recordings_list()
+    assert manager.list_pub.messages[-1].names == []
+
+
+@pytest.mark.parametrize("deferred", [False, True])
+def test_recording_overwrite_preserves_original_until_save_succeeds(tmp_path, monkeypatch, deferred):
+    manager = RecordingStorageHarness(tmp_path)
+    original = SemanticCommand(CommandID.STAND_UP)
+    manager.repository.save("session", [original])
+    path = manager.repository.path("session")
+    original_bytes = path.read_bytes()
+    manager.publish_recordings_list()
+
+    manager.control("start", "session")
+
+    assert manager.recording
+    assert path.read_bytes() == original_bytes
+    assert manager.repository.load("session") == [original]
+    assert manager.list_pub.messages[-1].names == ["session"]
+    manager.set_recording_retries(2)
+    manager.control("skip_start")
+    request = make_request(CommandID.MOVE_TO_WAYPOINT)
+    assert manager.capture_request(command_request_to_message(request))
+    succeeded = terminal_status(request.request_id, CommandStatus.STATE_SUCCEEDED)
+    if deferred:
+        manager.control("stop")
+        assert manager.recording_finishing_pub.messages[-1].data
+        assert path.read_bytes() == original_bytes
+    else:
+        manager.handle_command_status(succeeded)
+
+    def fail_replace(*_args):
+        raise OSError("replacement failed")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(file_storage.os, "replace", fail_replace)
+        if deferred:
+            manager.handle_command_status(succeeded)
+        else:
+            manager.control("stop")
+
+    assert path.read_bytes() == original_bytes
+    assert manager.repository.load("session") == [original]
+    assert list(tmp_path.iterdir()) == [path]
+    assert manager.current_name == "session"
+    assert manager.recording_state_pub.messages[-1].data
+    assert not manager.recording_finishing_pub.messages[-1].data
+    assert manager.temp_data == [request.command]
+    assert "replacement failed" in manager.logger.error_messages[-1]
+    assert all(message.names == ["session"] for message in manager.list_pub.messages)
+
+    manager.control("stop")
+
+    assert manager.repository.load_steps("session") == [RecordedStep(request.command, 2, 1)]
+    assert not manager.recording
+    assert manager.current_name is None
+    assert not manager.recording_state_pub.messages[-1].data
+    assert manager.list_pub.messages[-1].names == ["session"]
 
 
 def test_recording_state_reports_actual_start_stop_and_failures(tmp_path, monkeypatch):

@@ -28,11 +28,13 @@ class RecordingRepository:
         self.root.mkdir(parents=True, exist_ok=True)
 
     def path(self, name: str) -> Path:
-        """Resolve a name, rejecting invalid names and symbolic links."""
+        """Resolve a name, rejecting invalid names, links, and directories."""
         validate_storage_name(name, 'recording name')
         path = self.root / f'{name}.json'
         if path.is_symlink():
             raise ValueError('Recording files must not be symbolic links')
+        if path.is_dir():
+            raise ValueError('Recording files must not be directories')
         return path
 
     def save(self, name: str, commands: Iterable[SemanticCommand | RecordedStep]) -> None:

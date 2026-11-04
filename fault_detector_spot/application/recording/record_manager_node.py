@@ -271,7 +271,9 @@ class RecordManager(Node):
         if not name:
             self.get_logger().warning("Recording name is empty, ignoring.")
             return
-        self.delete_recording(name)
+        # Validate now, but preserve the saved recording until atomic replacement
+        # succeeds in stop_recording().
+        self.repository.path(name)
         self.recording = True
         self.recording_paused = False
         self.current_name = name
