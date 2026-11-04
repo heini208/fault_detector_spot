@@ -1,57 +1,46 @@
-"""Regression guards for pausing and resuming the refinement popup."""
+"""Pausing the live refinement workflow preserves server-owned progress."""
 
-import inspect
+from unittest.mock import Mock
 
-from fault_detector_spot.ui.inspection.controls import InspectionControls
+import pytest
+
 from fault_detector_spot.ui.inspection.finalizing_controls import (
     FinalizingInspectionControls,
 )
+from test_probe_point_guided_workflow import FakeUI, application
+from test_probe_safe_approach_navigation import safe_state
 
 
-def test_close_pauses_without_ending_server_refinement():
-    source = inspect.getsource(
-        InspectionControls.request_close_refinement_workflow
-    )
+@pytest.mark.parametrize("emergency_stop", [False, True])
+def test_pause_and_resume_preserve_refinement_without_server_requests(
+    application, emergency_stop,
+):
+    ui = FakeUI()
+    ui.handle_emergency_stop = Mock()
+    controls = FinalizingInspectionControls(ui)
+    controls.apply_setup_state(safe_state())
+    assert controls.handle_start_probe_refinement()
+    dialog = controls.refinement_dialog
+    stage_page = dialog.workflow_stack.currentIndex()
+    presentation = controls._refinement_presentation
 
-    assert "pause_refinement_dialog" in source
-    assert "OPERATION_END_REFINEMENT" not in source
+    if emergency_stop:
+        dialog.emergency_stop_button.click()
+        ui.handle_emergency_stop.assert_called_once_with()
 
+    assert dialog.close()
+    assert not dialog.isVisible()
+    assert controls.inspection_workspace_tabs.isEnabled()
+    assert controls._refinement_presentation is presentation
+    assert controls.start_probe_refinement_button.text() == "Resume Probe Point Setup"
+    if emergency_stop:
+        assert "paused after emergency stop" in controls.refinement_summary_status_label.text()
 
-def test_start_button_resumes_existing_refinement():
-    source = inspect.getsource(
-        InspectionControls.handle_start_probe_refinement
-    )
-
-    assert "_refinement_presentation is not None" in source
-    assert "resume_refinement_dialog" in source
-
-
-def test_pause_keeps_authoritative_presentation():
-    source = inspect.getsource(InspectionControls.pause_refinement_dialog)
-
-    assert "self._refinement_presentation = None" not in source
-    assert "inspection_workspace_tabs.setEnabled(True)" in source
-
-
-def test_emergency_stop_allows_close_without_ending_refinement():
-    stop_source = inspect.getsource(
-        FinalizingInspectionControls.handle_refinement_emergency_stop
-    )
-    close_source = inspect.getsource(
-        FinalizingInspectionControls.request_close_refinement_workflow
-    )
-
-    assert "_refinement_emergency_stop_requested = True" in stop_source
-    assert "super().handle_refinement_emergency_stop()" in stop_source
-    assert "_refinement_emergency_stop_requested" in close_source
-    assert "OPERATION_END_REFINEMENT" not in close_source
-    assert "Resume Probe Point Setup" in close_source
-    assert "paused after emergency stop" in close_source
-
-
-def test_resuming_refinement_restores_normal_close_guard():
-    source = inspect.getsource(
-        FinalizingInspectionControls.resume_refinement_dialog
-    )
-
-    assert "_refinement_emergency_stop_requested = False" in source
+    assert controls.handle_start_probe_refinement()
+    assert dialog.isVisible()
+    assert dialog.workflow_stack.currentIndex() == stage_page
+    assert controls._refinement_presentation is presentation
+    assert not controls.inspection_workspace_tabs.isEnabled()
+    assert dialog.close()
+    assert "paused after emergency stop" not in controls.refinement_summary_status_label.text()
+    assert ui.requests == []

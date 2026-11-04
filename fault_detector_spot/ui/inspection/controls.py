@@ -1119,41 +1119,6 @@ class InspectionControls(UIControlHelper):
             )
         self._update_save_probe_point_state()
 
-    def _update_save_probe_point_state(self, _value=None):
-        state = self._probe_setup_state
-        point_id = self.probe_point_id_field.text().strip()
-        display_name = self.probe_point_display_name_field.text().strip()
-        numeric_ready = all(
-            self._is_positive_number(field.text())
-            for field in (
-                self.probe_position_tolerance_field,
-                self.probe_orientation_tolerance_field,
-                self.probe_measurement_duration_field,
-            )
-        )
-        duplicate = (
-            state is not None
-            and point_id in state.probe_point_ids
-            and point_id != self._editing_probe_point_id
-        )
-        self.approve_and_retract_button.setEnabled(False)
-        if state is None or not state.selected_routine_id:
-            status = "Select a saved object and routine."
-        elif not state.has_reference_pixel:
-            status = "Select a point in a captured reference view."
-        elif not point_id or not display_name:
-            status = "Enter a probe point ID and display name."
-        elif duplicate:
-            status = f"Probe point '{point_id}' already exists."
-        elif not numeric_ready:
-            status = "Enter positive tolerances and measurement duration."
-        else:
-            status = (
-                "Probe save and mandatory retraction await the "
-                "coordinated execution workflow."
-            )
-        self.save_probe_point_status_label.setText(status)
-
     @staticmethod
     def _is_positive_number(text):
         try:
@@ -1597,37 +1562,6 @@ class InspectionControls(UIControlHelper):
             "Probe-point geometry is persisted when Save Probe Point is pressed."
         )
 
-    def handle_start_probe_refinement(self):
-        if self._refinement_presentation is not None:
-            return self.resume_refinement_dialog()
-        intent = ProbeSetupIntent()
-        intent.operation = ProbeSetupIntent.OPERATION_BEGIN_REFINEMENT
-        return self._submit_probe_setup(intent) is not None
-
-    def pause_refinement_dialog(self):
-        presentation = self._refinement_presentation
-        if presentation is None:
-            return True
-        if not self._can_close_refinement_workflow(presentation):
-            if self._refinement_has_pending_work(presentation):
-                self.refinement_recovery_status_label.setText(
-                    "Wait for the active movement and settle check."
-                )
-                return False
-            self.refinement_recovery_status_label.setText(
-                "Retract Without Saving is required before hiding this "
-                "workflow."
-            )
-            return False
-        self.inspection_workspace_tabs.setEnabled(True)
-        self.start_probe_refinement_button.setText(
-            "Resume Probe Point Position Refinement Workflow"
-        )
-        self.refinement_summary_status_label.setText(
-            "Refinement paused. Reopen to continue from the current stage."
-        )
-        return True
-
     def resume_refinement_dialog(self):
         presentation = self._refinement_presentation
         if presentation is None:
@@ -1639,9 +1573,6 @@ class InspectionControls(UIControlHelper):
         self.refinement_dialog.open_for_stage(presentation.active_stage)
         self._refresh_refinement_dialog()
         return True
-
-    def request_close_refinement_workflow(self):
-        return self.pause_refinement_dialog()
 
     def _finish_refinement_workflow_close(self):
         self._distance_failure_requires_retraction = False
@@ -1731,25 +1662,12 @@ class InspectionControls(UIControlHelper):
             )
         )
 
-    def _can_close_refinement_workflow(self, presentation):
-        """Return whether the dialog may be hidden without interrupting work."""
-        return bool(
-            not self._refinement_has_pending_work(presentation)
-            and not presentation.recovery_required
-        )
-
     def _can_go_back_in_refinement(self, presentation):
         """Return whether the active stage may return to its predecessor."""
         return bool(
             presentation.active_stage is not RefinementStage.SAFE_APPROACH
             and not self._refinement_has_pending_work(presentation)
             and not presentation.recovery_required
-        )
-
-    def _can_retract_without_saving(self, presentation):
-        return bool(
-            presentation.recovery_required
-            and not self._refinement_has_pending_work(presentation)
         )
 
     def _refresh_refinement_dialog(self):
@@ -2203,22 +2121,6 @@ class InspectionControls(UIControlHelper):
             "movement and settling succeed.",
         )
         self._refresh_refinement_dialog()
-        return True
-
-    def handle_test_surface_distance(self):
-        if not hasattr(self.ui, "execute_move_close_to_surface"):
-            return self.show_setup_unavailable(
-                "Move close to surface"
-            )
-        request_id = self.ui.execute_move_close_to_surface()
-        if request_id is None:
-            self.surface_distance_test_status_label.setText(
-                "Move close to surface is unavailable"
-            )
-            return False
-        self.surface_distance_test_status_label.setText(
-            "Move close to surface running"
-        )
         return True
 
     @staticmethod
@@ -2987,13 +2889,3 @@ class InspectionControls(UIControlHelper):
             self.probe_position_tolerance_field, "Final candidate position tolerance",
         )
         return self._submit_probe_setup(intent) is not None
-
-    def handle_approve_and_retract(self):
-        return self.show_setup_unavailable(
-            "Probe approval, persistence, and retraction"
-        )
-
-    def handle_retract_without_saving(self):
-        return self.show_setup_unavailable(
-            "Probe retraction"
-        )
