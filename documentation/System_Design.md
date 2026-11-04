@@ -219,16 +219,24 @@ Commanded poses can be specified:
 - As relative motions, or
 - With respect to detected markers (AprilTags).
 
-### 2.3.3 Emergency Stop
+### 2.3.3 Software Stop
 
-A software-level emergency stop mechanism is integrated into the behaviour tree.  
-A blackboard flag is monitored continuously; when triggered, the system:
+The application software stop is separate from Spot's safety E-stop. It latches
+normal command admission, discards queued commands and playback, and requests
+cancellation from physical execution and sensor acquisition owners. Cancellation
+is requested independently of behaviour-tree ticks and does not wait for mapping
+shutdown. The tree monitors stop confirmation and guards normal command execution.
 
-- Cancels all ongoing actions,
-- Stops base motion and mapping activities, and
-- Stows the manipulator.
+Request acceptance acknowledges the stop request; physical stopping still requires
+confirmation from every owner. Base confirmation requires terminated actions,
+quiet velocity command sources, and fresh stationary feedback. Missing confirmation
+keeps motion blocked. The stop path does not stow the arm or close the gripper,
+and the latch remains set after stopping is confirmed.
 
-This ensures safety overrides can take effect at any point in the command sequence.
+An explicit operator reset reopens admission only after confirmed stopping and
+execution-owner acknowledgement of reset. Reset requests no movement and never
+replays cancelled work. Arm recovery (stow) is a separate guarded operator action
+after reset. See the [software stop, reset and recovery workflow](../README.md#35-software-stop-operator-reset-and-arm-recovery).
 
 ---
 
