@@ -1361,7 +1361,7 @@ def test_close_keeps_probe_motion_and_attachment_until_terminal(tmp_path, close_
 
     close()
     close()
-    assert cancellations == [operation.request_id]
+    assert cancellations == ([] if close_kind == "coordinator" else [operation.request_id])
     assert probe.refinement_controller.has_context(state.context)
     assert attachment.active_reservations == 1
     with pytest.raises(RuntimeError, match="closing|cancellation"):

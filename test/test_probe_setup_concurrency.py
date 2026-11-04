@@ -151,6 +151,9 @@ def test_feedback_racing_close_retains_owned_motion_until_confirmed_stop(
             race.contending.clear()
             workflow_ready.set()
             assert race.entered.wait(4), "Owned feedback did not start"
+            # Passive shutdown no longer enters command cancellation. Release
+            # feedback once listener removal has completed its command access.
+            race.contending.set()
 
         monkeypatch.setattr(commands, "remove_status_listener", remove_then_deliver_feedback)
 
@@ -169,10 +172,11 @@ def test_feedback_racing_close_retains_owned_motion_until_confirmed_stop(
 
     assert received is True
     assert errors == []
-    assert [request.command.command_id for request in dispatched] == [
-        CommandID.MOVE_SAFE_APPROACH, CommandID.EMERGENCY_CANCEL,
-    ]
-    assert dispatched[-1].stop_request_ids == (operation.request_id,)
+    expected = [CommandID.MOVE_SAFE_APPROACH]
+    if close_kind != "coordinator":
+        expected.append(CommandID.EMERGENCY_CANCEL)
+        assert dispatched[-1].stop_request_ids == (operation.request_id,)
+    assert [request.command.command_id for request in dispatched] == expected
     assert probe.refinement_controller.has_context(state.context)
     assert attachment.active_reservations == 1
     assert setup.contexts == (state.context,)

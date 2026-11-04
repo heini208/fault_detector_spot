@@ -1,4 +1,4 @@
-"""Retain unresolved shutdown ownership across execution-process restarts."""
+"""Journal session ownership and preserve prior execution diagnostics."""
 
 from contextlib import contextmanager
 import fcntl
@@ -14,11 +14,10 @@ from .runtime_paths import fault_detector_runtime_root
 
 
 class StopUnconfirmedStore:
-    """Keep each process owner's stop uncertainty independently and durably.
+    """Journal current ownership and archive prior sessions as diagnostics.
 
-    A fresh process being idle cannot reconcile work from a previous process.
-    ``clear_confirmed`` is reserved for independently verified terminal action
-    state and fresh physical-stop evidence for the named prior resources.
+    Starting a new session neither resumes nor cancels the prior robot work.
+    Its archived record remains unresolved; it is not evidence of stopping.
     """
 
     def __init__(self, owner="bt_runner", root=None):
@@ -60,7 +59,7 @@ class StopUnconfirmedStore:
                     pass
             if self._idle_session_has_exited(data):
                 return {}
-            return {"active_session": "Prior session has no confirmed shutdown; reconciliation is required"}
+            return {"active_session": "Session has unresolved work or still holds process ownership"}
         except FileNotFoundError:
             return {}
         except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
@@ -78,6 +77,10 @@ class StopUnconfirmedStore:
         """A dead process with durable empty ownership left nothing to stop."""
         if data.get("version") != 2 or data.get("unresolved_work") is not False:
             return False
+        return self._session_has_exited(data)
+
+    def _session_has_exited(self, data):
+        """Require a valid process identity before replacing another session."""
         process = data["process"]
         try:
             pid = process["pid"]
@@ -106,7 +109,7 @@ class StopUnconfirmedStore:
             os.close(descriptor)
 
     def begin_session(self):
-        """Acquire an idle session; retain any prior uncertain physical work."""
+        """Start a fresh session without resuming or cancelling prior work."""
         with self._lock, self._session_guard():
             if self._session_token is not None:
                 return True
@@ -117,9 +120,9 @@ class StopUnconfirmedStore:
             except (OSError, ValueError, TypeError):
                 return False
             if previous is not None:
-                if not self._valid_session(previous) or not self._idle_session_has_exited(previous):
+                if not self._valid_session(previous) or not self._session_has_exited(previous):
                     return False
-                self.session_path.unlink()
+            self._archive_previous_session(include_session=previous is not None)
             token = str(uuid4())
             content = json.dumps({"version": 2, "owner": self.owner, "token": token,
                                   "process": self._process_identity(os.getpid()),
@@ -142,6 +145,27 @@ class StopUnconfirmedStore:
             self._sync_directory()
             self._session_token = token
             return True
+
+    def _archive_previous_session(self, *, include_session):
+        paths = ([self.session_path] if include_session else [])
+        if self.path.exists():
+            paths.append(self.path)
+        if not paths:
+            return
+        history = self.root / "history"
+        history.mkdir(exist_ok=True)
+        archive = history / f"{self.owner}-{uuid4()}"
+        archive.mkdir(mode=0o700)
+        for path in paths:
+            path.rename(archive / path.name)
+        # Keep diagnostic bytes durable before publishing the new session.
+        for directory in (archive, history):
+            descriptor = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+        self._sync_directory()
 
     def set_session_work(self, unresolved):
         """Persist ownership before dispatch; clear only with terminal evidence."""
@@ -206,7 +230,7 @@ class StopUnconfirmedStore:
             return {"state_read_error": f"Shutdown evidence cannot be read: {exception}"}
 
     def load(self):
-        """Return unresolved resources from every process owner for admission."""
+        """Read current journals from all owners; archived sessions are diagnostic only."""
         with self._lock:
             try:
                 paths = sorted(path for path in self.root.iterdir()

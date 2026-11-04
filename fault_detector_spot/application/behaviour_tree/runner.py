@@ -686,7 +686,7 @@ def build_navigate_to_goal_pose_tree(
 
 
 def make_shutdown_coordinator(node, tree, executor):
-    """Keep ROS callbacks and execution evidence alive through confirmation."""
+    """Detach physical owners, retain diagnostics and drain local callbacks."""
     helper = helper_initializer
     resources = helper.robot_command_resources if helper is not None else None
     subscribers = ([item for item in tree.root.iterate()
@@ -710,29 +710,28 @@ def make_shutdown_coordinator(node, tree, executor):
                 timer.cancel()
         admission["tree dispatch"] = pause_dispatch
 
-    requests, confirmations, cleanup = {}, {}, {}
+    requests, confirmations, passive_confirmations, cleanup = {}, {}, {}, {}
     for index, subscriber in enumerate(subscribers):
-        confirmations[f"prior ownership/{index}"] = subscriber.shutdown_ownership_status
+        passive_confirmations[f"prior ownership/{index}"] = subscriber.shutdown_ownership_status
     if tree is not None and dispatch is not None:
         confirmations["tree dispatch"] = dispatch.status
     retained = ({name: detail for subscriber in subscribers
                  for name, detail in subscriber.startup_unresolved.items()}
                 if subscribers else StopUnconfirmedStore(owner="bt_runner").load())
-    for name, detail in retained.items():
-        confirmations[f"prior shutdown/{name}"] = lambda detail=detail: (False, detail)
+    retained_unresolved = {f"prior shutdown/{name}": detail for name, detail in retained.items()}
     if resources is not None:
         requests["command sources"] = resources.begin_shutdown
-        confirmations["command sources"] = resources.poll_shutdown
+        passive_confirmations["command sources"] = resources.poll_shutdown
         for name, owner in resources.shutdown_owners().items():
             requests[name] = owner.begin_shutdown
-            confirmations[name] = owner.poll_shutdown
+            passive_confirmations[name] = owner.poll_shutdown
 
     def report_unconfirmed(unresolved):
         if resources is not None:
             resources.report_shutdown_unconfirmed()
         errors = []
         try:
-            node.get_logger().error(f"Shutdown stop-unconfirmed; reconciliation required: {unresolved}")
+            node.get_logger().warning(f"Shutdown retained unresolved execution for diagnostics: {unresolved}")
         except Exception as error:
             errors.append(str(error))
         if subscribers:
@@ -777,6 +776,7 @@ def make_shutdown_coordinator(node, tree, executor):
     coordinator = ShutdownCoordinator(
         close_admission=admission, request_stop=requests,
         confirmations=confirmations, cleanup=cleanup,
+        passive_confirmations=passive_confirmations, retained_unresolved=retained_unresolved,
         progress=lambda timeout: executor.spin_once(timeout_sec=timeout),
         report_unconfirmed=report_unconfirmed,
         timeout_sec=float(read_parameter(node, "shutdown.confirmation_timeout_sec", 10.0)),
@@ -790,7 +790,7 @@ def main(args=None):
     startup_settings()
     with shutdown_signals() as shutdown_requested:
         # ROS's default signal handler invalidates the context before finally,
-        # which would make action results and stop-service replies unavailable.
+        # which would make local callback and runtime cleanup unavailable.
         rclpy.init(args=args, signal_handler_options=SignalHandlerOptions.NO)
         node = rclpy.create_node("bt_driver")
         executor = MultiThreadedExecutor(num_threads=2)

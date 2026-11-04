@@ -78,6 +78,7 @@ class MovementExecutor:
         self._submitted_goals = []
         self._stop_unconfirmed = False
         self._shutdown_started = False
+        self._shutdown_idle = None
         self._closed = False
 
     @property
@@ -88,6 +89,19 @@ class MovementExecutor:
     def execution_idle(self) -> bool:
         """Whether this owner has no active or possibly still-executing goal."""
         return not self.active and not self._stop_unconfirmed and self.goals_settled()
+
+    def shutdown_stop_required(self) -> bool:
+        """Observe owned motion without waiting for an execution/workflow lock."""
+        if self.active or self._stop_unconfirmed:
+            return True
+        if not self._submitted_goals:
+            return False
+        if not self._settlement_lock.acquire(blocking=False):
+            return True
+        try:
+            return not self.goals_settled()
+        finally:
+            self._settlement_lock.release()
 
     def goals_settled(self) -> bool:
         """Observe terminal action results without treating errors as evidence."""
@@ -123,6 +137,8 @@ class MovementExecutor:
 
     def poll(self):
         """Advance the active RobotCommand lifecycle without blocking."""
+        if self._shutdown_started:
+            return self._busy_update()
         if not self.active:
             return self._new_update(
                 self.OUTCOME_TYPE.EXECUTION_ERROR,
@@ -153,7 +169,7 @@ class MovementExecutor:
 
     def cancel(self) -> None:
         """Keep ownership until the submitted goal has a terminal result."""
-        if not self.active or self._cancelling:
+        if self._shutdown_started or not self.active or self._cancelling:
             return
         self._cancelling = True
         token = object()
@@ -166,7 +182,7 @@ class MovementExecutor:
             return
 
         def accepted(completed):
-            if not self._cancelling or self._cancel_token is not token:
+            if self._shutdown_started or not self._cancelling or self._cancel_token is not token:
                 return
             try:
                 handle = completed.result()
@@ -185,7 +201,7 @@ class MovementExecutor:
                 self._cancellation_detail = f"Stop unconfirmed: {exception}"
 
         def finished(completed):
-            if not self._cancelling or self._cancel_token is not token:
+            if self._shutdown_started or not self._cancelling or self._cancel_token is not token:
                 return
             try:
                 result = completed.result()
@@ -204,20 +220,33 @@ class MovementExecutor:
     def _cancellation_goal_finished(self):
         self._reset_operation()
 
+    def close_admission(self):
+        """Fence physical commands and cancellation before local teardown."""
+        self._shutdown_started = True
+
+    def begin_shutdown(self):
+        """Retain ownership without changing the robot's current execution."""
+        self.close_admission()
+        if self._shutdown_idle is None:
+            self._shutdown_idle = self.execution_idle
+            if not self._shutdown_idle:
+                self._stop_unconfirmed = True
+
+    def poll_shutdown(self):
+        """Report retained ownership once; shutdown never waits for a stop."""
+        self.begin_shutdown()
+        return self._shutdown_idle, (
+            f"No owned {self.MOVEMENT_NAME} movement remains unresolved" if self._shutdown_idle
+            else f"{self._movement_title} execution detached with no confirmed completion"
+        )
+
     def shutdown(self, *, stop_unconfirmed=False, stop_confirmed=False) -> None:
-        """Release this owner only after confirmation or reported expiry."""
+        """Release local resources while retaining any unresolved execution."""
         if stop_confirmed and stop_unconfirmed:
             raise ValueError("Shutdown cannot be both confirmed and unconfirmed")
         self.begin_shutdown()
-        if not stop_unconfirmed and not stop_confirmed:
-            confirmed, detail = self.poll_shutdown()
-            if not confirmed:
-                raise RuntimeError(f"{self._movement_title} stop unconfirmed: {detail}")
-        elif stop_unconfirmed:
+        if stop_unconfirmed:
             self._stop_unconfirmed = True
-        # Coordinator authorization refers to its completed confirmation
-        # phase. Child teardown may subsequently remove fresh state sources;
-        # finalization must not begin a second confirmation phase.
         self._closed = True
 
     def _start_goal(self, goal_builder):
@@ -411,6 +440,8 @@ class MovementExecutor:
         )
 
     def _request_cancel(self) -> None:
+        if self._shutdown_started:
+            return
         handle = self._goal_handle
         if handle is not None:
             try:
@@ -427,6 +458,8 @@ class MovementExecutor:
             return
 
         def cancel_when_accepted(done_future):
+            if self._shutdown_started:
+                return
             try:
                 accepted_handle = done_future.result()
                 if (

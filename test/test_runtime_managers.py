@@ -14,6 +14,7 @@ from fault_detector_spot.mapping.behaviours.swap_map import SwapMap
 from fault_detector_spot.shared.ros import runtime_manager as runtime_module
 from fault_detector_spot.shared.ros.runtime_manager import RuntimeManager
 from fault_detector_spot.navigation.runtime.nav2_runtime_manager import Nav2RuntimeManager
+from fault_detector_spot.navigation.velocity_topics import APPLICATION_NAVIGATION_VELOCITY_TOPIC
 from fault_detector_spot.mapping.runtime.rtabmap_runtime_manager import RtabmapRuntimeManager
 
 
@@ -82,11 +83,13 @@ def test_managed_mapping_and_localization_forward_corrected_lidar(runtime, tmp_p
 def test_nav2_duplicate_start_does_not_orphan_process(runtime):
     manager, launches, stops = runtime
     nav2 = manager.nav2_runtime
-    first = nav2.start(extra_args=["use_sim_time:=false"])
+    first = nav2.start(extra_args=["use_sim_time:=false", "velocity_topic:=cmd_vel"])
     assert nav2.start() is first
     assert len(launches) == 1
     assert launches[0].count("use_sim_time:=false") == 1
     assert "use_sim_time:=true" not in launches[0]
+    assert f"velocity_topic:={APPLICATION_NAVIGATION_VELOCITY_TOPIC}" in launches[0]
+    assert launches[0].index(f"velocity_topic:={APPLICATION_NAVIGATION_VELOCITY_TOPIC}") > launches[0].index("velocity_topic:=cmd_vel")
 
 
 def test_stop_failure_retains_ownership_and_close_can_be_retried(runtime, monkeypatch):

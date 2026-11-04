@@ -205,13 +205,12 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
         """Advertise command consumption only after the runner finishes setup."""
         if self.request_subscription is not None:
             return
-        self.startup_unresolved = self.shutdown_state_store.load()
+        self.startup_unresolved = {}
         try:
             if not self.shutdown_state_store.begin_session():
-                self.startup_unresolved.update(self.shutdown_state_store.load())
                 self.startup_unresolved.setdefault(
                     f"{self.shutdown_state_store.owner}/active_session",
-                    "Active-session ownership was not acquired; reconciliation is required",
+                    "Another session is still live or its process ownership cannot be verified",
                 )
             else:
                 self.status_ledger.configure_session_work(self.shutdown_state_store.set_session_work)
@@ -227,7 +226,7 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
                 self.robot_command_resources.latch_software_stop()
             self.blackboard.estop_flag = True
             self.node.get_logger().error(
-                "Prior shutdown stop-unconfirmed; motion admission requires reconciliation: "
+                "Command session unavailable; command admission is closed: "
                 + "; ".join(f"{name}: {detail}" for name, detail in unresolved.items())
             )
         self.request_status_publisher = self.node.create_publisher(

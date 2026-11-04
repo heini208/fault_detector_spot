@@ -203,7 +203,9 @@ class ProbeRefinementFinalizationCoordinator:
         with self._lock:
             self._waiters[operation.request_id] = waiter
         try:
-            if self._shutdown.is_set() or cancel_requested():
+            if self._shutdown.is_set():
+                raise RuntimeError("Application shutdown interrupted retraction; execution remains unresolved")
+            if cancel_requested():
                 # Preparation reserves command ownership. Cancel that reservation
                 # before submission when close/cancel arrived during preparation.
                 self.coordinator.cancel_motion(context, operation.request_id)
@@ -214,9 +216,10 @@ class ProbeRefinementFinalizationCoordinator:
             deadline = monotonic() + self.motion_timeout_sec
             cancellation_deadline = None
             while not waiter.event.is_set():
-                stopping = self._shutdown.is_set()
+                if self._shutdown.is_set():
+                    raise RuntimeError("Application shutdown interrupted retraction; execution remains unresolved")
                 timed_out = monotonic() >= deadline
-                if stopping or cancel_requested() or timed_out:
+                if cancel_requested() or timed_out:
                     if cancellation_deadline is None:
                         # Retain command ownership until its actual terminal
                         # status; this waiter never manufactures a stopped state.
@@ -224,8 +227,6 @@ class ProbeRefinementFinalizationCoordinator:
                             monotonic() + self.cancellation_timeout_sec
                         )
                         self.coordinator.cancel_motion(context, operation.request_id)
-                    if stopping:
-                        raise RuntimeError("Application shutdown interrupted retraction")
                     if monotonic() >= cancellation_deadline:
                         raise RuntimeError(
                             "Retraction stop unconfirmed after cancellation deadline; "

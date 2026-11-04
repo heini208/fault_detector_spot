@@ -175,7 +175,7 @@ class NavigationSetupApi:
 
     def _request_execution_cancellation(self, execution):
         with self._lock:
-            if execution.cancellation_requested or execution.finished.done():
+            if self._shutdown.is_set() or execution.cancellation_requested or execution.finished.done():
                 return
             execution.cancellation_requested = True
         try:
@@ -426,7 +426,6 @@ class NavigationSetupApi:
                     self._early_states.clear()
         try:
             if self._shutdown.is_set():
-                self._request_execution_cancellation(execution)
                 if not execution.finished.done():
                     raise RuntimeError("Application shutdown interrupted navigation setup; stop unconfirmed")
             if (goal_handle.is_cancel_requested
@@ -670,20 +669,12 @@ class NavigationSetupApi:
                 if not waiter.done():
                     waiter.set_exception(RuntimeError("Application shutdown interrupted navigation pose saving"))
             executions = tuple(self._executions.values())
-        errors = []
         for execution in executions:
-            try:
-                self._request_execution_cancellation(execution)
-            except Exception as exception:
-                errors.append(str(exception))
-            finally:
-                with self._lock:
-                    if not execution.finished.done():
-                        execution.finished.set_exception(RuntimeError(
-                            "Application shutdown interrupted navigation setup; stop unconfirmed"
-                        ))
-        if errors:
-            raise RuntimeError("; ".join(errors))
+            with self._lock:
+                if not execution.finished.done():
+                    execution.finished.set_exception(RuntimeError(
+                        "Application shutdown interrupted navigation setup; stop unconfirmed"
+                    ))
 
     def close(self) -> None:
         """Detach transport resources from the coordinator."""

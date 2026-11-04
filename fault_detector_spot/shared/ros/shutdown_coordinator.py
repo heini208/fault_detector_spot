@@ -31,24 +31,27 @@ def _start(operation):
 
 
 class ShutdownCoordinator:
-    """One admission, cancellation, confirmation, then teardown transition.
+    """Close admission, detach owners, drain local work, then tear down.
 
     Operations must not start new motion. ``progress`` runs on the calling
     thread and services callbacks for at most the supplied timeout. Individual
-    owner calls run separately so a busy owner cannot prevent cancellation of
+    owner calls run separately so a busy owner cannot prevent detachment of
     other resources or defeat the deadline. Failed cleanup is retained for a
     later close; an operation still running is never invoked twice.
     """
 
     def __init__(self, *, close_admission, request_stop, confirmations, cleanup,
                  progress, report_unconfirmed, timeout_sec=10.0,
-                 cleanup_timeout_sec=20.0, monotonic_clock=time.monotonic):
+                 cleanup_timeout_sec=20.0, monotonic_clock=time.monotonic,
+                 passive_confirmations=None, retained_unresolved=None):
         for value in (timeout_sec, cleanup_timeout_sec):
             if not math.isfinite(value) or value <= 0:
                 raise ValueError("Shutdown deadlines must be finite and positive")
         self._admission = dict(close_admission)
         self._requests = dict(request_stop)
         self._confirmations = dict(confirmations)
+        self._passive_confirmations = dict(passive_confirmations or {})
+        self._retained_unresolved = dict(retained_unresolved or {})
         self._cleanup = dict(cleanup)
         self._progress = progress
         self._report_unconfirmed = report_unconfirmed
@@ -58,8 +61,9 @@ class ShutdownCoordinator:
         self._close_lock = Lock()
         self._confirmation_complete = False
         self._confirmed = False
-        self.unresolved = {name: "Stop confirmation has not completed"
-                           for name in confirmations}
+        self.unresolved = {name: "Shutdown ownership check has not completed"
+                           for name in (*confirmations, *self._passive_confirmations)}
+        self.unresolved.update(self._retained_unresolved)
         self.cleanup_errors = {}
         self._cleanup_running = {}
         self._cleanup_done = set()
@@ -72,7 +76,7 @@ class ShutdownCoordinator:
         try:
             self._progress(interval)
         except Exception:
-            # An unavailable executor is not stop evidence. Polls remain
+            # An unavailable executor is not completion evidence. Polls remain
             # unresolved and the same deadline still applies.
             Event().wait(interval)
         # Yield to owner workers even for a fake/nonblocking progress function.
@@ -98,6 +102,7 @@ class ShutdownCoordinator:
         requests = {name: _start(operation)
                     for name, operation in self._requests.items()}
         polls = {}
+        snapshots = None
         sweep_started = None
         while self._clock() < deadline:
             for name, future in tuple(requests.items()):
@@ -106,15 +111,32 @@ class ShutdownCoordinator:
                 try:
                     future.result()
                 except Exception as error:
-                    self.unresolved[name] = f"Cancellation request failed: {error}"
+                    self.unresolved[f"request/{name}"] = f"Shutdown request failed: {error}"
                 del requests[name]
             if requests:
                 self._advance(deadline)
                 continue
+            if snapshots is None:
+                snapshots = {name: _start(operation)
+                             for name, operation in self._passive_confirmations.items()}
+            for name, future in tuple(snapshots.items()):
+                if not future.done():
+                    continue
+                try:
+                    confirmed, detail = future.result()
+                except Exception as error:
+                    confirmed, detail = False, f"Ownership snapshot failed: {error}"
+                if confirmed:
+                    self.unresolved.pop(name, None)
+                else:
+                    self.unresolved[name] = detail or "Detached work remains unresolved"
+                del snapshots[name]
+            if snapshots:
+                self._advance(deadline)
+                continue
             if not polls:
-                # Revalidate the entire set. Physical evidence and command
-                # source quietness can change while a different owner waits
-                # for a late acceptance/result; a previous True is not final.
+                # Revalidate local drains together: a callback can still be
+                # completing while another owner reports idle.
                 sweep_started = self._clock()
                 polls = {name: _start(operation)
                          for name, operation in self._confirmations.items()}
@@ -123,16 +145,19 @@ class ShutdownCoordinator:
                     try:
                         confirmed, detail = future.result()
                     except Exception as error:
-                        confirmed, detail = False, f"Stop confirmation failed: {error}"
+                        confirmed, detail = False, f"Shutdown drain failed: {error}"
                     if confirmed:
                         self.unresolved.pop(name, None)
                     else:
-                        self.unresolved[name] = detail or "Stop unconfirmed"
+                        self.unresolved[name] = detail or "Local shutdown drain remains incomplete"
                 polls = {}
                 # A blocked poll may return much later than its peers. Demand
                 # another complete fresh sweep before using that mixed proof.
                 fresh = self._clock() - sweep_started <= 0.1
-                if not self.unresolved and fresh:
+                # Historical or detached work cannot become confirmed during
+                # teardown. Preserve it in the report without waiting for it.
+                waiting = self.unresolved.keys() & self._confirmations.keys()
+                if not waiting and fresh:
                     break
             elif not polls:
                 break
@@ -142,11 +167,13 @@ class ShutdownCoordinator:
             # sweep. Never turn a timed-out revalidation into stopped state.
             for name, future in polls.items():
                 if not future.done():
-                    self.unresolved[name] = "Fresh stop confirmation did not finish before deadline"
+                    self.unresolved[name] = "Local shutdown drain did not finish before deadline"
+            for name in snapshots or {}:
+                self.unresolved[name] = "Ownership snapshot did not finish before shutdown deadline"
             if not self.unresolved:
-                self.unresolved["confirmation"] = "Fresh stop confirmation deadline expired"
+                self.unresolved["confirmation"] = "Local shutdown drain deadline expired"
         for name in requests:
-            self.unresolved[name] = "Cancellation request did not finish before shutdown deadline"
+            self.unresolved[f"request/{name}"] = "Shutdown request did not finish before deadline"
         self._confirmed = not self.unresolved
         # Freeze the outcome before releasing any resource. Later close calls
         # may retry cleanup, but cannot reinterpret discarded evidence as idle.

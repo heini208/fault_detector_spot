@@ -112,7 +112,7 @@ class ProbeSetupMotionApi:
 
     def _request_execution_cancellation(self, execution):
         with self._lock:
-            if (not execution.submitted or execution.cancellation_sent
+            if (self._shutdown.is_set() or not execution.submitted or execution.cancellation_sent
                     or (execution.finished.done() and execution.finished.exception() is None)):
                 return
             execution.cancellation_sent = True
@@ -165,6 +165,8 @@ class ProbeSetupMotionApi:
         try:
             try:
                 if not execution.finished.done():
+                    if self._shutdown.is_set():
+                        raise RuntimeError("Application shutdown interrupted probe motion; stop unconfirmed")
                     if (goal_handle.is_cancel_requested
                             or self._admission.cancel_requested(id(goal))):
                         execution.cancellation_sent = True
@@ -177,7 +179,6 @@ class ProbeSetupMotionApi:
             with self._lock:
                 execution.submitted = True
             if self._shutdown.is_set():
-                self._request_execution_cancellation(execution)
                 if not execution.finished.done():
                     raise RuntimeError("Application shutdown interrupted probe motion; stop unconfirmed")
             if (goal_handle.is_cancel_requested
@@ -383,20 +384,12 @@ class ProbeSetupMotionApi:
         self._admission.close()
         with self._lock:
             executions = tuple(self._executions.values())
-        errors = []
         for execution in executions:
-            try:
-                self._request_execution_cancellation(execution)
-            except Exception as exception:
-                errors.append(str(exception))
-            finally:
-                with self._lock:
-                    if not execution.finished.done():
-                        execution.finished.set_exception(RuntimeError(
-                            "Application shutdown interrupted probe motion; stop unconfirmed"
-                        ))
-        if errors:
-            raise RuntimeError("; ".join(errors))
+            with self._lock:
+                if not execution.finished.done():
+                    execution.finished.set_exception(RuntimeError(
+                        "Application shutdown interrupted probe motion; stop unconfirmed"
+                    ))
 
     def close(self) -> None:
         """Destroy the motion action and detach status observation."""

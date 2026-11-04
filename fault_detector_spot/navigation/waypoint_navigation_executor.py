@@ -61,6 +61,7 @@ class WaypointNavigationExecutor:
         self._monitor_timer = None
         self._closed = False
         self._shutdown_started = False
+        self._shutdown_idle = None
         self._shutdown_stop_unconfirmed = False
         self._terminal_update = None
         self._cancel_terminal = False
@@ -99,6 +100,10 @@ class WaypointNavigationExecutor:
         with self._lock:
             return (not self.active and not self._submission_uncertain
                     and not self._shutdown_stop_unconfirmed)
+
+    def shutdown_stop_required(self):
+        """Observe retained navigation ownership without waiting for its worker."""
+        return self.active or self._submission_uncertain or self._shutdown_stop_unconfirmed
 
     def navigate(self, goal_pose):
         with self._lock:
@@ -185,6 +190,8 @@ class WaypointNavigationExecutor:
             return self._poll()
 
     def _poll(self):
+        if self._shutdown_started:
+            return self._running("Application shutdown detached navigation without action cancellation")
         if self._terminal_update is not None:
             return self._terminal_update
         if not self.active:
@@ -231,11 +238,15 @@ class WaypointNavigationExecutor:
 
     def request_cancel(self):
         """Request goal cancellation before acquiring preparation/workflow locks."""
+        if self._shutdown_started:
+            return
         future = self._send_future
         if future is None:
             return
 
         def cancel_accepted(completed):
+            if self._shutdown_started:
+                return
             try:
                 handle = completed.result()
                 if handle is not None and handle.accepted:
@@ -249,6 +260,8 @@ class WaypointNavigationExecutor:
 
     def cancel(self):
         with self._lock:
+            if self._shutdown_started:
+                return
             self._retry_after_stop = False
             if not self.active or self.cancelling:
                 return
@@ -322,7 +335,7 @@ class WaypointNavigationExecutor:
     def _monitor_navigation(self):
         """Check runtime guards and stopping even when the tree is not ticking."""
         with self._lock:
-            if self._closed or not self.active:
+            if self._shutdown_started or self._closed or not self.active:
                 return
             if self.cancelling:
                 update = self._poll_cancellation()
@@ -345,7 +358,7 @@ class WaypointNavigationExecutor:
 
     def _cancel_accepted(self, future):
         with self._lock:
-            if self._closed or not self.cancelling or future is not self._send_future:
+            if self._shutdown_started or self._closed or not self.cancelling or future is not self._send_future:
                 return
             try:
                 handle = future.result()
@@ -417,36 +430,36 @@ class WaypointNavigationExecutor:
                 self._cancel_detail = f"Navigation stop unconfirmed: {exception}"
                 return self._running(self._cancel_detail)
 
+    def close_admission(self):
+        """Fence navigation and action-cancel callbacks before local teardown."""
+        self._shutdown_started = True
+
     def begin_shutdown(self):
-        """Keep the Nav2 client, monitor and velocity source through confirmation."""
+        """Detach monitoring without cancelling the remote navigation goal."""
+        self.close_admission()
         with self._lock:
-            if self._shutdown_started:
-                return
-            self._shutdown_started = True
-            self.cancel()
+            if self._shutdown_idle is None:
+                self._shutdown_idle = self.execution_idle
+                if not self._shutdown_idle:
+                    self._shutdown_stop_unconfirmed = True
+            if self._monitor_timer is not None:
+                self._monitor_timer.cancel()
 
     def poll_shutdown(self):
         with self._lock:
             self.begin_shutdown()
-            if self.cancelling and not self._closed:
-                update = self._poll_cancellation()
-                if not self.execution_idle:
-                    return False, update.detail
-            if not self.execution_idle:
-                return False, self._cancel_detail or "Nav2 stop unconfirmed"
-            return True, "Nav2 action ended and physical stop confirmed"
+            return self._shutdown_idle, (
+                "No owned navigation remains unresolved" if self._shutdown_idle
+                else "Navigation execution detached with no confirmed completion"
+            )
 
     def shutdown(self, *, stop_unconfirmed=False, stop_confirmed=False):
-        """Tear down after proof, or after the coordinator reports its deadline."""
+        """Release local handles while retaining unresolved remote execution."""
         with self._lock:
             if stop_confirmed and stop_unconfirmed:
                 raise ValueError("Shutdown cannot be both confirmed and unconfirmed")
             self.begin_shutdown()
-            if not stop_unconfirmed and not stop_confirmed:
-                confirmed, detail = self.poll_shutdown()
-                if not confirmed:
-                    raise RuntimeError(f"Nav2 stop unconfirmed: {detail}")
-            elif stop_unconfirmed:
+            if stop_unconfirmed:
                 self._shutdown_stop_unconfirmed = True
             self._closed = True
             errors = []

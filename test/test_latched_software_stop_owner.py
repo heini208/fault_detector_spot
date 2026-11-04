@@ -4,7 +4,7 @@ from concurrent.futures import Future
 from dataclasses import replace
 from threading import Event, Thread
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, call
 
 import pytest
 from fault_detector_msgs.msg import CommandStatus
@@ -166,6 +166,28 @@ def test_final_action_boundary_rejects_latched_motion_and_cancels_racing_late_ac
     started.assert_called_once()
 
 
+@pytest.mark.parametrize("operator_stop_before_shutdown", [False, True])
+def test_shutdown_rejects_new_goals_without_cancelling_late_acceptance(monkeypatch, operator_stop_before_shutdown):
+    future = Future()
+    underlying = Mock()
+    underlying.send_goal_async.return_value = future
+    monkeypatch.setattr(
+        "fault_detector_spot.application.behaviour_tree.behaviours.robot_command_resources.ActionClientWrapper",
+        lambda *_args, **_kwargs: underlying,
+    )
+    resources = RobotCommandResources()
+    client = resources.get_action_client(object())
+    assert client.send_goal_async(object()) is future
+    if operator_stop_before_shutdown:
+        resources.latch_software_stop()
+    resources.begin_shutdown()
+    handle = Mock(accepted=True)
+    future.set_result(handle)
+    handle.cancel_goal_async.assert_not_called()
+    assert not client.send_goal_async(object()).result().accepted
+    assert underlying.send_goal_async.call_count == 1
+
+
 def test_velocity_stream_requires_quiet_period_even_when_zero_and_no_nav2_goal():
     now = [0.0]
     resources = RobotCommandResources(monotonic_clock=lambda: now[0])
@@ -179,9 +201,82 @@ def test_velocity_stream_requires_quiet_period_even_when_zero_and_no_nav2_goal()
     assert resources.stop_sources_quiet()
 
 
+def navigation_velocity_resources(monkeypatch):
+    resources = RobotCommandResources()
+    navigation = SimpleNamespace(active=False, close_admission=Mock(), request_cancel=Mock(), cancel=Mock())
+    resources._waypoint_executor = navigation
+    monkeypatch.setattr(resources, "get_arm_movement_executor", Mock())
+    monkeypatch.setattr(resources, "get_base_movement_executor", Mock())
+    monkeypatch.setattr(resources, "get_waypoint_navigation_executor", lambda _node: navigation)
+    node = Mock()
+    callbacks = {}
+    node.create_subscription.side_effect = lambda _type, topic, callback, *_args, **_kwargs: callbacks.setdefault(topic, callback)
+    resources.prepare_stop(node)
+    return resources, navigation, node.create_publisher.return_value, callbacks[resources.NAVIGATION_VELOCITY_TOPIC]
+
+
+def test_nav2_lifecycle_output_is_silent_but_owned_velocity_and_final_zero_are_forwarded(monkeypatch):
+    resources, navigation, publisher, receive = navigation_velocity_resources(monkeypatch)
+    velocity = Twist()
+    velocity.linear.x = 0.2
+    receive(Twist())
+    receive(velocity)
+    publisher.publish.assert_not_called()
+
+    # Navigation retains active ownership through velocity release and fresh
+    # stationary-base confirmation, so its final zero still reaches the driver.
+    navigation.active = True
+    receive(velocity)
+    receive(Twist())
+    assert publisher.publish.call_args_list == [call(velocity), call(Twist())]
+    assert resources._last_velocity_command[1] is False
+    navigation.active = False
+    receive(velocity)
+    assert publisher.publish.call_count == 2
+
+
+def test_nav2_queued_output_is_dropped_on_shutdown_while_operator_stop_still_publishes_zero(monkeypatch):
+    resources, navigation, publisher, receive = navigation_velocity_resources(monkeypatch)
+    navigation.active = True
+    velocity = Twist()
+    velocity.linear.x = 0.2
+    receive(velocity)
+    resources.request_software_stop()
+    assert publisher.publish.call_args_list == [call(velocity), call(Twist())]
+    receive(velocity)
+    receive(Twist())
+    assert publisher.publish.call_count == 2
+    resources.begin_shutdown()
+    receive(velocity)
+    receive(Twist())
+    assert publisher.publish.call_count == 2
+
+
+def test_nav2_shutdown_waits_only_for_inflight_publish_and_then_drops_queued_callbacks(monkeypatch):
+    resources, navigation, publisher, receive = navigation_velocity_resources(monkeypatch)
+    navigation.active = True
+    publishing, release, closed = Event(), Event(), Event()
+    publisher.publish.side_effect = lambda _message: (publishing.set(), release.wait(2.0))
+    sender = Thread(target=receive, args=(Twist(),))
+    sender.start()
+    assert publishing.wait(1.0)
+    closer = Thread(target=lambda: (resources.close_admission(), closed.set()))
+    closer.start()
+    try:
+        assert not closed.wait(0.05)
+    finally:
+        release.set()
+        sender.join(2.0)
+        closer.join(2.0)
+    assert closed.is_set()
+    receive(Twist())
+    resources.request_software_stop()
+    publisher.publish.assert_called_once()
+
+
 @pytest.mark.parametrize("stop_method", ["begin_shutdown", "request_software_stop"])
 @pytest.mark.parametrize("stream", ["absent", "zero", "expired", "moving", "moving_navigation", "expired_navigation"])
-def test_lifecycle_stop_only_publishes_velocity_to_stop_a_live_motion_stream(stop_method, stream):
+def test_only_operator_stop_publishes_velocity_to_stop_a_live_motion_stream(stop_method, stream):
     now = [0.0]
     resources = RobotCommandResources(monotonic_clock=lambda: now[0])
     resources._velocity_publisher = Mock()
@@ -194,23 +289,27 @@ def test_lifecycle_stop_only_publishes_velocity_to_stop_a_live_motion_stream(sto
     navigation_owned = stream in {"moving_navigation", "expired_navigation"}
     if navigation_owned:
         resources._waypoint_executor = SimpleNamespace(
-            active=True, request_cancel=Mock(), cancel=Mock(),
+            active=True, request_cancel=Mock(), cancel=Mock(), close_admission=Mock(),
+            shutdown_stop_required=lambda: True,
         )
 
     getattr(resources, stop_method)()
 
     assert resources.stop_latched
-    needs_source_stop = stop_method == "request_software_stop" or navigation_owned
+    needs_source_stop = stop_method == "request_software_stop"
     if needs_source_stop:
         assert not resources.stop_sources_quiet()
     else:
-        assert resources.poll_shutdown()[0]
+        assert resources.poll_shutdown()[0] is not navigation_owned
     if needs_source_stop and stream in {"moving", "moving_navigation", "expired_navigation"}:
         resources._velocity_publisher.publish.assert_called_once_with(Twist())
     else:
         resources._velocity_publisher.publish.assert_not_called()
     now[0] += 0.6
-    assert resources.stop_sources_quiet() if needs_source_stop else resources.poll_shutdown()[0]
+    if needs_source_stop:
+        assert resources.stop_sources_quiet()
+    else:
+        assert resources.poll_shutdown()[0] is not navigation_owned
 
 
 @pytest.mark.parametrize("moving", [False, True])
@@ -237,14 +336,84 @@ def test_unowned_velocity_traffic_does_not_create_idle_shutdown_obligations(movi
     source.sample.assert_not_called()
 
 
+@pytest.mark.parametrize("ownership", ["idle", "terminal", "arm", "base", "navigation", "uncertain"])
+def test_shutdown_full_body_stop_depends_on_owned_motion_and_is_never_retried(ownership):
+    from action_msgs.msg import GoalStatus
+    from test_arm_movement_executor import executor_with_client, FakeTransformer
+    from test_execution_stop_evidence import base_executor
+
+    service = Mock()
+    service.wait_for_service.return_value = True
+    service.call_async.return_value = Future()
+    arm, _ = executor_with_client(FakeTransformer(), arm_stop_service_client=service)
+    base, _, _, _ = base_executor()
+    resources = RobotCommandResources()
+    resources._arm_movement_executors[""] = arm
+    resources._base_movement_executors[""] = base
+    resources._velocity_publisher = Mock()
+    if ownership == "arm":
+        arm._active = True
+    elif ownership == "base":
+        base._active = True
+    elif ownership == "uncertain":
+        arm._stop_unconfirmed = True
+    elif ownership == "navigation":
+        resources._waypoint_executor = SimpleNamespace(
+            close_admission=Mock(), shutdown_stop_required=lambda: True,
+        )
+    elif ownership == "terminal":
+        result, accepted = Future(), Future()
+        result.set_result(SimpleNamespace(status=GoalStatus.STATUS_SUCCEEDED))
+        accepted.set_result(SimpleNamespace(accepted=True, get_result_async=lambda: result))
+        arm._submitted_goals = [[accepted, result]]
+    required = ownership not in {"idle", "terminal"}
+    for _ in range(3):
+        resources.begin_shutdown()
+        assert resources.poll_shutdown()[0] is not required
+    assert service.call_async.call_count == (1 if required else 0)
+    assert service.wait_for_service.call_count == (1 if required else 0)
+    resources._velocity_publisher.publish.assert_not_called()
+    if required:
+        # Even a successful reply is diagnostic and never clears local evidence.
+        service.call_async.return_value.set_result(SimpleNamespace(success=True, message="accepted"))
+        assert not resources.poll_shutdown()[0]
+        resources.begin_shutdown()
+        service.call_async.assert_called_once()
+
+
+def test_shutdown_submits_only_one_full_body_stop_for_each_robot_namespace():
+    from test_arm_movement_executor import executor_with_client, FakeTransformer
+
+    resources = RobotCommandResources()
+    services = []
+    for name in ("", "another_robot"):
+        service = Mock()
+        service.call_async.return_value = Future()
+        arm, _ = executor_with_client(FakeTransformer(), arm_stop_service_client=service, robot_name=name)
+        arm._stop_unconfirmed = True
+        resources._arm_movement_executors[name] = arm
+        resources._base_movement_executors[name] = SimpleNamespace(
+            close_admission=Mock(), shutdown_stop_required=lambda: True,
+        )
+        services.append(service)
+    resources.begin_shutdown()
+    resources.begin_shutdown()
+    for service in services:
+        service.call_async.assert_called_once()
+    assert not resources.poll_shutdown()[0]
+
+
 @pytest.mark.parametrize("base_starts_first", [False, True])
-def test_owned_navigation_velocity_requires_fresh_base_proof_during_shutdown(base_starts_first):
+def test_owned_navigation_velocity_does_not_trigger_shutdown_commands_or_base_proof(base_starts_first):
     from test_execution_stop_evidence import base_executor
 
     base, _, clock, source = base_executor()
     resources = RobotCommandResources(monotonic_clock=clock)
     resources._base_movement_executors[""] = base
-    resources._waypoint_executor = SimpleNamespace(active=True)
+    resources._waypoint_executor = SimpleNamespace(
+        active=True, close_admission=Mock(), request_cancel=Mock(), cancel=Mock(),
+        shutdown_stop_required=lambda: True,
+    )
     resources._velocity_publisher = Mock()
     velocity = Twist()
     velocity.linear.x = 0.2
@@ -254,18 +423,20 @@ def test_owned_navigation_velocity_requires_fresh_base_proof_during_shutdown(bas
         assert base.poll_shutdown()[0]
     resources.begin_shutdown()
     base.begin_shutdown()
-    resources._velocity_publisher.publish.assert_called_once_with(Twist())
+    resources._velocity_publisher.publish.assert_not_called()
+    resources._waypoint_executor.request_cancel.assert_not_called()
+    resources._waypoint_executor.cancel.assert_not_called()
     assert not resources.poll_shutdown()[0]
-    assert not base.poll_shutdown()[0]
-    assert not base.execution_idle
+    assert base.poll_shutdown()[0]
+    assert base.execution_idle
     resources._waypoint_executor.active = False
     clock.now = 0.6
     resources._receive_velocity(Twist())
     assert not resources.poll_shutdown()[0]
-    assert not base.poll_shutdown()[0]
+    assert base.poll_shutdown()[0]
     clock.now = 1.2
-    assert resources.poll_shutdown()[0]
-    assert not base.poll_shutdown()[0]  # Missing physical proof remains unresolved.
+    assert not resources.poll_shutdown()[0]
+    assert base.poll_shutdown()[0]
 
 
 def recovery_node(arm):

@@ -2039,7 +2039,47 @@ def shutdown_arm_rig(monkeypatch):
     return executor, client, stop_client, clock, node, timer
 
 
-def test_shutdown_arm_preserves_monitor_until_late_action_and_fresh_stop(monkeypatch):
+@pytest.mark.parametrize("reply", ["success", "rejected", "exception", "missing", "unavailable", "send_error"])
+def test_shutdown_full_body_stop_is_one_attempt_without_waiting_or_confirming_completion(reply):
+    from unittest.mock import Mock
+    from bosdyn.api import robot_command_pb2
+    from bosdyn_spot_api_msgs.conversions import convert
+
+    service = Mock()
+    service.wait_for_service.return_value = reply != "unavailable"
+    future = ManualFuture()
+    service.call_async.return_value = future
+    if reply == "send_error":
+        service.call_async.side_effect = RuntimeError("delivery unknown")
+    executor, _ = executor_with_client(FakeTransformer(), arm_stop_service_client=service)
+    with pytest.raises(RuntimeError, match="admission must be closed"):
+        executor.request_shutdown_stop()
+    service.wait_for_service.assert_not_called()
+    executor._stop_unconfirmed = True
+    executor.begin_shutdown()
+    executor.request_shutdown_stop()
+    assert not executor.poll_shutdown()[0]
+    service.wait_for_service.assert_called_once_with(timeout_sec=0.0)
+    if reply != "unavailable":
+        service.call_async.assert_called_once()
+        command = robot_command_pb2.RobotCommand()
+        convert(service.call_async.call_args.args[0].command, command)
+        assert command.WhichOneof("command") == "full_body_command"
+        assert command.full_body_command.WhichOneof("command") == "stop_request"
+    if reply in {"success", "rejected"}:
+        future.set_result(SimpleNamespace(success=reply == "success", message=reply))
+    elif reply == "exception":
+        future.set_exception(RuntimeError("reply lost"))
+    for _ in range(3):
+        executor.request_shutdown_stop()
+        assert not executor.poll_shutdown()[0]
+    assert service.call_async.call_count == (0 if reply == "unavailable" else 1)
+    assert service.wait_for_service.call_count == 1
+    assert not executor.execution_idle
+
+
+@pytest.mark.parametrize("acceptance_after_cleanup", [False, True])
+def test_active_arm_shutdown_never_cancels_late_goal_or_sends_stop(monkeypatch, acceptance_after_cleanup):
     executor, client, stop, clock, node, timer = shutdown_arm_rig(monkeypatch)
     # Use a direct gripper goal so this test exercises action shutdown without
     # involving preparation or collision planning.
@@ -2047,33 +2087,31 @@ def test_shutdown_arm_preserves_monitor_until_late_action_and_fresh_stop(monkeyp
     executor.begin_shutdown()
     executor.begin_shutdown()
     assert not executor.poll_shutdown()[0]
-    with pytest.raises(RuntimeError, match="stop unconfirmed"):
+    if acceptance_after_cleanup:
         executor.shutdown()
     node.destroy_timer.assert_not_called()
-    stop.destroy.assert_not_called()
     assert executor.stow().outcome is ArmMovementOutcome.BUSY
     handle = FakeGoalHandle()
     client.send_future.set_result(handle)
-    assert handle.cancel_count >= 1
-    stop.future.set_result(SimpleNamespace(success=True))
-    timer.callback()
+    executor.request_cancel()
+    executor.cancel()
+    assert executor.poll().outcome is ArmMovementOutcome.BUSY
+    assert handle.cancel_count == 0
+    assert stop.requests == []
+    assert not hasattr(timer, "callback")
     assert not executor.poll_shutdown()[0]
     handle.result_future.set_result(SimpleNamespace(status=GoalStatus.STATUS_CANCELED))
-    for index in range(1, 30):
-        clock.now = index * 0.1
-        executor.arm_state_source.velocity = hand_velocity_sample(clock.now)
-        timer.callback()
-        if executor.poll_shutdown()[0]:
-            break
-    assert executor.poll_shutdown()[0]
+    clock.now = 30.0
+    executor.arm_state_source.velocity = hand_velocity_sample(clock.now)
+    assert not executor.poll_shutdown()[0]
     executor.shutdown()
     executor.shutdown()
-    node.destroy_timer.assert_called_once_with(timer)
+    node.destroy_timer.assert_not_called()
     stop.destroy.assert_called_once()
     assert executor.close_gripper().outcome is ArmMovementOutcome.BUSY
 
 
-def test_failed_native_arm_action_still_requires_physical_shutdown_stop(monkeypatch):
+def test_failed_native_arm_action_retains_uncertainty_without_shutdown_stop(monkeypatch):
     executor, client, stop, clock, _, timer = shutdown_arm_rig(monkeypatch)
     executor.close_gripper()
     handle = FakeGoalHandle()
@@ -2090,15 +2128,14 @@ def test_failed_native_arm_action_still_requires_physical_shutdown_stop(monkeypa
 
     executor.begin_shutdown()
     assert not executor.poll_shutdown()[0]
-    assert stop.requests
-    stop.future.set_result(SimpleNamespace(success=True))
-    timer.callback()
-    assert not executor.poll_shutdown()[0]
     for value in (0.1, 0.6):
         clock.now = value
         executor.arm_state_source.velocity = hand_velocity_sample(value)
-        timer.callback()
-    assert executor.poll_shutdown()[0]
+    assert not executor.poll_shutdown()[0]
+    executor.shutdown()
+    assert not executor.execution_idle
+    assert not stop.requests
+    assert not hasattr(timer, "callback")
 
 
 def test_rejected_native_arm_goal_remains_idle_at_shutdown(monkeypatch):
@@ -2113,29 +2150,29 @@ def test_rejected_native_arm_goal_remains_idle_at_shutdown(monkeypatch):
     assert not hasattr(timer, "callback")
 
 
-@pytest.mark.parametrize("missing", ["acceptance", "result", "stop_reply", "physical_feedback"])
-def test_shutdown_arm_retains_uncertainty_for_missing_evidence(monkeypatch, missing):
+@pytest.mark.parametrize("cancel_method", ["request_cancel", "cancel"])
+def test_arm_shutdown_disables_cancellation_callbacks_already_waiting_for_acceptance(monkeypatch, cancel_method):
     executor, client, stop, clock, node, timer = shutdown_arm_rig(monkeypatch)
     executor.close_gripper()
-    handle = FakeGoalHandle()
-    if missing != "acceptance":
-        client.send_future.set_result(handle)
+    getattr(executor, cancel_method)()
+    stop_requests_before_shutdown = len(stop.requests)
     executor.begin_shutdown()
-    if missing not in {"acceptance", "result"}:
-        handle.result_future.set_result(SimpleNamespace(status=GoalStatus.STATUS_CANCELED))
-    if missing != "stop_reply":
-        stop.future.set_result(SimpleNamespace(success=True))
+    handle = FakeGoalHandle()
+    client.send_future.set_result(handle)
+    handle.result_future.set_result(SimpleNamespace(status=GoalStatus.STATUS_CANCELED))
+    stop.future.set_result(SimpleNamespace(success=True))
     for value in (0.0, 0.4, 1.0, 10.0):
         clock.now = value
-        if missing != "physical_feedback":
-            executor.arm_state_source.velocity = hand_velocity_sample(clock.now)
-        timer.callback()
+        executor.arm_state_source.velocity = hand_velocity_sample(clock.now)
+        if hasattr(timer, "callback"):
+            timer.callback()  # A queued timer must also be harmless after detaching.
         assert not executor.poll_shutdown()[0]
-    node.destroy_timer.assert_not_called()
+    assert handle.cancel_count == 0
+    assert len(stop.requests) == stop_requests_before_shutdown
     executor.shutdown(stop_unconfirmed=True)
     executor.shutdown(stop_unconfirmed=True)
     assert not executor.execution_idle
-    node.destroy_timer.assert_called_once()
+    assert node.destroy_timer.call_count == (1 if hasattr(timer, "callback") else 0)
     stop.destroy.assert_called_once()
 
 
@@ -2194,8 +2231,8 @@ def test_cancelling_idle_stop_observation_does_not_issue_arm_command(monkeypatch
     assert stop.requests == []
 
 
-def test_shutdown_retains_explicit_stop_observation_without_restarting_it(monkeypatch):
-    executor, _, stop, clock, _, timer = shutdown_arm_rig(monkeypatch)
+def test_shutdown_detaches_explicit_stop_observation_without_completing_it(monkeypatch):
+    executor, _, stop, clock, node, timer = shutdown_arm_rig(monkeypatch)
     assert executor.confirm_stop().outcome is ArmMovementOutcome.RUNNING
     clock.now = 0.1
     executor.arm_state_source.velocity = hand_velocity_sample(clock.now)
@@ -2208,5 +2245,6 @@ def test_shutdown_retains_explicit_stop_observation_without_restarting_it(monkey
     clock.now = 0.6
     executor.arm_state_source.velocity = hand_velocity_sample(clock.now)
     timer.callback()
-    assert executor.poll_shutdown()[0]
+    assert not executor.poll_shutdown()[0]
+    node.destroy_timer.assert_called_once_with(timer)
     assert stop.requests == []

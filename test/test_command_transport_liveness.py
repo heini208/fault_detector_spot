@@ -281,19 +281,18 @@ def test_configuration_can_change_under_stop_with_only_shutdown_markers(unresolv
     p = rig()
     reply(p, unresolved=unresolved, latched=True)
     stop_id = p.controller.software_stop_status.request_id
-    assert stop_id
+    assert stop_id == ""
     assert p.controller.queued_request_ids == ()
     p.controller.poll()
     p.transport._query_status("")
-    reply(p, unresolved=[*unresolved, stop_id], latched=True)
+    reply(p, unresolved=unresolved, latched=True)
 
     assert p.controller.run_configuration_change(lambda: "changed") == "changed"
     assert p.controller.software_stop_status.latched
     assert not p.controller.software_stop_status.stop_confirmed
     with pytest.raises(RuntimeError):
         p.controller.run_if_idle(lambda: pytest.fail("Stop admitted a workflow"))
-    assert all(message.payload.command_id == CommandID.EMERGENCY_CANCEL.value
-               for message in p.wire)
+    assert p.wire == []
 
 
 def test_configuration_blocks_remote_work_unknown_to_local_controller():
@@ -341,7 +340,7 @@ def test_newer_topic_invalidates_configuration_occupancy_until_newer_query():
 
     p.sequences["owner-a"] += 1
     p.transport._query_status("")
-    reply(p, unresolved=[p.controller.software_stop_status.request_id], latched=True)
+    reply(p, unresolved=[], latched=True)
     assert p.controller.run_configuration_change(lambda: True)
 
 
@@ -349,7 +348,7 @@ def test_newer_topic_invalidates_configuration_occupancy_until_newer_query():
 def test_stop_heartbeats_do_not_starve_configuration_but_queries_must_stay_fresh(heartbeat):
     p = rig()
     reply(p, unresolved=[], latched=True)
-    stop_id = p.controller.software_stop_status.request_id
+    stop_id = p.controller.cancel_all()
     heartbeat_id = stop_id if heartbeat == "stop" else "shutdown:bt_runner/arm/default"
     for second in range(1, 10):
         p.now[0] = float(second)
@@ -377,7 +376,7 @@ def test_owner_restart_cannot_reuse_prior_configuration_occupancy():
     p = rig()
     reply(p, unresolved=[], latched=True)
     assert p.controller.run_configuration_change(lambda: True)
-    stop_id = p.controller.software_stop_status.request_id
+    stop_id = p.controller.cancel_all()
     p.transport._query_status(stop_id)
     previous_owner_query = p.node.status_client.calls[-1]
     p.transport._query_status("")

@@ -35,7 +35,7 @@ def test_stuck_owner_cannot_block_other_cancellation_or_deadline():
         assert time.monotonic() - start < 0.5
         assert other_cancelled.is_set()
         assert not report.confirmed
-        assert set(report.unresolved) == {"arm", "base"}
+        assert set(report.unresolved) == {"arm", "base", "request/arm"}
         assert reports == [report.unresolved]
         assert events == ["report", "destroy"]
         assert shutdown.close() == report
@@ -128,6 +128,48 @@ def test_reporting_error_is_retryable_and_cannot_turn_timeout_into_stopped():
     second = shutdown.close()
     assert not second.confirmed and not second.cleanup_errors
     assert reports == [first.unresolved, first.unresolved]
+
+
+def test_detached_and_historical_work_is_reported_once_without_waiting_for_stop():
+    events, reports = [], []
+    shutdown = coordinator(
+        close_admission={"commands": lambda: events.append("close")},
+        request_stop={"arm": lambda: events.append("detach")},
+        passive_confirmations={"arm": lambda: (events.append("snapshot") or False, "Goal still running")},
+        retained_unresolved={"prior shutdown/base": "Previous session ownership is unknown"},
+        report_unconfirmed=reports.append,
+        cleanup={"clients": lambda: events.append("destroy")},
+        timeout_sec=5.0,
+    )
+    started = time.monotonic()
+    report = shutdown.close()
+
+    assert time.monotonic() - started < 1.0
+    assert not report.confirmed
+    assert report.unresolved == {
+        "arm": "Goal still running", "prior shutdown/base": "Previous session ownership is unknown",
+    }
+    assert events == ["close", "detach", "snapshot", "destroy"]
+    assert reports == [report.unresolved]
+    assert shutdown.close() == report
+
+
+def test_detached_uncertainty_does_not_skip_local_callback_drain():
+    polls = []
+
+    def callbacks():
+        polls.append(True)
+        return len(polls) >= 3, "Local callback still finishing"
+
+    shutdown = coordinator(
+        passive_confirmations={"commands": lambda: (False, "Execution detached")},
+        confirmations={"callbacks": callbacks}, timeout_sec=5.0,
+    )
+    started = time.monotonic()
+    report = shutdown.close()
+    assert time.monotonic() - started < 1.0
+    assert len(polls) == 3
+    assert report.unresolved == {"commands": "Execution detached"}
 
 
 @pytest.mark.parametrize("value", [0, -1, float("inf"), float("nan")])

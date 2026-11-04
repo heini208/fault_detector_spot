@@ -478,10 +478,7 @@ def test_guard_error_cancels_and_shutdown_disables_queued_monitor_callback():
     assert handle.cancel_calls == 1
     assert executor.poll().outcome is Outcome.RUNNING
     assert "feedback unavailable" in executor.poll().detail
-    with pytest.raises(RuntimeError, match="stop unconfirmed"):
-        executor.shutdown()
-    executor._node.destroy_timer.assert_not_called()
-    executor.shutdown(stop_unconfirmed=True)
+    executor.shutdown()
     assert not executor.execution_idle
     executor._node.destroy_timer.assert_called_once_with(timer)
     timer.callback()
@@ -501,14 +498,21 @@ def completed_nav2():
 
 
 def test_final_zero_velocity_stream_cannot_override_walking_completion():
+    from fault_detector_spot.application.behaviour_tree.behaviours.robot_command_resources import RobotCommandResources
+
     executor, _, base, client, _, clock, pose, events = completed_nav2()
+    resources = RobotCommandResources(monotonic_clock=clock)
+    resources._waypoint_executor = executor
+    resources._velocity_publisher = Mock()
+    resources._velocity_publisher.publish.side_effect = executor._receive_velocity
     # Humble's smoother keeps publishing zeros at 20 Hz until its 0.5 s timeout.
     for index in range(1, 12):
         clock.now = index * 0.05
-        executor._receive_velocity(Twist())
+        resources._forward_navigation_velocity(Twist())
         assert executor.poll().outcome is Outcome.RUNNING
         assert "finish_walking" not in events
         assert executor.navigate(pose).outcome is Outcome.BUSY
+    assert resources._velocity_publisher.publish.call_count == 11
     clock.now = 0.70
     assert executor.poll().outcome is Outcome.RUNNING
     assert "finish_walking" not in events
@@ -517,6 +521,8 @@ def test_final_zero_velocity_stream_cannot_override_walking_completion():
     assert events.count("finish_walking") == 1
     base.next = BaseOutcome.SUCCESS
     assert executor.poll().outcome is Outcome.SUCCESS
+    resources._forward_navigation_velocity(Twist())
+    assert resources._velocity_publisher.publish.call_count == 11
     client.send_goal_async.assert_called_once()
 
 
@@ -615,23 +621,28 @@ def test_invalid_velocity_handoff_limits_are_rejected(quiet, timeout):
         )
 
 
-def test_shutdown_keeps_callbacks_for_delayed_acceptance_and_fresh_stop():
+@pytest.mark.parametrize("pending_cancel", [False, True])
+def test_shutdown_navigation_does_not_cancel_late_acceptance_or_continue_monitoring(pending_cancel):
     executor, arm, base, client, send, clock, pose, _ = rig()
     timer = attach_monitor(executor)
     prepare(executor, arm, base, pose)
+    if pending_cancel:
+        executor.request_cancel()
+        executor.cancel()
     executor.begin_shutdown()
     executor.begin_shutdown()
     assert executor.navigate(pose).outcome is Outcome.FAILURE
     assert not executor.poll_shutdown()[0]
-    with pytest.raises(RuntimeError, match="stop unconfirmed"):
-        executor.shutdown()
-    executor._node.destroy_timer.assert_not_called()
-    client.destroy.assert_not_called()
+    executor.shutdown()
+    executor._node.destroy_timer.assert_called_once_with(timer)
+    client.destroy.assert_called_once()
 
     result = ManualFuture()
     handle = FakeGoalHandle(result)
     send.set_result(handle)
-    assert handle.cancel_calls == 1
+    executor.cancel()
+    executor.request_cancel()
+    assert handle.cancel_calls == 0
     assert not executor.poll_shutdown()[0]
     result.set_result(SimpleNamespace(status=GoalStatus.STATUS_CANCELED))
     timer.callback()
@@ -639,7 +650,7 @@ def test_shutdown_keeps_callbacks_for_delayed_acceptance_and_fresh_stop():
     for value in (0.31, 0.41, 1.01):
         clock.now = value
         timer.callback()
-    assert executor.poll_shutdown()[0]
+    assert not executor.poll_shutdown()[0]
     executor.shutdown()
     executor.shutdown()
     client.destroy.assert_called_once()
@@ -698,4 +709,4 @@ def test_shutdown_navigation_does_not_poll_preparation_owned_by_coordinator():
     assert not executor.poll_shutdown()[0]
     arm.poll.assert_not_called()
     arm.active = False
-    assert executor.poll_shutdown()[0]
+    assert not executor.poll_shutdown()[0]

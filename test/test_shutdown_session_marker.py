@@ -55,7 +55,7 @@ def test_report_write_failure_retains_preexisting_dirty_session_for_restart(tmp_
     assert store.session_path.exists()
 
 
-def test_live_other_owner_is_allowed_but_dead_or_rebooted_session_is_unresolved(tmp_path):
+def test_live_other_owner_is_allowed_and_dead_owner_starts_fresh(tmp_path):
     bt = StopUnconfirmedStore("bt_runner", tmp_path)
     api = StopUnconfirmedStore("application_api", tmp_path)
     assert bt.begin_session()
@@ -66,11 +66,12 @@ def test_live_other_owner_is_allowed_but_dead_or_rebooted_session_is_unresolved(
     bt.session_path.write_text(json.dumps(marker), encoding="utf-8")
     assert "bt_runner/active_session" in api.load()
     duplicate = StopUnconfirmedStore("bt_runner", tmp_path)
-    assert not duplicate.begin_session()
-    assert "bt_runner/active_session" in duplicate.load()
+    assert duplicate.begin_session()
+    assert not duplicate.load()
+    assert json.loads(next((tmp_path / "history").glob("*/bt_runner.active")).read_text()) == marker
 
 
-def test_only_the_session_owner_can_clear_its_marker_and_prior_resources_remain(tmp_path):
+def test_only_the_session_owner_can_clear_its_marker_and_prior_resources_are_archived(tmp_path):
     store = StopUnconfirmedStore(root=tmp_path)
     store.record({"arm": "prior result missing"})
     assert store.begin_session()
@@ -80,7 +81,9 @@ def test_only_the_session_owner_can_clear_its_marker_and_prior_resources_remain(
     assert store.session_path.exists()
     assert store.confirm_session()
     assert store.confirm_session()
-    assert store.load() == {"bt_runner/arm": "prior result missing"}
+    assert store.load() == {}
+    archive = next((tmp_path / "history").glob("*/bt_runner.json"))
+    assert json.loads(archive.read_text())["unresolved"] == {"arm": "prior result missing"}
     assert store.begin_session()
     store.clear_confirmed(["active_session"])
     assert not store.session_path.exists()
@@ -94,7 +97,9 @@ def test_late_foreign_stop_persists_after_successful_shutdown_report(tmp_path):
     target = "41111111-1111-4111-8111-111111111111"
     stop = replace(stop_request(target), stop_execution_instance_ids=("prior-owner",))
     subscriber.append_request_to_buffer(wire(stop, subscriber))
-    assert query(subscriber, stop.request_id).status.state == CommandStatus.STATE_STOP_UNCONFIRMED
+    status = query(subscriber, stop.request_id).status
+    assert status.state == CommandStatus.STATE_UNKNOWN and not status.execution_idle
+    assert not status.software_stop_latched and not status.software_stop_confirmed
     assert "bt_runner/prior ownership" in store.load()
     assert not subscriber.confirm_shutdown_session()
     assert store.session_path.exists()
@@ -159,7 +164,7 @@ def test_idle_bt_crash_does_not_create_shutdown_work_or_latch_on_restart(tmp_pat
 
 
 @pytest.mark.parametrize("completed", [False, True])
-def test_bt_restart_retains_only_durably_unresolved_execution(tmp_path, completed):
+def test_bt_restart_starts_fresh_and_archives_original_execution_state(tmp_path, completed):
     store = StopUnconfirmedStore(root=tmp_path)
     subscriber = owner(store)
     request = semantic_request(CommandID.READY_ARM, "operator")
@@ -173,9 +178,12 @@ def test_bt_restart_retains_only_durably_unresolved_execution(tmp_path, complete
     restarted = owner(StopUnconfirmedStore(root=tmp_path))
 
     snapshot = query(restarted)
-    assert snapshot.accepting_commands is completed
-    assert snapshot.status.software_stop_latched is (not completed)
-    assert ("shutdown:bt_runner/active_session" in snapshot.unresolved_request_ids) is (not completed)
+    assert snapshot.accepting_commands
+    assert not snapshot.status.software_stop_latched
+    assert not snapshot.unresolved_request_ids
+    assert not restarted.pending_msgs and not restarted.blackboard.command_buffer
+    archive = next((tmp_path / "history").glob("*/bt_runner.active"))
+    assert json.loads(archive.read_text())["unresolved_work"] is (not completed)
 
 
 def test_failed_durable_admission_never_buffers_or_runs_command(tmp_path):
@@ -208,7 +216,7 @@ def test_rejected_dispatch_keeps_idle_session_clean(tmp_path):
 
 
 @pytest.mark.parametrize("reset", [False, True])
-def test_explicit_stop_survives_restart_until_completed_reset(tmp_path, reset):
+def test_explicit_stop_is_local_to_the_session_and_archived_on_restart(tmp_path, reset):
     store = StopUnconfirmedStore(root=tmp_path)
     subscriber = owner(store)
     stop = stop_request()
@@ -231,8 +239,10 @@ def test_explicit_stop_survives_restart_until_completed_reset(tmp_path, reset):
 
     retire_session(store)
     restarted = owner(StopUnconfirmedStore(root=tmp_path))
-    assert query(restarted).accepting_commands is reset
-    assert query(restarted).status.software_stop_latched is (not reset)
+    assert query(restarted).accepting_commands
+    assert not query(restarted).status.software_stop_latched
+    archive = next((tmp_path / "history").glob("*/bt_runner.active"))
+    assert json.loads(archive.read_text())["unresolved_work"] is (not reset)
 
 
 def test_stop_ingress_prevents_concurrent_terminal_feedback_clearing_session(tmp_path):
@@ -302,4 +312,6 @@ def test_failed_terminal_fsync_cannot_leave_next_execution_durably_idle(tmp_path
     assert writes == [True, False, True]
     assert session_has_work(store)
     retire_session(store)
-    assert not query(owner(StopUnconfirmedStore(root=tmp_path))).accepting_commands
+    assert query(owner(StopUnconfirmedStore(root=tmp_path))).accepting_commands
+    archive = next((tmp_path / "history").glob("*/bt_runner.active"))
+    assert json.loads(archive.read_text())["unresolved_work"] is True

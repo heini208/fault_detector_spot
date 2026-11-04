@@ -36,6 +36,13 @@ def build_arm_stop_request() -> RobotCommandService.Request:
     return request
 
 
+def build_full_body_stop_request() -> RobotCommandService.Request:
+    """Build the minimal-motion Stop used once for owned work on shutdown."""
+    request = RobotCommandService.Request()
+    convert(RobotCommandBuilder.stop_command(), request.command)
+    return request
+
+
 def build_gripper_goal(open_fraction: float) -> RobotCommand.Goal:
     return _command_goal(
         RobotCommandBuilder.claw_gripper_open_fraction_command(open_fraction)
@@ -196,4 +203,3 @@ def build_pose_goal(
         duration,
     )
     return _command_goal(command)
-

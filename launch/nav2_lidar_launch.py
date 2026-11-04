@@ -2,9 +2,10 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, GroupAction, IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
+from launch_ros.actions import SetRemap
 
 pkg = get_package_share_directory("fault_detector_spot")
 
@@ -42,5 +43,17 @@ def generate_launch_description():
     return LaunchDescription([
         use_sim_time_arg,
         params_file_arg,
-        nav2,
+        DeclareLaunchArgument(
+            "velocity_topic", default_value="cmd_vel",
+            description="Final velocity output; the application selects its private admission topic",
+        ),
+        GroupAction([
+            # Node-qualified rules preserve the controller -> smoother input
+            # chain while routing final output to the selected consumer.
+            SetRemap(src="velocity_smoother:cmd_vel_smoothed",
+                     dst=LaunchConfiguration("velocity_topic")),
+            SetRemap(src="behavior_server:cmd_vel",
+                     dst=LaunchConfiguration("velocity_topic")),
+            nav2,
+        ]),
     ])

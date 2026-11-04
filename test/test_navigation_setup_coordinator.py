@@ -471,7 +471,7 @@ def test_coordinator_shutdown_retains_context_until_terminal_result(tmp_path):
     navigation, boundary, owner, other, operation = pending_swap(tmp_path)
     navigation.close()
     navigation.close()
-    assert boundary.cancelled == [operation.request_id]
+    assert boundary.cancelled == []
     assert navigation.setup_coordinator.contexts == (owner,)
     boundary.emit(operation.request, CommandControllerState.STOP_UNCONFIRMED)
     assert navigation.setup_coordinator.contexts == (owner,)

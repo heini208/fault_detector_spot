@@ -75,6 +75,8 @@ def test_active_setup_action_exits_without_terminal_feedback(api_type):
     assert "shutdown" in api._abort.call_args.args[2].lower()
     assert "stop unconfirmed" in api._abort.call_args.args[2].lower()
     api._abort.assert_called_once()
+    api.coordinator.cancel.assert_not_called()
+    api.coordinator.cancel_motion.assert_not_called()
 
 
 def test_retraction_wait_exits_without_command_feedback():
@@ -103,6 +105,7 @@ def test_retraction_wait_exits_without_command_feedback():
             ProbeMotionKind.MOVE_SAFE_APPROACH, lambda: False, 0.01, 0.1,
         )
     assert coordinator.submit_motion.call_count == 1
+    coordinator.cancel_motion.assert_not_called()
 
 
 def test_capture_signal_preserves_resources_until_callback_drain(monkeypatch):
@@ -146,15 +149,15 @@ def test_main_delegates_shutdown_without_tearing_down_ros(monkeypatch):
     )
 
 
-def test_node_requests_stop_idempotently_through_the_command_controller():
+def test_node_shutdown_closes_admission_without_requesting_physical_stop():
     node = SimpleNamespace(
-        _shutdown_stop_request="", _shutdown_lock=RLock(), application_controller=Mock(),
-        command_controller=SimpleNamespace(shutdown_status=lambda: (False, "Owned motion remains unresolved")),
+        _shutdown_lock=RLock(), application_controller=Mock(),
+        _close_operation_admission=Mock(), _finish_shutdown_operations=Mock(return_value=[]),
     )
-    node.application_controller.emergency_stop.return_value = "shutdown-stop"
     application_api_node.ApplicationApiNode.request_shutdown(node)
     application_api_node.ApplicationApiNode.request_shutdown(node)
-    node.application_controller.emergency_stop.assert_called_once_with("application_shutdown")
+    assert node._close_operation_admission.call_count == 2
+    node.application_controller.emergency_stop.assert_not_called()
 
 
 def test_capture_cleanup_continues_after_subscription_error_and_retries_only_failure(monkeypatch):

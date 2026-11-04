@@ -27,7 +27,6 @@ def make_node(monkeypatch, timeout=0.1):
     node._shutdown_callbacks = ShutdownCallbackActivity()
     node._shutdown_coordinator = None
     node._shutdown_lock = RLock()
-    node._shutdown_stop_request = ''
     node._shutdown_store = Mock()
     node._startup_unresolved = {}
     node._executions = {}
@@ -60,20 +59,21 @@ def make_node(monkeypatch, timeout=0.1):
     return node, executor
 
 
-def test_callbacks_remain_available_until_stop_reply_and_terminal_action(monkeypatch):
+def test_callbacks_remain_available_until_local_actions_finish_without_robot_stop(monkeypatch):
     node, executor = make_node(monkeypatch)
+    node.command_controller.shutdown_status.return_value = (True, 'Idle')
     action = node.probe_setup_motion_api._shutdown_callbacks
     action.__enter__()
     progressed = Event()
 
     def progress(timeout_sec):
-        if not node._shutdown_stop_request or progressed.is_set():
+        if not node._shutdown.is_set() or progressed.is_set():
             return
         node.command_transport.close.assert_not_called()
         node.probe_setup_motion_state.close.assert_not_called()
         node.sensor_acquisition_command_handler.close.assert_not_called()
         executor.shutdown.assert_not_called()
-        node.command_controller.software_stop_status.stop_confirmed = True
+        node.command_controller.shutdown_status.return_value = (True, 'Idle')
         action.__exit__()
         progressed.set()
 
@@ -88,7 +88,7 @@ def test_callbacks_remain_available_until_stop_reply_and_terminal_action(monkeyp
     node.sensor_acquisition_coordinator.close.assert_called_once_with(stop_unconfirmed=False)
     executor.shutdown.assert_called_once_with(timeout_sec=1.0)
     assert node.shutdown(executor) == report
-    node.application_controller.emergency_stop.assert_called_once()
+    node.application_controller.emergency_stop.assert_not_called()
 
 
 def test_idle_api_shutdown_closes_command_admission_without_requesting_robot_stop(monkeypatch):
@@ -111,6 +111,77 @@ def test_idle_api_shutdown_closes_command_admission_without_requesting_robot_sto
     node._shutdown_store.confirm_session.assert_called_once_with()
     with pytest.raises(RuntimeError, match='closed command admission'):
         node.command_controller.submit(make_request(CommandID.STAND_UP))
+
+
+def test_active_shutdown_reports_immediately_without_cancel_and_releases_public_callback(monkeypatch):
+    from time import monotonic
+    from fault_detector_spot.application.controllers.command_controller import CommandController
+    from fault_detector_spot.application.commanding.command_ids import CommandID
+    from test_command_controller import make_request
+
+    node, executor = make_node(monkeypatch, timeout=10.0)
+    sent, persisted = [], []
+    node.command_controller = CommandController(sent.append, session_work_changed=persisted.append)
+    request = make_request(CommandID.STAND_UP)
+    node.command_controller.submit(request)
+    execution = SimpleNamespace(finished=Future())
+    node._executions[request.request_id] = execution
+    node._shutdown_callbacks.__enter__()
+    released = []
+
+    def progress(timeout_sec):
+        if execution.finished.done() and not released:
+            node._shutdown_callbacks.__exit__()
+            released.append(True)
+
+    executor.spin_once.side_effect = progress
+    started = monotonic()
+    report = node.shutdown(executor)
+    assert monotonic() - started < 1.0
+    assert set(report.unresolved) == {'commands'}
+    assert execution.finished.result().state == ApplicationCommandState.STATE_UNKNOWN
+    assert released == [True]
+    assert sent == [request]
+    assert persisted == [True]
+    assert node.command_controller.active_request_id == request.request_id
+    node.application_controller.emergency_stop.assert_not_called()
+    node._shutdown_store.confirm_session.assert_not_called()
+
+
+def test_inherited_remote_latch_does_not_make_local_shutdown_wait_or_send_stop(monkeypatch):
+    from fault_detector_spot.application.controllers.command_controller import CommandController
+
+    node, executor = make_node(monkeypatch, timeout=10.0)
+    sent, persisted = [], []
+    node.command_controller = CommandController(sent.append, session_work_changed=persisted.append)
+    node.command_controller.observe_owner_software_stop(True, False)
+    report = node.shutdown(executor)
+    assert report.confirmed
+    assert sent == persisted == []
+    node.application_controller.emergency_stop.assert_not_called()
+    node._shutdown_store.confirm_session.assert_called_once_with()
+
+
+def test_shutdown_between_submit_and_cancellation_check_never_cancels_robot(monkeypatch):
+    import asyncio
+
+    node, _ = make_node(monkeypatch)
+    operation = SimpleNamespace(request_id='operation')
+    node.application_controller.prepare_operation.return_value = operation
+    goal = SimpleNamespace(intent=object(), client_id='operator', context_id='context')
+    handle = Mock(request=goal, is_cancel_requested=False)
+    assert node._operation_admission.reserve(id(goal), context_id='context', lane='physical')
+    assert node._operation_admission.claim(id(goal))
+
+    def submit(_operation):
+        node.request_shutdown()
+
+    node.application_controller.submit.side_effect = submit
+    result = asyncio.run(node._execute_admitted_operation(handle))
+    assert result.state.state == ApplicationCommandState.STATE_UNKNOWN
+    node.application_controller.cancel.assert_not_called()
+    node.application_controller.emergency_stop.assert_not_called()
+    handle.abort.assert_called_once_with()
 
 
 def test_acquisition_state_keeps_persistent_work_after_recording_start_finishes(monkeypatch):
@@ -137,17 +208,17 @@ def test_missing_owner_reply_and_terminal_result_report_individual_resources(mon
     report = node.shutdown(executor)
     assert not report.confirmed
     assert set(report.unresolved) >= {'commands', 'operations', 'acquisition'}
-    assert execution.finished.result().state == ApplicationCommandState.STATE_STOP_UNCONFIRMED
+    assert execution.finished.result().state == ApplicationCommandState.STATE_UNKNOWN
     assert execution.finished.done()
     node._shutdown_store.record.assert_called_once_with(report.unresolved)
     node.sensor_acquisition_coordinator.close.assert_called_once_with(stop_unconfirmed=True)
-    node.command_controller.software_stop_status.stop_confirmed = True
+    node.command_controller.shutdown_status.return_value = (True, 'Idle')
     assert not node.shutdown(executor).confirmed
 
 
 def test_cleanup_error_does_not_skip_independent_cleanup_and_is_retryable(monkeypatch):
     node, executor = make_node(monkeypatch)
-    node.command_controller.software_stop_status.stop_confirmed = True
+    node.command_controller.shutdown_status.return_value = (True, 'Idle')
     node.probe_reference_capture_api.close.side_effect = [RuntimeError('capture cleanup failed'), None]
     report = node.shutdown(executor)
     assert report.confirmed
@@ -171,7 +242,7 @@ def test_late_operation_and_reset_are_rejected_after_admission_closes(monkeypatc
 
 def test_accepted_action_keeps_callbacks_available_before_execute_begins(monkeypatch):
     node, executor = make_node(monkeypatch)
-    node.command_controller.software_stop_status.stop_confirmed = True
+    node.command_controller.shutdown_status.return_value = (True, 'Idle')
     goal = SimpleNamespace(context_id='context')
     handle = Mock(request=goal)
     node._abort_preparation = Mock(return_value='terminal')
@@ -196,7 +267,7 @@ def test_accepted_action_keeps_callbacks_available_before_execute_begins(monkeyp
 
 def test_missing_accepted_callback_is_bounded_and_explicitly_unconfirmed(monkeypatch):
     node, executor = make_node(monkeypatch, timeout=0.02)
-    node.command_controller.software_stop_status.stop_confirmed = True
+    node.command_controller.shutdown_status.return_value = (True, 'Idle')
     assert node._operation_admission.reserve('pending', context_id='context', lane='physical')
     report = node.shutdown(executor)
     assert not report.confirmed
@@ -210,11 +281,11 @@ def test_fresh_idle_owners_do_not_clear_retained_shutdown_uncertainty(monkeypatc
     # independent owner callbacks to run before asserting only prior uncertainty.
     node, executor = make_node(monkeypatch, timeout=1.0)
     node._startup_unresolved = {'bt_runner/arm': 'Goal result missing'}
-    node.command_controller.software_stop_status.stop_confirmed = True
+    node.command_controller.shutdown_status.return_value = (True, 'Idle')
     report = node.shutdown(executor)
     assert not report.confirmed
     assert 'prior shutdown/bt_runner/arm' in report.unresolved
-    node._shutdown_store.record.assert_called_once_with({})
+    node._shutdown_store.record.assert_not_called()
 
 
 def test_publication_error_does_not_lose_durable_uncertainty_or_action_result(monkeypatch):
@@ -226,8 +297,8 @@ def test_publication_error_does_not_lose_durable_uncertainty_or_action_result(mo
     assert not report.confirmed
     node._shutdown_store.record.assert_called_once_with(report.unresolved)
     assert execution.finished.done()
-    assert execution.finished.result().state == ApplicationCommandState.STATE_STOP_UNCONFIRMED
-    assert 'report stop-unconfirmed' in report.cleanup_errors
+    assert execution.finished.result().state == ApplicationCommandState.STATE_UNKNOWN
+    assert 'request/commands' in report.unresolved
     executor.shutdown.assert_called_once()
 
 
@@ -236,7 +307,7 @@ def test_retained_shutdown_uncertainty_rejects_reset_without_contacting_bt(monke
     node._startup_unresolved = {'bt_runner/arm': 'Goal result missing'}
     response = node._reset_software_stop(Mock(), SimpleNamespace())
     assert not response.accepted
-    assert 'reconciliation' in response.detail
+    assert 'session ownership' in response.detail
     node.application_controller.reset_software_stop.assert_not_called()
 
 
@@ -278,7 +349,7 @@ def test_capture_owner_cleanup_failure_still_releases_action_transport():
 
 def test_shutdown_session_marker_clears_only_after_all_cleanup_succeeds(monkeypatch):
     node, executor = make_node(monkeypatch)
-    node.command_controller.software_stop_status.stop_confirmed = True
+    node.command_controller.shutdown_status.return_value = (True, 'Idle')
     node.probe_setup_motion_api.close.side_effect = [RuntimeError('action cleanup failed'), None]
     report = node.shutdown(executor)
     assert report.confirmed
@@ -316,7 +387,7 @@ def test_failed_startup_marker_prevents_command_transport_or_service_admission(m
     import pytest
     with pytest.raises(OSError, match='disk full'):
         ApplicationApiNode()
-    store.load.assert_called_once_with()
+    store.load.assert_not_called()
     store.begin_session.assert_called_once_with()
     transport.assert_not_called()
     controller.assert_not_called()
@@ -337,10 +408,42 @@ def test_losing_startup_marker_race_retains_admission_block_even_if_reload_is_em
     import pytest
     with pytest.raises(RuntimeError, match='checkpoint'):
         node.__init__()
-    assert store.load.call_count == 2
+    store.load.assert_not_called()
     assert 'application_api/active_session' in node._startup_unresolved
     node.application_controller = Mock()
     response = node._reset_software_stop(Mock(), SimpleNamespace())
     assert not response.accepted
-    assert 'reconciliation' in response.detail
+    assert 'session ownership' in response.detail
     node.application_controller.reset_software_stop.assert_not_called()
+
+
+def test_fresh_startup_session_ignores_historical_markers_without_stopping(monkeypatch):
+    from fault_detector_spot.application.api import application_api_node as module
+    from fault_detector_spot.application.commanding.command_ids import CommandID
+    from test_command_controller import make_request
+    import pytest
+
+    store = Mock()
+    store.load.return_value = {'old-owner/arm': 'Old motion may still be active'}
+    store.begin_session.return_value = True
+    monkeypatch.setattr(Node, '__init__', lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(module, 'startup_settings', Mock())
+    monkeypatch.setattr(module, 'StopUnconfirmedStore', Mock(return_value=store))
+    monkeypatch.setattr(Node, 'declare_parameter', Mock())
+    monkeypatch.setattr(module.CommandLifecycleConfig, 'from_node', Mock(return_value=module.CommandLifecycleConfig()))
+    monkeypatch.setattr(module, 'RosCommandTransport', Mock(side_effect=RuntimeError('transport checkpoint')))
+    node = ApplicationApiNode.__new__(ApplicationApiNode)
+    with pytest.raises(RuntimeError, match='transport checkpoint'):
+        node.__init__()
+    store.begin_session.assert_called_once_with()
+    store.load.assert_not_called()
+    assert not node._startup_unresolved
+    assert not node.command_controller.software_stop_status.latched
+    sent = []
+    node.command_controller.configure_dispatch(sent.append)
+    node.command_controller.poll()
+    assert sent == []
+    request = make_request(CommandID.STAND_UP)
+    node.command_controller.submit(request)
+    assert sent == [request]
+    store.set_session_work.assert_called_once_with(True)

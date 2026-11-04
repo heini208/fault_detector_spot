@@ -173,6 +173,8 @@ class CommandController:
         self._software_stop_listeners = []
         self._last_stop_publication = monotonic_clock()
         self._owner_stop_confirmed = False
+        self._owner_stop_received_at = None
+        self._startup_stop_unresolved = ""
         self._stop_participant = None
         self._participant_stop_confirmed = True
         self._participant_stop_detail = ""
@@ -242,20 +244,42 @@ class CommandController:
             raise TypeError("Stop participant callbacks must be callable")
         with self._emergency_lock:
             self._stop_participant = (request_stop, query_status, reset)
-            if self._software_stop.latched:
+            if self._software_stop.latched and self._current_cancel_request_id is not None:
                 self._participant_stop_confirmed = False
                 request_stop(self._current_cancel_request_id)
 
+    def restore_shutdown_uncertainty(self, detail):
+        """Fence an unavailable local session without issuing robot commands."""
+        with self._emergency_lock:
+            self._startup_stop_unresolved = str(detail)
+            self._owner_stop_confirmed = False
+            self._publish_software_stop_locked(latched=True, confirmed=False,
+                                               detail=self._startup_stop_unresolved)
+
     def observe_owner_software_stop(self, latched, confirmed=None):
-        """Reconnecting to a latched execution process cannot silently clear it."""
-        if latched and not self.software_stop_status.latched:
-            self.cancel_all(client_id="execution_owner_reconciliation")
-        if confirmed is False:
-            with self._lock:
+        """Mirror owner evidence without turning reconnection into cancellation."""
+        with self._emergency_lock:
+            discovered = bool(latched and not self._software_stop.latched)
+            if discovered:
+                self._publish_software_stop_locked(latched=True, confirmed=False,
+                    detail="Execution owner reports a software stop; explicit reset is required")
+            if self._current_cancel_request_id is None:
+                self._owner_stop_confirmed = bool(latched and confirmed)
+                self._owner_stop_received_at = self._monotonic_clock()
+            elif confirmed is False:
                 self._owner_stop_confirmed = False
+        with self._lock:
+            if discovered:
+                queued = tuple(self._queue)
+                self._queue.clear()
+                for request in queued:
+                    self._emit_locked(request, CommandControllerState.CANCELLED,
+                        "Cancelled before dispatch because the execution owner reports a software stop",
+                        execution_idle=True)
+            if confirmed is False:
                 for stop in self._stops.values():
                     stop["owner_confirmed"] = False
-                self._refresh_stop_confirmation_locked()
+            self._refresh_stop_confirmation_locked()
 
     def _publish_software_stop_locked(self, *, latched=None, confirmed=None, detail=None):
         previous = self._software_stop
@@ -299,6 +323,7 @@ class CommandController:
                 self._retired_execution_instances.add(previous_instance)
                 if self._software_stop.latched:
                     self._owner_stop_confirmed = False
+                    self._owner_stop_received_at = None
                     self._publish_software_stop_locked(confirmed=False,
                         detail="Execution owner restarted; prior stop evidence is unresolved")
             self._reconcile_emergencies_locked()
@@ -433,7 +458,8 @@ class CommandController:
             with self._emergency_lock:
                 idle = bool(self._admission_closed and self._active is None and not self._queue
                             and not self._unresolved_dispatch_ids and not self._stops
-                            and not self._pending_emergencies and not self._software_stop.latched)
+                            and not self._pending_emergencies
+                            and not self._current_cancel_request_id)
             return idle, ("Command admission closed; no dispatched work remains" if idle
                           else "Command execution or an existing software stop remains unresolved")
 
@@ -459,7 +485,7 @@ class CommandController:
         self._session_work_error = None
 
     def _refresh_session_work_locked(self):
-        unresolved = bool(self._unresolved_dispatch_ids or self._software_stop.latched
+        unresolved = bool(self._unresolved_dispatch_ids or self._current_cancel_request_id
                           or self._external_session_work)
         try:
             self._set_session_work_locked(unresolved)
@@ -815,7 +841,14 @@ class CommandController:
         with self._emergency_lock:
             if not self._software_stop.latched:
                 return
-            if self._stop_participant is not None:
+            passive = self._current_cancel_request_id is None
+            if passive:
+                self._participant_stop_confirmed = not self._external_session_work
+                self._participant_stop_detail = "Sensor acquisition remains active"
+                if (self._owner_stop_received_at is None or self._monotonic_clock()
+                        - self._owner_stop_received_at >= self._heartbeat_timeout_sec):
+                    self._owner_stop_confirmed = False
+            elif self._stop_participant is not None:
                 try:
                     confirmed, detail = self._stop_participant[1](self._current_cancel_request_id)
                     self._participant_stop_confirmed = bool(confirmed)
@@ -829,10 +862,12 @@ class CommandController:
                         del self._stops[request_id]
                         self._forget_dispatch_locked(request_id)
                         completed_stops.append(stop["request"])
-            confirmed = bool(self._owner_stop_confirmed and self._participant_stop_confirmed
+            confirmed = bool(not self._startup_stop_unresolved
+                and self._owner_stop_confirmed and self._participant_stop_confirmed
                 and not self._stops and not self._pending_emergencies
                 and (self._active is None or self._active.request_id == self._reset_request_id))
-            detail = ("Stopping confirmed; software stop remains latched until explicit reset" if confirmed
+            detail = (self._startup_stop_unresolved if self._startup_stop_unresolved
+                      else "Stopping confirmed; software stop remains latched until explicit reset" if confirmed
                       else self._participant_stop_detail if not self._participant_stop_confirmed
                       else "Software stop latched; execution ownership or physical stopping is unconfirmed")
             if confirmed != self._software_stop.stop_confirmed or detail != self._software_stop.detail:
@@ -974,6 +1009,8 @@ class CommandController:
     def _submit_emergency(self, request) -> str:
         """Publish stop intent before touching setup state; poll does bookkeeping."""
         with self._emergency_lock:
+            if self._admission_closed:
+                raise RuntimeError("Application shutdown has closed command admission")
             if request.request_id in self._emergency_request_ids:
                 return request.request_id
             if request.request_id in self._known_request_ids:
@@ -1051,9 +1088,11 @@ class CommandController:
             request = stop["request"]
             if stop["sent_at"] is None and self._dispatch_consumer_ready_locked(emergency=True):
                 # Only a stop that has never reached the transport may be sent.
-                stop["sent_at"] = now
                 try:
                     with self._emergency_lock:
+                        if self._admission_closed:
+                            continue
+                        stop["sent_at"] = now
                         self._unresolved_dispatch_ids.add(request.request_id)
                         self._dispatch_request(request)
                 except Exception as exception:

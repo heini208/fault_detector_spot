@@ -1,4 +1,4 @@
-"""A process exit is uncertainty only while that process owns unfinished work."""
+"""Fresh launches archive prior work without replacing a live process owner."""
 
 import json
 import os
@@ -50,13 +50,16 @@ def test_concurrent_peer_startup_never_reads_partial_session_marker(tmp_path, mo
     assert observations and all(not unresolved for unresolved in observations)
 
 
-def test_exited_owned_work_still_requires_reconciliation(tmp_path):
+def test_exited_owned_work_is_preserved_as_diagnostics_for_a_fresh_session(tmp_path):
     restarted = exited_session(tmp_path, unresolved=True)
     before = restarted.session_path.read_bytes()
 
     assert "bt_runner/active_session" in restarted.load()
-    assert not restarted.begin_session()
-    assert restarted.session_path.read_bytes() == before
+    assert restarted.begin_session()
+    assert restarted.load() == {}
+    archived = list((tmp_path / "history").glob("*/bt_runner.active"))
+    assert len(archived) == 1 and archived[0].read_bytes() == before
+    assert json.loads(restarted.session_path.read_text())["unresolved_work"] is False
 
 
 def test_concurrent_restarts_cannot_replace_the_new_live_owner(tmp_path):
@@ -73,19 +76,32 @@ def test_concurrent_restarts_cannot_replace_the_new_live_owner(tmp_path):
 def test_idle_session_replacement_preserves_prior_resource_evidence(tmp_path):
     restarted = exited_session(tmp_path)
     restarted.record({"arm": "Previous action termination is unresolved"})
+    before = restarted.path.read_bytes()
 
     assert restarted.begin_session()
-    assert restarted.load() == {"bt_runner/arm": "Previous action termination is unresolved"}
+    assert restarted.load() == {}
+    archived = list((tmp_path / "history").glob("*/bt_runner.json"))
+    assert len(archived) == 1 and archived[0].read_bytes() == before
 
 
-@pytest.mark.parametrize("kind", ["legacy", "missing_flag", "invalid_flag", "invalid_process", "corrupt"])
+def test_exited_legacy_session_is_archived_without_inventing_stop_confirmation(tmp_path):
+    restarted = exited_session(tmp_path)
+    data = json.loads(restarted.session_path.read_text())
+    data["version"] = 1
+    data.pop("unresolved_work")
+    before = json.dumps(data)
+    restarted.session_path.write_text(before)
+
+    assert restarted.begin_session()
+    assert restarted.load() == {}
+    assert next((tmp_path / "history").glob("*/bt_runner.active")).read_text() == before
+
+
+@pytest.mark.parametrize("kind", ["missing_flag", "invalid_flag", "invalid_process", "corrupt"])
 def test_unknown_session_ownership_is_never_assumed_idle(tmp_path, kind):
     restarted = exited_session(tmp_path)
     data = json.loads(restarted.session_path.read_text())
-    if kind == "legacy":
-        data["version"] = 1
-        data.pop("unresolved_work")
-    elif kind == "missing_flag":
+    if kind == "missing_flag":
         data.pop("unresolved_work")
     elif kind == "invalid_flag":
         data["unresolved_work"] = "false"

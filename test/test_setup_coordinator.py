@@ -488,7 +488,8 @@ def test_concurrent_setup_admission_has_one_physical_lane_owner():
         assert sorted(workers.map(prepare, contexts)) == [False, True]
 
 
-def test_close_before_submit_cancels_exactly_once_without_dispatch():
+@pytest.mark.parametrize("close_context", [True, False])
+def test_close_before_submit_discards_reservation_without_physical_commands(close_context):
     controller = FakeCommandController()
     coordinator = SetupCoordinator(controller)
     context = coordinator.open_context(CommandOrigin.PROBE_SETUP, "probe")
@@ -496,8 +497,9 @@ def test_close_before_submit_cancels_exactly_once_without_dispatch():
     coordinator.add_operation_listener(context, results.append)
     operation = coordinator.prepare_command(context, command())
 
-    coordinator.close_context(context)
-    coordinator.close_context(context)
+    close = (lambda: coordinator.close_context(context)) if close_context else coordinator.close
+    close()
+    close()
 
     assert [status.state for status in results] == [CommandControllerState.CANCELLED]
     assert controller.submitted == controller.cancelled == []
@@ -505,7 +507,7 @@ def test_close_before_submit_cancels_exactly_once_without_dispatch():
         coordinator.submit(operation)
 
 
-def test_close_during_submit_yields_until_command_can_be_cancelled():
+def test_close_during_submit_retains_ownership_without_cancelling_command():
     from concurrent.futures import ThreadPoolExecutor
     from threading import Event
 
@@ -535,7 +537,7 @@ def test_close_during_submit_yields_until_command_can_be_cancelled():
         finally:
             release.set()
         assert pending.result(timeout=5) == operation.request_id
-    assert controller.cancelled == [operation.request_id]
+    assert controller.cancelled == []
     controller.emit(operation.request, CommandControllerState.STOP_UNCONFIRMED)
     assert coordinator.is_current(context)
     controller.emit(operation.request, CommandControllerState.STOP_CONFIRMED)
@@ -546,25 +548,21 @@ def test_close_during_submit_yields_until_command_can_be_cancelled():
     ]
 
 
-def test_close_retries_cancellation_error_without_releasing_ownership():
+def test_close_never_calls_physical_cancellation_or_releases_active_ownership():
     controller = FakeCommandController()
     coordinator = SetupCoordinator(controller)
     context = coordinator.open_context(CommandOrigin.PROBE_SETUP, "probe")
     operation = coordinator.prepare_command(context, command())
     coordinator.submit(operation)
-    original_cancel = controller.cancel
-
     def fail_cancel(_request_id):
-        raise RuntimeError("Transport unavailable")
+        pytest.fail("Lifecycle close attempted physical cancellation")
 
     controller.cancel = fail_cancel
-    with pytest.raises(RuntimeError, match="Transport unavailable"):
-        coordinator.close()
+    coordinator.close()
     assert coordinator.is_current(context)
     assert controller.listeners
-    controller.cancel = original_cancel
     coordinator.close()
-    assert controller.cancelled == [operation.request_id]
+    assert controller.cancelled == []
     controller.emit(operation.request, CommandControllerState.CANCELLED)
     assert coordinator.contexts == ()
 

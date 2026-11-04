@@ -249,9 +249,6 @@ class BaseMovementExecutor(MovementExecutor):
         self._stationary_stand_stamp = None
         self._cancellation_terminal_update = None
         self._cancellation_complete = False
-        self._shutdown_stop_invalidation = None
-        self._shutdown_stop_seen = None
-        self._shutdown_stop_required = False
 
     def absolute(self, command) -> BaseMovementUpdate:
         """Execute a frozen odom target through the same readiness and verifier."""
@@ -358,6 +355,8 @@ class BaseMovementExecutor(MovementExecutor):
 
     def cancel(self) -> None:
         """Cancel an active base command without releasing ownership early."""
+        if self._shutdown_started:
+            return
         if not self.active:
             return
         if self._send_goal_future is not None:
@@ -384,54 +383,13 @@ class BaseMovementExecutor(MovementExecutor):
 
     def begin_stop_confirmation(self):
         """Cancel owned motion and require fresh stationary pose evidence."""
+        if self._shutdown_started:
+            return
         self.cancel()
         self._stop_confirmation_stamp = self._ros_time_sec()
         self._stop_confirmation_verifier = BaseStopVerifier(
             self.goal_verification_config, self._monotonic_clock(),
         )
-
-    def begin_shutdown(self):
-        """Close admission and retain pose/action sources until stopping settles."""
-        if self._shutdown_started:
-            return
-        self._shutdown_started = True
-        if self.execution_idle and not self._shutdown_stop_required:
-            return
-        self._shutdown_stop_required = True
-        self._stop_unconfirmed = True
-        self.request_cancel()
-        self.begin_stop_confirmation()
-
-    def invalidate_shutdown_stop(self, *, owned_source=False):
-        """Fence physical proof after velocity traffic without changing workflow."""
-        if (not self._closed and (self._shutdown_started or owned_source)
-                and (self._shutdown_stop_required or owned_source)):
-            # The subscription callback only publishes an immutable boundary.
-            # The polling owner alone replaces and advances its verifier.
-            self._shutdown_stop_required = True
-            self._shutdown_stop_invalidation = (object(), self._ros_time_sec())
-            self._stop_unconfirmed = True
-
-    def poll_shutdown(self):
-        """Keep shutdown bounded by advancing only nonblocking stop checks."""
-        self.begin_shutdown()
-        if self._closed:
-            return self.execution_idle, "Base shutdown already finalized"
-        if not self._shutdown_stop_required:
-            return self.execution_idle, "No owned base movement requires stopping"
-        invalidation = self._shutdown_stop_invalidation
-        if invalidation is not self._shutdown_stop_seen:
-            self._stop_confirmation_stamp = invalidation[1]
-            self._stop_confirmation_verifier = BaseStopVerifier(
-                self.goal_verification_config, self._monotonic_clock(),
-            )
-            self._shutdown_stop_seen = invalidation
-        confirmed, detail = self.poll_stop_confirmation()
-        if invalidation is not self._shutdown_stop_invalidation:
-            confirmed, detail = False, "Base velocity traffic invalidated stop evidence"
-        if not confirmed:
-            self._stop_unconfirmed = True
-        return confirmed, detail
 
     def poll_stop_confirmation(self):
         """Return proof only after action termination and post-stop settling."""
@@ -456,6 +414,8 @@ class BaseMovementExecutor(MovementExecutor):
 
     def poll(self) -> BaseMovementUpdate:
         """Advance the active base operation without blocking."""
+        if self._shutdown_started:
+            return self._busy_update()
         if not self.active or self._operation is None:
             return BaseMovementUpdate(
                 BaseMovementOutcome.EXECUTION_ERROR,
@@ -1122,7 +1082,8 @@ class BaseMovementExecutor(MovementExecutor):
 
     def _cancel_after_goal_response(self, send_future) -> None:
         if (
-            not self.active
+            self._shutdown_started
+            or not self.active
             or self._phase is not _BasePhase.CANCELLING
             or self._send_goal_future is not send_future
         ):
@@ -1147,7 +1108,8 @@ class BaseMovementExecutor(MovementExecutor):
 
     def _cancel_accepted_goal(self, handle) -> None:
         if (
-            not self.active
+            self._shutdown_started
+            or not self.active
             or self._phase is not _BasePhase.CANCELLING
             or self._goal_handle is not handle
         ):
@@ -1185,7 +1147,8 @@ class BaseMovementExecutor(MovementExecutor):
 
     def _complete_cancellation(self, result_future) -> None:
         if (
-            not self.active
+            self._shutdown_started
+            or not self.active
             or self._phase is not _BasePhase.CANCELLING
             or self._result_future is not result_future
         ):

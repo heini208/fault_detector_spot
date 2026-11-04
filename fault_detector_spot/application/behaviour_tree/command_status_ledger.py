@@ -85,20 +85,19 @@ class CommandStatusLedger:
                 self._stopping = True
 
     def close_admission(self):
-        """Fence ingress while callback resources remain available to stop."""
+        """Fence ingress while local callbacks detach from execution."""
         with self._lock:
             if self._closing:
                 return
             self._closing = True
             self._activated = False
-            self._stopping = True
             self._active_stop_id = None
             for request_id, status in self._statuses.items():
                 if not status.execution_idle:
                     self._fenced.add(request_id)
                     if request_id not in self._foreign_targets:
-                        status.state = CommandStatus.STATE_STOP_REQUESTED
-                        status.detail = "Shutdown requested; waiting for terminal actions and physical stop evidence"
+                        status.state = CommandStatus.STATE_UNKNOWN
+                        status.detail = "Command admission closed; execution ownership is being detached"
                         status.buffered_command_count = 0
 
     def report_shutdown_result(self, unresolved):
@@ -109,15 +108,15 @@ class CommandStatusLedger:
                 self._shutdown_result = dict(unresolved)
             unresolved = self._shutdown_result
             confirmed = not unresolved and not self._foreign_targets
-            detail = ("Shutdown stop confirmed by all execution owners" if confirmed else
-                      "Shutdown stop-unconfirmed; reconciliation is required: " +
+            detail = ("Application closed; local command ownership was released" if confirmed else
+                      "Application closed with unresolved execution: " +
                       "; ".join(f"{name}: {reason}" for name, reason in unresolved.items()))
             for request_id in self._fenced:
                 status = self._statuses[request_id]
                 if status.execution_idle or request_id in self._foreign_targets:
                     continue
-                status.state = (CommandStatus.STATE_STOP_CONFIRMED if confirmed else
-                                CommandStatus.STATE_STOP_UNCONFIRMED)
+                status.state = (CommandStatus.STATE_CANCELLED if confirmed else
+                                CommandStatus.STATE_UNKNOWN)
                 status.detail = detail
                 status.execution_idle = confirmed
                 status.buffered_command_count = 0
@@ -160,6 +159,11 @@ class CommandStatusLedger:
             result.software_stop_confirmed = (
                 not self._foreign_targets and bool(self._fenced)
                 and all(status.execution_idle for status in self._statuses.values())
+                and (not self._closing or (
+                    result.software_stop_latched
+                    and all(self._statuses[key].state == CommandStatus.STATE_STOP_CONFIRMED
+                            for key in self._fenced)
+                ))
             )
             return result
 
@@ -211,7 +215,8 @@ class CommandStatusLedger:
         with self._lock:
             if request.execution_instance_id != self.execution_instance_id:
                 return False
-            self._stopping = True
+            if not self._closing:
+                self._stopping = True
             targets = set()
             instances = request.stop_execution_instance_ids
             if len(instances) != len(request.stop_request_ids):
@@ -223,7 +228,7 @@ class CommandStatusLedger:
                     else:
                         self._foreign_targets.add(request_id)
             recovery_allowed = not self._foreign_targets
-            self._active_stop_id = request.request_id if recovery_allowed else None
+            self._active_stop_id = request.request_id if recovery_allowed and not self._closing else None
             targets.add(request.request_id)
             targets.update(
                 key for key, value in self._statuses.items()
@@ -233,6 +238,8 @@ class CommandStatusLedger:
             targets.update(self._foreign_targets)
             for request_id in targets:
                 previous = self._statuses.get(request_id)
+                if self._closing and previous is not None and previous.execution_idle:
+                    continue
                 message = deepcopy(previous) if previous is not None else CommandStatus()
                 message.request_id = request_id
                 message.execution_instance_id = self.execution_instance_id
@@ -241,6 +248,9 @@ class CommandStatusLedger:
                 message.detail = ("BT stop requested; execution is not yet confirmed idle"
                                   if recovery_allowed else
                                   "Prior execution instance owns unresolved work; recovery is blocked")
+                if self._closing and recovery_allowed:
+                    message.state = CommandStatus.STATE_UNKNOWN
+                    message.detail = "Command admission is closed; stop request was not dispatched"
                 message.execution_idle = False
                 message.buffered_command_count = 0
                 message.retry_safe = False

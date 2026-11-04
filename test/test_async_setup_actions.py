@@ -144,13 +144,15 @@ def test_shutdown_wakes_yielded_action_once_and_late_status_cannot_claim_success
     rig.api.request_shutdown()
     rig.api.request_shutdown()
     assert waiting.done()
+    assert rig.api._accept_cancel(rig.handle) == CancelResponse.ACCEPT
+    rig.cancel.assert_not_called()
     rig.status(CommandControllerState.SUCCEEDED)
     result = finish(coroutine)
     assert result.state.state == rig.state_type.STATE_FAILED
     assert "stop unconfirmed" in result.state.detail
     rig.handle.abort.assert_called_once()
     rig.handle.succeed.assert_not_called()
-    rig.cancel.assert_called_once()
+    rig.cancel.assert_not_called()
     assert rig.api._accept(rig.handle.request) == GoalResponse.REJECT
 
 
@@ -219,17 +221,31 @@ def test_probe_cancel_during_submission_is_sent_after_command_is_registered(rig)
 
 
 @pytest.mark.parametrize("rig", [ProbeSetupMotionApi], indirect=True)
-def test_shutdown_during_submission_still_cancels_newly_submitted_motion(rig):
+def test_shutdown_during_submission_leaves_motion_ownership_unresolved_without_cancel(rig):
     def submit(_operation):
         rig.api.request_shutdown()
         rig.cancel.assert_not_called()
 
     rig.submit.side_effect = submit
     result = finish(rig.api._execute(rig.handle))
-    rig.cancel.assert_called_once()
+    rig.cancel.assert_not_called()
     assert result.state.state == ProbeSetupState.STATE_FAILED
     assert "stop unconfirmed" in result.state.detail
     rig.handle.abort.assert_called_once()
+
+
+@pytest.mark.parametrize("rig", [ProbeSetupMotionApi], indirect=True)
+def test_shutdown_during_preparation_neither_dispatches_nor_cancels_robot_motion(rig):
+    def prepare(*_args, **_kwargs):
+        rig.api.request_shutdown()
+        return rig.operation
+
+    rig.api.coordinator.prepare_motion.side_effect = prepare
+    result = finish(rig.api._execute(rig.handle))
+    rig.submit.assert_not_called()
+    rig.cancel.assert_not_called()
+    assert result.state.state == ProbeSetupState.STATE_FAILED
+    assert "shutdown" in result.state.detail.lower()
 
 
 @pytest.mark.parametrize("rig", [NavigationSetupApi], indirect=True)

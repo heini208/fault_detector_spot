@@ -137,7 +137,7 @@ def test_runner_closes_resource_admission_before_owner_and_cleanup_snapshots(mon
                            destroy_node=Mock())
     executor = SimpleNamespace(spin_once=Mock(), shutdown=Mock())
     runner.make_shutdown_coordinator(node, None, executor)
-    assert events == ["owners", "cleanup"]
+    assert events == ["owners", "owners", "cleanup"]
 
 
 def test_foreign_request_ownership_remains_unconfirmed_when_local_stops_succeed(monkeypatch):

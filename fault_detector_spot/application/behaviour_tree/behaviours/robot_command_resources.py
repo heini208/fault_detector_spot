@@ -1,12 +1,13 @@
 """Own process-wide ROS resources used by Spot robot commands."""
 
-from threading import Event, RLock
+from threading import Event, Lock, RLock
 from concurrent.futures import Future
 from types import SimpleNamespace
 import math
 import time
 
 from fault_detector_spot.navigation.walking_profile import WalkingProfiles
+from fault_detector_spot.navigation.velocity_topics import APPLICATION_NAVIGATION_VELOCITY_TOPIC
 
 from geometry_msgs.msg import Twist
 from rclpy.callback_groups import ReentrantCallbackGroup
@@ -79,42 +80,48 @@ from fault_detector_spot.sensing.observations.tag_observation_stability import (
 class _StopAwareActionClient:
     """Fence late planning results at the last action submission boundary."""
 
-    def __init__(self, client, stopped, motion_started):
+    def __init__(self, client, stopped, motion_started, cancel_required=None, submission_lock=None):
         self._client = client
         self._stopped = stopped
         self._motion_started = motion_started
+        self._cancel_required = stopped if cancel_required is None else cancel_required
+        self._submission_lock = submission_lock if submission_lock is not None else Lock()
 
     def __getattr__(self, name):
         return getattr(self._client, name)
 
     def send_goal_async(self, *args, **kwargs):
-        if self._stopped():
-            # This request never reached the wire. Return definite rejection,
-            # not an exception that would correctly be treated as lost delivery.
-            rejected = Future()
-            rejected.set_result(SimpleNamespace(accepted=False))
-            return rejected
-        self._motion_started()
-        future = self._client.send_goal_async(*args, **kwargs)
+        with self._submission_lock:
+            if self._stopped():
+                # This request never reached the wire. Return definite rejection,
+                # not an exception that would correctly be treated as lost delivery.
+                rejected = Future()
+                rejected.set_result(SimpleNamespace(accepted=False))
+                return rejected
+            self._motion_started()
+            future = self._client.send_goal_async(*args, **kwargs)
         # A stop can race the nonblocking send. Never let a late acceptance
         # escape cancellation merely because the owner has not ticked again.
         if future is not None:
             def cancel_if_stopped(completed):
-                if not self._stopped():
-                    return
-                try:
-                    handle = completed.result()
-                    if handle is not None and handle.accepted:
-                        handle.cancel_goal_async()
-                except Exception:
-                    # The execution owner retains uncertain submission evidence.
-                    pass
+                with self._submission_lock:
+                    if not self._cancel_required():
+                        return
+                    try:
+                        handle = completed.result()
+                        if handle is not None and handle.accepted:
+                            handle.cancel_goal_async()
+                    except Exception:
+                        # The execution owner retains uncertain submission evidence.
+                        pass
             future.add_done_callback(cancel_if_stopped)
         return future
 
 
 class RobotCommandResources:
     """Share RobotCommand clients, TF, state, and movement executors."""
+
+    NAVIGATION_VELOCITY_TOPIC = APPLICATION_NAVIGATION_VELOCITY_TOPIC
 
     def __init__(self, monotonic_clock=time.monotonic):
         self._lock = RLock()
@@ -146,6 +153,8 @@ class RobotCommandResources:
         self._stop_request_error = ""
         self._velocity_publisher = None
         self._velocity_subscription = None
+        self._navigation_velocity_subscription = None
+        self._submission_lock = Lock()
         self._last_velocity_at = None
         self._last_velocity_command = None
         self._stop_requested_at = None
@@ -153,14 +162,19 @@ class RobotCommandResources:
         self._closing = False
         self._shutdown_unconfirmed = False
         self._shutdown_confirmed = False
-        self._shutdown_sources_required = None
+        self._shutdown_stop_lock = Lock()
+        self._shutdown_stop_started = False
+        self._shutdown_stop_owners = {}
+        self._shutdown_stop_details = {}
 
     def close_admission(self):
         """Fence late submissions before tree dispatch is paused."""
-        self._closing = True
-        # Shutdown never resets this latch. Avoid waiting behind a reset's
-        # workflow locks before the coordinator can start its deadline.
-        self._software_stop.set()
+        # In-flight goal/velocity submissions finish before closure returns.
+        # This lock never waits for an execution owner or a workflow operation.
+        with self._submission_lock:
+            self._closing = True
+        for owner in self.shutdown_owners().values():
+            owner.close_admission()
 
     def shutdown_owners(self):
         """Snapshot the existing owners; do not create resources at teardown."""
@@ -173,32 +187,53 @@ class RobotCommandResources:
         return owners
 
     def begin_shutdown(self):
+        """Close admission and attempt one Stop only for this session's motion."""
         self.close_admission()
-        if self._shutdown_sources_required is not None:
-            return
+        with self._shutdown_stop_lock:
+            if self._shutdown_stop_started:
+                return
+            self._shutdown_stop_started = True
+        arms = self._arm_movement_executors.copy()
+        bases = self._base_movement_executors.copy()
+        names = arms.keys() | bases.keys()
         navigation = self._waypoint_executor
-        self._shutdown_sources_required = bool(
-            (navigation is not None and navigation.active)
-            or (self._stop_started and not self._stop_confirmed)
-        )
-        if not self._shutdown_sources_required:
-            return
-        self._stop_requested_at = self._monotonic_clock()
-        for owner in tuple(self._base_movement_executors.values()):
-            owner.invalidate_shutdown_stop(owned_source=True)
-        self._stop_velocity_stream()
+        if navigation is not None:
+            names.add("")
+        for name in sorted(names):
+            owners = [owner for owner in (arms.get(name), bases.get(name)) if owner is not None]
+            if not name and navigation is not None:
+                owners.append(navigation)
+            try:
+                required = any(owner.shutdown_stop_required() for owner in owners)
+            except Exception:
+                # Unreadable retained ownership is uncertainty, never idle proof.
+                required = True
+            if not required:
+                continue
+            arm = arms.get(name)
+            if arm is None:
+                self._shutdown_stop_details[name] = "Shutdown Stop unavailable: no existing RobotCommand service owner"
+                continue
+            self._shutdown_stop_owners[name] = arm
+            try:
+                self._shutdown_stop_details[name] = arm.request_shutdown_stop()
+            except Exception as exception:
+                self._shutdown_stop_details[name] = f"Shutdown Stop delivery is unconfirmed: {exception}"
 
     def poll_shutdown(self):
-        if self._shutdown_sources_required is False:
-            return True, "No owned velocity command source requires stopping"
-        return self.stop_sources_quiet(), "Waiting for base velocity command sources to become quiet"
+        details = [f"{name or 'default'}: {getattr(self._shutdown_stop_owners.get(name), 'shutdown_stop_detail', detail)}"
+                   for name, detail in tuple(self._shutdown_stop_details.items())]
+        return self._closing and not details, (
+            "Local command admission closed; " + "; ".join(details) if details
+            else "Local command admission closed; no owned motion required a shutdown Stop"
+        )
 
     def report_shutdown_unconfirmed(self):
         """Permit teardown only after the coordinator has reported uncertainty."""
         self._shutdown_unconfirmed = True
 
     def report_shutdown_confirmed(self):
-        """Authorize finalization using the coordinator's complete stop proof."""
+        """Authorize cleanup after the coordinator confirms local ownership is idle."""
         self._shutdown_confirmed = True
 
     @property
@@ -221,6 +256,22 @@ class RobotCommandResources:
                 Twist, "cmd_vel", self._receive_velocity, 10,
                 callback_group=ReentrantCallbackGroup(),
             )
+            self._navigation_velocity_subscription = node.create_subscription(
+                Twist, self.NAVIGATION_VELOCITY_TOPIC, self._forward_navigation_velocity, 10,
+                callback_group=ReentrantCallbackGroup(),
+            )
+
+    def _forward_navigation_velocity(self, message):
+        """Admit Nav2 output only for navigation owned by this live session."""
+        with self._submission_lock:
+            navigation = self._waypoint_executor
+            if (self._closing or self._software_stop.is_set()
+                    or navigation is None or not navigation.active
+                    or self._velocity_publisher is None):
+                return
+            self._velocity_publisher.publish(message)
+            # Stop can arrive before our cmd_vel observation is delivered.
+            self._receive_velocity(message)
 
     def _receive_velocity(self, message):
         received_at = self._monotonic_clock()
@@ -229,15 +280,14 @@ class RobotCommandResources:
             message.linear.x, message.linear.y, message.linear.z,
             message.angular.x, message.angular.y, message.angular.z,
         )))
-        navigation = self._waypoint_executor
-        owned_source = self._closing and (
-            self._shutdown_sources_required
-            or (navigation is not None and navigation.active)
-        )
-        for owner in tuple(self._base_movement_executors.values()):
-            owner.invalidate_shutdown_stop(owned_source=bool(owned_source))
 
     def _stop_velocity_stream(self):
+        with self._submission_lock:
+            self._stop_velocity_stream_locked()
+
+    def _stop_velocity_stream_locked(self):
+        if self._closing:
+            return
         # Spot treats even zero velocity as a mobility command, which can
         # override a sit. Only supersede a nonzero velocity stream that is
         # recent or still owned by navigation. The quiet interval alone does
@@ -264,11 +314,14 @@ class RobotCommandResources:
     def latch_software_stop(self):
         """Fence a new operator stop without waiting for any execution owner."""
         with self._latch_lock:
-            self._stop_generation += 1
-            self._software_stop.set()
+            with self._submission_lock:
+                self._stop_generation += 1
+                self._software_stop.set()
 
     def request_software_stop(self):
         """Latch before touching any owner or ordinary resource/workflow lock."""
+        if self._closing:
+            return
         if not self.stop_latched:
             self.latch_software_stop()
         if self._stop_started:
@@ -442,7 +495,10 @@ class RobotCommandResources:
                     node,
                     wait_for_server=False,
                 )
-                client = _StopAwareActionClient(client, lambda: self.stop_latched, self._invalidate_stop_proof)
+                client = _StopAwareActionClient(
+                    client, lambda: self.stop_latched, self._invalidate_stop_proof,
+                    cancel_required=lambda: self._software_stop.is_set() and not self._closing,
+                )
                 self._clients[action_ns] = client
             return client
 
@@ -611,6 +667,7 @@ class RobotCommandResources:
                     _StopAwareActionClient(
                         ActionClient(node, NavigateToPose, "/navigate_to_pose"),
                         lambda: self.stop_latched, self._invalidate_stop_proof,
+                        cancel_required=lambda: self._software_stop.is_set() and not self._closing,
                     ),
                     stamp_now=lambda: node.get_clock().now().to_msg(),
                     node=node,
@@ -724,6 +781,7 @@ class RobotCommandResources:
         attribute('_arm_joint_state_source', lambda resource: resource.destroy())
         attribute('_posture_state_source', lambda resource: resource.destroy())
         attribute('_tf_listener', lambda resource: resource.shutdown())
+        attribute('_navigation_velocity_subscription', lambda resource: self._node.destroy_subscription(resource))
         attribute('_velocity_subscription', lambda resource: self._node.destroy_subscription(resource))
         attribute('_velocity_publisher', lambda resource: self._node.destroy_publisher(resource))
         for name, client in tuple(self._clients.items()):

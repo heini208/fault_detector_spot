@@ -114,7 +114,7 @@ def test_helper_cleanup_continues_after_error_and_retains_failed_runtime_for_ret
 
 
 @pytest.mark.parametrize("missing", [None, "acceptance", "result", "physical_stop"])
-def test_active_goal_callbacks_remain_available_through_runner_confirmation(monkeypatch, missing):
+def test_active_runner_shutdown_sends_one_stop_without_action_cancellation_or_waiting_for_robot(monkeypatch, missing):
     from fault_detector_spot.application.behaviour_tree.behaviours.robot_command_resources import RobotCommandResources
     from fault_detector_spot.shared.persistence.shutdown_state import StopUnconfirmedStore
     from fault_detector_spot.navigation.base_pose_source import BasePoseSample
@@ -122,14 +122,37 @@ def test_active_goal_callbacks_remain_available_through_runner_confirmation(monk
     from fault_detector_spot.shared.geometry.rotation import quaternion_from_euler
     from test_execution_stop_evidence import base_executor
     from test_base_movement_executor import FakeGoalHandle
+    from test_arm_movement_executor import executor_with_client, FakeTransformer
 
     owner, accepted, clock, source = base_executor()
     owner.sit()
     result = Future()
     handle = FakeGoalHandle(result)
+    if missing != "acceptance":
+        accepted.set_result(handle)
+        owner.poll()
+    if missing not in {"acceptance", "result"}:
+        result.set_result(SimpleNamespace(status=GoalStatus.STATUS_SUCCEEDED))
+    if missing != "physical_stop":
+        source.value = BasePoseSample(
+            2.0, 3.0, 0.4, clock.now,
+            PoseData(Vector3Data(2.0, 3.0, 0.5), quaternion_from_euler("xyz", [0, 0, 0.4])),
+        )
+    assert owner.active
     resources = RobotCommandResources(monotonic_clock=clock)
     resources._base_movement_executors[""] = owner
     events = []
+    stop_reply = Future()
+    stop_service = Mock()
+    stop_service.wait_for_service.return_value = True
+    stop_service.call_async.side_effect = lambda _request: (events.append("shutdown Stop"), stop_reply)[1]
+    arm, _ = executor_with_client(FakeTransformer(), arm_stop_service_client=stop_service)
+    resources._arm_movement_executors[""] = arm
+    velocity_publisher = Mock()
+    resources._velocity_publisher = velocity_publisher
+    resources._node = SimpleNamespace(
+        destroy_publisher=lambda publisher: events.append("velocity publisher destroyed"),
+    )
     client = Mock()
     client.destroy.side_effect = lambda: events.append("client destroyed")
     resources._clients["robot"] = client
@@ -137,9 +160,8 @@ def test_active_goal_callbacks_remain_available_through_runner_confirmation(monk
                            timer=Mock(), shutdown=lambda **kwargs: events.append("tree destroyed"))
 
     def runtime_close():
-        assert missing is not None or owner.execution_idle
-        if missing is not None:
-            assert StopUnconfirmedStore().load()
+        assert not owner.execution_idle
+        assert "bt_runner/base/default" in StopUnconfirmedStore().load()
         assert "executor stopped" not in events
         events.append("runtime stopped")
 
@@ -155,48 +177,49 @@ def test_active_goal_callbacks_remain_available_through_runner_confirmation(monk
     )
 
     def callbacks(timeout_sec):
-        time.sleep(0.002)
+        Event().wait(min(timeout_sec, 0.001))
         clock.now += timeout_sec
-        if "client destroyed" in events:
-            return
-        # Simulate delivery from the callback executor, including acceptance
-        # arriving after shutdown has already requested cancellation.
-        if clock.now >= 0.1 and not accepted.done() and missing != "acceptance":
-            assert resources.stop_latched
-            tree.timer.cancel.assert_called_once()
-            accepted.set_result(handle)
-            events.append("acceptance delivered")
-        if clock.now >= 0.2 and accepted.done() and not result.done() and missing != "result":
-            result.set_result(SimpleNamespace(status=GoalStatus.STATUS_CANCELED))
-            events.append("result delivered")
-        if clock.now >= 0.3 and missing != "physical_stop":
-            source.value = BasePoseSample(
-                2.0, 3.0, 0.4, clock.now,
-                PoseData(Vector3Data(2.0, 3.0, 0.5), quaternion_from_euler("xyz", [0, 0, 0.4])),
-            )
 
     executor = SimpleNamespace(
         spin_once=callbacks, shutdown=lambda **kwargs: events.append("executor stopped"),
     )
     shutdown = runner.make_shutdown_coordinator(node, tree, executor)
-    shutdown._timeout = 0.3
+    shutdown._timeout = 5.0
     started = time.monotonic()
     report = shutdown.close()
     assert not report.cleanup_errors
-    assert report.confirmed is (missing is None)
-    if missing:
-        assert "base/default" in report.unresolved
-        assert not owner.execution_idle
-        assert StopUnconfirmedStore().load()
-    else:
-        assert handle.cancel_calls >= 1
-        assert events.index("result delivered") < events.index("runtime stopped")
-        assert not StopUnconfirmedStore().load()
-    assert time.monotonic() - started < 2.5
-    assert events.index("client destroyed") < events.index("executor stopped") < events.index("ROS stopped")
+    assert not report.confirmed
+    assert "base/default" in report.unresolved
+    assert "command sources" in report.unresolved
+    assert not owner.execution_idle
+    assert "bt_runner/base/default" in StopUnconfirmedStore().load()
+    assert time.monotonic() - started < 1.0
+    assert handle.cancel_calls == 0
+    assert owner.action_client.send_calls == 1
+    velocity_publisher.publish.assert_not_called()
+    stop_service.call_async.assert_called_once()
+    stop_service.wait_for_service.assert_called_once_with(timeout_sec=0.0)
+    assert not stop_reply.done()
+    tree.timer.cancel.assert_called_once()
+    assert events == ["shutdown Stop", "runtime stopped", "velocity publisher destroyed", "client destroyed",
+                      "tree destroyed", "executor stopped", "node destroyed", "ROS stopped"]
+    # Late callbacks cannot turn detached ownership into cancellation or erase
+    # the shutdown record, even when all action evidence eventually arrives.
+    if not accepted.done():
+        accepted.set_result(handle)
+    if not result.done():
+        result.set_result(SimpleNamespace(status=GoalStatus.STATUS_SUCCEEDED))
+    owner.poll()
+    assert handle.cancel_calls == 0
+    assert owner.action_client.send_calls == 1
+    velocity_publisher.publish.assert_not_called()
+    assert "bt_runner/base/default" in StopUnconfirmedStore().load()
     snapshot = list(events)
     assert shutdown.close() == report
     assert events == snapshot
+    stop_reply.set_result(SimpleNamespace(success=True, message="accepted"))
+    assert shutdown.close() == report
+    stop_service.call_async.assert_called_once()
 
 
 def test_resource_cleanup_retains_failed_client_and_releases_state_source():

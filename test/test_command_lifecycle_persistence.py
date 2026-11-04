@@ -79,7 +79,7 @@ def test_persistence_failure_cannot_suppress_a_requested_safety_stop():
     assert len(errors) == 1
 
 
-def test_unacquired_session_reports_once_during_polling_and_still_blocks_reset(tmp_path):
+def test_explicit_stop_without_session_reports_once_but_reset_remains_blocked(tmp_path):
     from fault_detector_spot.shared.persistence.shutdown_state import StopUnconfirmedStore
 
     store = StopUnconfirmedStore(root=tmp_path)
@@ -88,7 +88,7 @@ def test_unacquired_session_reports_once_during_polling_and_still_blocks_reset(t
         dispatch_request=sent.append, session_work_changed=store.set_session_work,
         listener_error_handler=errors.append,
     )
-    stop_id = controller.cancel_all("startup_reconciliation")
+    stop_id = controller.cancel_all("operator")
     for _ in range(20):
         controller.poll()
 
@@ -168,17 +168,69 @@ def test_idle_shutdown_closes_internal_admission_and_cancels_queue_without_stop(
         controller.submit(make_request(CommandID.STAND_UP))
 
 
-def test_shutdown_retains_actual_motion_and_still_admits_its_safety_stop():
+def test_shutdown_retains_actual_motion_and_rejects_late_cancellation():
     sent, persisted = [], []
     controller = CommandController(dispatch_request=sent.append, session_work_changed=persisted.append)
     request = make_request(CommandID.STAND_UP)
     controller.submit(request)
     controller.close_admission()
     assert not controller.shutdown_status()[0]
-    stop_id = controller.cancel_all()
-    assert [request.command.command_id for request in sent] == [CommandID.STAND_UP, CommandID.EMERGENCY_CANCEL]
-    assert stop_id
+    with pytest.raises(RuntimeError, match="closed command admission"):
+        controller.cancel_all()
+    with pytest.raises(RuntimeError, match="closed command admission"):
+        controller.cancel(request.request_id)
+    controller.poll()
+    assert sent == [request]
+    assert controller.active_request_id == request.request_id
     assert persisted == [True]
+
+
+def test_passive_startup_fence_does_not_write_without_session_or_allow_reset(tmp_path):
+    from fault_detector_spot.shared.persistence.shutdown_state import StopUnconfirmedStore
+    from fault_detector_spot.application.controllers.command_controller import (
+        CommandExecutionUnresolved, SoftwareStopLatched,
+    )
+
+    store = StopUnconfirmedStore(root=tmp_path)
+    sent, errors = [], []
+    controller = CommandController(
+        sent.append, session_work_changed=store.set_session_work,
+        listener_error_handler=errors.append,
+    )
+    controller.restore_shutdown_uncertainty("Another application API owns this session")
+    controller.observe_owner_software_stop(True, True)
+    for _ in range(20):
+        controller.poll()
+    with pytest.raises(SoftwareStopLatched):
+        controller.submit(make_request(CommandID.STAND_UP))
+    with pytest.raises(CommandExecutionUnresolved):
+        controller.reset_software_stop()
+    controller.close_admission()
+    assert controller.shutdown_status()[0]
+    assert sent == errors == []
+    assert not store.session_path.exists()
+
+
+def test_passive_remote_stop_does_not_dirty_local_session_or_wait_on_shutdown():
+    sent, persisted = [], []
+    controller = CommandController(sent.append, session_work_changed=persisted.append)
+    controller.observe_owner_software_stop(True, False)
+    controller.close_admission()
+    controller.poll()
+    assert controller.shutdown_status()[0]
+    assert controller.software_stop_status.latched
+    assert sent == persisted == []
+
+
+def test_shutdown_does_not_dispatch_previously_requested_stop_when_transport_appears():
+    sent, ready = [], [False]
+    controller = CommandController(sent.append, dispatch_ready=lambda: ready[0])
+    controller.cancel_all()
+    controller.close_admission()
+    ready[0] = True
+    controller.poll()
+    assert sent == []
+    assert not controller.shutdown_status()[0]
 
 
 def test_shutdown_fences_command_preparation_before_waiting_for_its_lock():

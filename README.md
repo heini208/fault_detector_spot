@@ -347,10 +347,10 @@ and its late feedback is rejected after replacement is observed. A stop targetin
 that previous instance reports `STOP_UNCONFIRMED` and blocks recovery motion.
 There is no automatic reset or release based on an empty replacement ledger;
 physical ownership must be resolved outside this protocol before a new session
-can safely resume. This protocol covers execution-process restart and transient
-client disconnection. Individual command history is not restored after an
-application API process restart; the persistent shutdown markers described
-below fence unresolved sessions. The UI retains pending work and displays
+can safely resume within that application session. This protocol covers execution-process
+restart and transient client disconnection. A full launch starts a fresh application
+and execution session, as described below. Individual command history is not restored
+after an application API process restart. The UI retains pending work and displays
 uncertainty when application updates disappear.
 
 These states, execution identities/sequences, idle evidence, stop fences, status queries,
@@ -398,37 +398,34 @@ operation and intent value 6 are retired; callers must request reset and recover
 separately. The former zero-velocity-only stop intent (value 7) is also retired;
 callers must use the confirmed software-stop protocol.
 
-Shutdown closes command admission and pauses tree dispatch before cancelling
-owned arm, base, Nav2, setup and acquisition work. Already idle owners close
-without a robot stop command or a new telemetry requirement; opening or closing
-an idle application does not change Spot's posture. The callback executor,
-guard monitors, state subscriptions and stop clients remain available until
-terminal action state and fresh physical-stop evidence are confirmed. The
-confirmation deadline defaults to 10 seconds; independent cleanup has a further
-20-second budget. Both are configured by `shutdown.confirmation_timeout_sec`
-and `shutdown.cleanup_timeout_sec` in `config/command_lifecycle.yaml`.
+Launch startup sends no robot commands. Shutdown closes command admission,
+pauses tree dispatch and drops undispatched work. If this session owns unresolved
+physical motion, the execution owner attempts one full-body Stop through the existing
+RobotCommand service, without retries or waiting for physical stop confirmation.
+Idle shutdown sends no Stop. Shutdown sends no action cancellation, ArmStop or zero
+velocity command. Application-owned Nav2 velocity output passes through the execution resource;
+closing admission drops queued and child-shutdown velocity messages before Nav2 exits.
+An unconfirmed Stop is retained as diagnostic uncertainty; existing robot execution
+may continue. Use **SOFTWARE STOP** while the application is running for the full
+cancellation and confirmation workflow. Startup neither resumes nor cancels old work.
 
-A deadline reports **stop-unconfirmed** for each unresolved resource before
-recordings, child runtimes and ROS resources are finalized. Failed cleanup
-remains retryable. Unresolved ownership is retained in
-`$ROS_HOME/fault_detector_spot/shutdown/<owner>.json` (default ROS home: `~/.ros`).
-Each process creates a version-2 `<owner>.active` session with empty ownership,
-durably marks it unresolved before dispatching work, and clears that flag only
-after authoritative completion with no remaining acquisition or latched stop.
-A dead session whose ownership is empty can be reclaimed without a robot stop.
-Live sessions cannot be replaced. Confirmed shutdown and successful cleanup
-remove the process's own marker. Unresolved ownership keeps restart admission
-blocked even if writing the detailed timeout record fails; failed ownership
-persistence prevents normal dispatch.
-The next startup exposes retained uncertainty and blocks motion and software reset.
-An empty new executor or a later successful shutdown cannot clear it. Recovery
-requires independently verifying termination of the prior actions and fresh
-physical stopping, then reconciling only those resource names through
-`StopUnconfirmedStore.clear_confirmed()` before restarting; there is no automatic
-reconciliation or UI reset bypass for uncertain ownership. Legacy version-1 or
-unreadable session markers have no reliable empty-ownership evidence. They remain
-represented by the resource name `active_session` and require the same independent
-proof before clearing.
+Shutdown records unresolved execution once and does not wait for fresh physical-stop
+feedback. Local action callbacks and sensor acquisition still receive a bounded
+opportunity to finish; recordings, child runtimes and ROS resources are then finalized.
+Their drain deadline defaults to 10 seconds and independent cleanup has a further
+20-second budget, configured by `shutdown.confirmation_timeout_sec` and
+`shutdown.cleanup_timeout_sec` in `config/command_lifecycle.yaml`. Failed cleanup
+remains retryable.
+
+Each launch starts a fresh command session. Each process creates a version-2
+`$ROS_HOME/fault_detector_spot/shutdown/<owner>.active` marker (default ROS home:
+`~/.ros`) and journals unresolved execution in `<owner>.json`. Before replacing an
+exited session, startup moves its original records into `shutdown/history/` as
+diagnostics. This includes legacy version-1 records with a verified exited process.
+Archived uncertainty does not block new commands or configuration edits, create a
+software-stop latch, or certify that the prior robot command stopped. A live process
+owner cannot be replaced; unreadable or unverifiable process ownership still blocks
+the duplicate session. Failed ownership persistence prevents normal dispatch.
 
 ---
 
@@ -1314,6 +1311,9 @@ ros2 launch fault_detector_spot nav2_lidar_launch.py use_sim_time:=false
 ```
 
 The `params_file` launch argument can select a different Nav2 configuration.
+The `velocity_topic` argument defaults to `cmd_vel` for standalone use. The
+application selects a private topic and forwards velocity only during its own
+navigation execution; it disconnects that output before shutting down Nav2.
 The behaviour tree's `NavigateToGoalPose` behaviour delegates to
 `WaypointNavigationExecutor`, which owns arm stow, walking-height preparation,
 Nav2's `/navigate_to_pose` action, cancellation, and stationary completion.

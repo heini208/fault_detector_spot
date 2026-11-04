@@ -192,7 +192,9 @@ class NavigationSetupCoordinator:
         first_error = None
         for request_id in request_ids:
             try:
-                self.setup_coordinator.cancel_operation(context, request_id)
+                self.setup_coordinator.cancel_operation(
+                    context, request_id, cancel_dispatched=not self._closed,
+                )
             except LookupError:
                 pass
             except Exception as exception:
@@ -574,7 +576,7 @@ class NavigationSetupCoordinator:
         self._operations.remove_listener(listener)
 
     def close(self) -> None:
-        """Close admission and keep callbacks until each cancellation settles."""
+        """Close local admission and retain ownership without cancelling execution."""
         self._closed = True
         contexts = self.setup_coordinator.contexts_for(
             CommandOrigin.NAVIGATION_SETUP

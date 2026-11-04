@@ -2,6 +2,7 @@
 
 from fault_detector_spot.shared.persistence.settings_parameter_files import settings_parameter_file
 from fault_detector_spot.shared.persistence.basic_settings import startup_settings
+from fault_detector_spot.navigation.velocity_topics import APPLICATION_NAVIGATION_VELOCITY_TOPIC
 
 import os
 from ament_index_python.packages import get_package_share_directory
@@ -35,4 +36,7 @@ class Nav2RuntimeManager(RuntimeManager):
         if map_file:
             args.append(f"map:={map_file}")
         args.extend(extra_args or [])
+        # The managed child always routes through admission, even when callers
+        # provide launch arguments intended for a standalone Nav2 instance.
+        args.append(f"velocity_topic:={APPLICATION_NAVIGATION_VELOCITY_TOPIC}")
         return self._launch(self.launch_file, args)

@@ -1,6 +1,7 @@
-"""Shutdown uncertainty survives owner restarts and fences command admission."""
+"""Prior shutdown diagnostics do not become work in a fresh command session."""
 
 from types import SimpleNamespace
+import json
 
 import pytest
 from fault_detector_msgs.msg import CommandStatus
@@ -10,7 +11,7 @@ from fault_detector_spot.application.behaviour_tree.behaviours.command_subscribe
 from fault_detector_spot.application.commanding.command_ids import CommandID
 from fault_detector_spot.shared.persistence.shutdown_state import StopUnconfirmedStore
 from test_bt_startup import ConsumerNode
-from test_command_owner_reconciliation import wire, stop_request
+from test_command_owner_reconciliation import wire, stop_publisher, stop_request
 from test_command_request_correlation import semantic_request
 
 
@@ -30,7 +31,7 @@ def query(subscriber, request_id=""):
     )
 
 
-def test_restart_fences_individual_resources_from_both_process_owners(tmp_path):
+def test_restart_archives_each_owners_diagnostics_without_replay_or_stop(tmp_path):
     bt_store = StopUnconfirmedStore("bt_runner", tmp_path)
     api_store = StopUnconfirmedStore("application_api", tmp_path)
     bt_store.record({"arm": "terminal result missing", "base": "fresh velocity missing"})
@@ -38,29 +39,23 @@ def test_restart_fences_individual_resources_from_both_process_owners(tmp_path):
     latches = []
     restarted = owner(bt_store, SimpleNamespace(latch_software_stop=lambda: latches.append(True)))
     discovery = query(restarted)
-    assert latches == [True]
-    assert not discovery.accepting_commands
-    assert discovery.status.state == CommandStatus.STATE_STOP_UNCONFIRMED
-    assert discovery.status.software_stop_latched
+    assert latches == []
+    assert discovery.accepting_commands
+    assert not discovery.status.software_stop_latched
     assert not discovery.status.software_stop_confirmed
-    assert set(discovery.unresolved_request_ids) == {
-        "shutdown:bt_runner/arm", "shutdown:bt_runner/base",
-        "shutdown:application_api/acquisition",
-    }
-    for command in (CommandID.READY_ARM, CommandID.RESET_SOFTWARE_STOP):
-        request = semantic_request(command, "operator")
-        restarted.append_request_to_buffer(wire(request, restarted))
-        assert restarted.request_status_publisher.messages[-1].state == CommandStatus.STATE_FAILED
+    assert not discovery.unresolved_request_ids
     assert not restarted.pending_msgs and not restarted.blackboard.command_buffer
-    # Empty new owners cannot certify prior action termination, even on a later close.
-    restarted.report_shutdown_result({})
-    assert not query(restarted).status.software_stop_confirmed
-    assert len(bt_store.load()) == 3
-    restarted.report_shutdown_result({
-        f"prior shutdown/{name}": detail for name, detail in bt_store.load().items()
-    })
-    assert len(bt_store.load()) == 3
-    assert not query(owner(bt_store)).accepting_commands
+    archive = next((tmp_path / "history").glob("*/bt_runner.json"))
+    assert json.loads(archive.read_text())["unresolved"] == {
+        "arm": "terminal result missing", "base": "fresh velocity missing",
+    }
+    assert api_store.path.exists()  # Peer history is archived by its own startup.
+    assert api_store.begin_session()
+    assert not bt_store.load()
+    assert next((tmp_path / "history").glob("*/application_api.json")).exists()
+    request = semantic_request(CommandID.READY_ARM, "operator")
+    restarted.append_request_to_buffer(wire(request, restarted))
+    assert query(restarted, request.request_id).status.state == CommandStatus.STATE_RUNNING
 
 
 def test_close_retains_status_callbacks_and_reports_only_coordinator_proof(tmp_path):
@@ -77,31 +72,54 @@ def test_close_retains_status_callbacks_and_reports_only_coordinator_proof(tmp_p
     assert subscriber.request_subscription is subscription
     assert subscriber.status_query_service is service
     waiting = query(subscriber, request.request_id).status
-    assert waiting.state == CommandStatus.STATE_STOP_REQUESTED and not waiting.execution_idle
+    assert waiting.state == CommandStatus.STATE_UNKNOWN and not waiting.execution_idle
+    assert not waiting.software_stop_latched and not waiting.software_stop_confirmed
     rejected = semantic_request(CommandID.READY_ARM, "operator")
     subscriber.append_request_to_buffer(wire(rejected, subscriber))
     assert query(subscriber, rejected.request_id).status.state == CommandStatus.STATE_FAILED
     subscriber.report_shutdown_result({"arm": "late goal acceptance remains unresolved"})
     missing = query(subscriber, request.request_id).status
-    assert missing.state == CommandStatus.STATE_STOP_UNCONFIRMED and not missing.execution_idle
+    assert missing.state == CommandStatus.STATE_UNKNOWN and not missing.execution_idle
+    assert not missing.software_stop_latched and not missing.software_stop_confirmed
     subscriber.close_admission()
-    assert query(subscriber, request.request_id).status.state == CommandStatus.STATE_STOP_UNCONFIRMED
+    assert query(subscriber, request.request_id).status.state == CommandStatus.STATE_UNKNOWN
     assert store.load() == {"bt_runner/arm": "late goal acceptance remains unresolved"}
 
 
-def test_confirmed_close_preserves_closed_admission(tmp_path):
+def test_local_release_preserves_closed_admission_without_claiming_physical_stop(tmp_path):
     subscriber = owner(StopUnconfirmedStore(root=tmp_path))
     request = semantic_request(CommandID.READY_ARM, "operator")
     subscriber.append_request_to_buffer(wire(request, subscriber))
     subscriber.close_admission()
     subscriber.report_shutdown_result({})
     status = query(subscriber, request.request_id).status
-    assert status.state == CommandStatus.STATE_STOP_CONFIRMED and status.execution_idle
-    assert status.software_stop_confirmed
+    assert status.state == CommandStatus.STATE_CANCELLED and status.execution_idle
+    assert not status.software_stop_latched and not status.software_stop_confirmed
     assert not query(subscriber).accepting_commands
 
 
-def test_corrupt_marker_fails_closed_and_reconciliation_is_resource_specific(tmp_path):
+@pytest.mark.parametrize("phase", ["pending", "confirmed", "confirmed_then_pending"])
+def test_shutdown_preserves_only_existing_explicit_stop_confirmation(tmp_path, phase):
+    subscriber = owner(StopUnconfirmedStore(root=tmp_path))
+    stop = stop_request()
+    subscriber.append_request_to_buffer(wire(stop, subscriber))
+    if phase != "pending":
+        stop_publisher(subscriber, stop).update()
+    if phase == "confirmed_then_pending":
+        stop = stop_request()
+        subscriber.append_request_to_buffer(wire(stop, subscriber))
+
+    subscriber.close_admission()
+    subscriber.report_shutdown_result({})
+    status = query(subscriber, stop.request_id).status
+    assert status.software_stop_latched
+    assert status.software_stop_confirmed is (phase == "confirmed")
+    assert status.state == (CommandStatus.STATE_STOP_CONFIRMED if phase == "confirmed"
+                            else CommandStatus.STATE_CANCELLED)
+    assert not query(subscriber).accepting_commands
+
+
+def test_corrupt_diagnostic_is_archived_but_corrupt_process_ownership_blocks(tmp_path):
     bt_store = StopUnconfirmedStore("bt_runner", tmp_path)
     api_store = StopUnconfirmedStore("application_api", tmp_path)
     bt_store.record({"arm": "result missing", "base": "telemetry missing"})
@@ -111,11 +129,15 @@ def test_corrupt_marker_fails_closed_and_reconciliation_is_resource_specific(tmp
                                "application_api/setup": "cancel pending"}
     bt_store.path.write_text("not valid json", encoding="utf-8")
     restarted = owner(bt_store)
-    assert not query(restarted).accepting_commands
-    assert "shutdown:bt_runner/state_read_error" in query(restarted).unresolved_request_ids
+    assert query(restarted).accepting_commands
+    assert next((tmp_path / "history").glob("*/bt_runner.json")).read_text() == "not valid json"
+    bt_store.session_path.write_text("not valid json", encoding="utf-8")
+    blocked = owner(StopUnconfirmedStore("bt_runner", tmp_path))
+    assert not query(blocked).accepting_commands
+    assert "shutdown:bt_runner/active_session" in query(blocked).unresolved_request_ids
 
 
-def test_marker_write_failure_does_not_suppress_stop_unconfirmed_and_is_retryable(tmp_path, monkeypatch):
+def test_marker_write_failure_does_not_suppress_unresolved_status_and_is_retryable(tmp_path, monkeypatch):
     store = StopUnconfirmedStore(root=tmp_path)
     subscriber = owner(store)
     request = semantic_request(CommandID.READY_ARM, "operator")
@@ -125,7 +147,8 @@ def test_marker_write_failure_does_not_suppress_stop_unconfirmed_and_is_retryabl
     with pytest.raises(OSError, match="disk unavailable"):
         subscriber.report_shutdown_result({"arm": "stop reply missing"})
     status = subscriber.request_status_publisher.messages[-1]
-    assert status.state == CommandStatus.STATE_STOP_UNCONFIRMED and not status.execution_idle
+    assert status.state == CommandStatus.STATE_UNKNOWN and not status.execution_idle
+    assert not status.software_stop_confirmed
     monkeypatch.setattr(store, "_write", original)
     subscriber.report_shutdown_result({"arm": "stop reply missing"})
     assert store.load() == {"bt_runner/arm": "stop reply missing"}
@@ -144,23 +167,25 @@ def test_shutdown_stop_requests_join_one_coordinator_before_and_after_final_repo
     joining = stop_request(original.request_id)
     subscriber.append_request_to_buffer(wire(joining, subscriber))
     waiting = query(subscriber, joining.request_id).status
-    assert waiting.state == CommandStatus.STATE_STOP_REQUESTED
+    assert waiting.state == CommandStatus.STATE_UNKNOWN
     assert not waiting.execution_idle
+    assert not waiting.software_stop_latched and not waiting.software_stop_confirmed
     assert not subscriber.pending_msgs and not subscriber.blackboard.command_buffer
     assert calls == []
 
     subscriber.report_shutdown_result(unresolved)
-    expected = (CommandStatus.STATE_STOP_UNCONFIRMED if unresolved else
-                CommandStatus.STATE_STOP_CONFIRMED)
+    expected = CommandStatus.STATE_UNKNOWN if unresolved else CommandStatus.STATE_CANCELLED
     for request in (original, joining):
         status = query(subscriber, request.request_id).status
         assert status.state == expected
         assert status.execution_idle is (not unresolved)
+        assert not status.software_stop_latched and not status.software_stop_confirmed
 
     late = stop_request(original.request_id)
     subscriber.append_request_to_buffer(wire(late, subscriber))
     subscriber.append_request_to_buffer(wire(late, subscriber))
     status = query(subscriber, late.request_id).status
     assert status.state == expected and status.execution_idle is (not unresolved)
+    assert not status.software_stop_latched and not status.software_stop_confirmed
     assert not query(subscriber).accepting_commands
     assert calls == []

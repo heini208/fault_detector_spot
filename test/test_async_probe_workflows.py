@@ -109,7 +109,7 @@ def test_missing_retraction_result_cancels_once_and_releases_worker_with_recover
     assert not runner._waiters
 
 
-def test_shutdown_sends_owned_retraction_cancellation_before_releasing_waiter():
+def test_shutdown_releases_retraction_waiter_without_cancelling_motion():
     coordinator = Mock()
     coordinator.context.return_value = SimpleNamespace(context_id="context", client_id="client")
     coordinator.prepare_motion.return_value = SimpleNamespace(request_id="motion")
@@ -125,9 +125,7 @@ def test_shutdown_sends_owned_retraction_cancellation_before_releasing_waiter():
         runner.request_shutdown()
         with pytest.raises(RuntimeError, match="shutdown"):
             finished.result(timeout=0.5)
-    coordinator.cancel_motion.assert_called_once_with(
-        coordinator.context.return_value, "motion",
-    )
+    coordinator.cancel_motion.assert_not_called()
     assert not runner._waiters
 
 
@@ -439,12 +437,15 @@ def test_finalization_cancellation_during_preparation_prevents_submission(shutdo
         return operation
 
     runner.coordinator.prepare_motion.side_effect = prepare
-    with pytest.raises(RuntimeError, match="cancelled during preparation"):
+    with pytest.raises(RuntimeError, match="shutdown" if shutdown else "cancelled during preparation"):
         runner._execute_retraction(
             context.context_id, context.client_id, "request",
             ProbeMotionKind.MOVE_SAFE_APPROACH, cancelled.is_set, 0.01, 0.1,
         )
-    runner.coordinator.cancel_motion.assert_called_once_with(context, "motion")
+    if shutdown:
+        runner.coordinator.cancel_motion.assert_not_called()
+    else:
+        runner.coordinator.cancel_motion.assert_called_once_with(context, "motion")
     runner.coordinator.submit_motion.assert_not_called()
     assert not runner._waiters
 

@@ -196,7 +196,7 @@ class SetupCoordinator:
         first_error = None
         for request_id in request_ids:
             try:
-                self.cancel_operation(context, request_id)
+                self.cancel_operation(context, request_id, cancel_dispatched=not self._closed)
             except Exception as exception:
                 first_error = first_error or exception
         self._finish_context_close(context.context_id)
@@ -264,6 +264,8 @@ class SetupCoordinator:
                 raise ValueError(
                     "Operation was not prepared by this coordinator"
                 )
+            if self._closed or operation.context.context_id in self._closing_contexts:
+                raise RuntimeError("Setup context admission is closed")
             self._require_current_locked(operation.context)
             self._operations[
                 operation.request_id
@@ -350,6 +352,8 @@ class SetupCoordinator:
         self,
         context: SetupContextSnapshot,
         request_id: str,
+        *,
+        cancel_dispatched: bool = True,
     ) -> str:
         """Cancel one submitted operation owned by the current context."""
         normalized = validate_request_id(request_id)
@@ -365,6 +369,8 @@ class SetupCoordinator:
                     f"Unknown setup operation: {normalized}"
                 )
             else:
+                if not cancel_dispatched or self._closed:
+                    return normalized
                 if normalized in self._dispatching:
                     self._dispatching[normalized] = True
                     return normalized
@@ -385,7 +391,7 @@ class SetupCoordinator:
 
     def _cancel_submitted(self, request_id):
         with self._lock:
-            if request_id not in self._operations or request_id in self._cancel_sent:
+            if self._closed or request_id not in self._operations or request_id in self._cancel_sent:
                 return request_id
             self._cancel_sent.add(request_id)
         try:
@@ -599,6 +605,7 @@ class SetupCoordinator:
             return tuple(listeners)
 
     def close(self) -> None:
+        """Close local admission while preserving unresolved execution ownership."""
         with self._lock:
             self._closed = True
             contexts = tuple(self._contexts.values())

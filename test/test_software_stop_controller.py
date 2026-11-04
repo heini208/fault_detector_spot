@@ -316,3 +316,73 @@ def test_latch_snapshots_are_ordered_and_heartbeat_preserves_reset_identity():
     assert snapshots[-1].request_id == stop_id
     sequences = [item.status_sequence for item in snapshots]
     assert sequences == sorted(set(sequences))
+
+
+def test_discovering_remote_stop_is_passive_and_reset_requires_explicit_request():
+    sent, persisted, aborts, queried = [], [], [], []
+    controller = CommandController(sent.append, session_work_changed=persisted.append)
+    controller.observe_owner_software_stop(True, True)
+    controller.configure_stop_participant(aborts.append, lambda key: queried.append(key))
+    controller.poll()
+
+    assert controller.software_stop_status.latched
+    assert controller.software_stop_status.stop_confirmed
+    assert controller.software_stop_status.request_id == ""
+    assert sent == persisted == aborts == queried == []
+    with pytest.raises(SoftwareStopLatched):
+        controller.submit(make_request(CommandID.STAND_UP))
+
+    reset_id = controller.reset_software_stop()
+    assert [item.command.command_id for item in sent] == [CommandID.RESET_SOFTWARE_STOP]
+    assert controller.handle_execution_status(reset_result(reset_id))
+    assert not controller.software_stop_status.latched
+
+
+@pytest.mark.parametrize("loss", ["heartbeat", "restart", "contradiction"])
+def test_passive_stop_reset_needs_fresh_current_owner_confirmation(loss):
+    sent, now = [], [0.0]
+    controller = CommandController(sent.append, monotonic_clock=lambda: now[0])
+    controller.observe_owner_software_stop(True, True)
+    if loss == "heartbeat":
+        now[0] = 5.1
+    elif loss == "restart":
+        controller.execution_owner_changed("old", "new")
+    else:
+        controller.observe_owner_software_stop(True, False)
+    with pytest.raises(CommandExecutionUnresolved):
+        controller.reset_software_stop()
+    assert sent == []
+    assert controller.software_stop_status.latched
+
+
+def test_remote_stop_preserves_dispatched_work_and_drops_undispatched_queue():
+    sent = []
+    controller = CommandController(sent.append)
+    active, queued = make_request(CommandID.STAND_UP), make_request(CommandID.STOW_ARM)
+    controller.submit(active)
+    controller.submit(queued)
+    controller.observe_owner_software_stop(True, True)
+    assert controller.active_request_id == active.request_id
+    assert controller.queued_request_ids == ()
+    assert sent == [active]
+    with pytest.raises(CommandExecutionUnresolved):
+        controller.reset_software_stop()
+    stop_id = controller.cancel_all()
+    assert [item.command.command_id for item in sent] == [CommandID.STAND_UP, CommandID.EMERGENCY_CANCEL]
+    assert stop_id == controller.software_stop_status.request_id
+    assert active.request_id in sent[-1].stop_request_ids
+
+
+def test_passive_stop_does_not_abort_active_acquisition_or_claim_it_stopped():
+    sent, aborts = [], []
+    controller = CommandController(sent.append)
+    controller.configure_stop_participant(aborts.append, lambda key: (True, "Stopped"))
+    controller.set_external_session_work(True)
+    controller.observe_owner_software_stop(True, True)
+    assert not controller.software_stop_status.stop_confirmed
+    with pytest.raises(CommandExecutionUnresolved):
+        controller.reset_software_stop()
+    assert sent == aborts == []
+    controller.set_external_session_work(False)
+    controller.poll()
+    assert controller.software_stop_status.stop_confirmed

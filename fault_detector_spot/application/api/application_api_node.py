@@ -144,15 +144,12 @@ class ApplicationApiNode(Node):
         self._shutdown_callbacks = ShutdownCallbackActivity()
         self._shutdown_coordinator = None
         self._shutdown_lock = RLock()
-        self._shutdown_stop_request = ""
         self._shutdown_store = StopUnconfirmedStore(owner="application_api")
-        self._startup_unresolved = self._shutdown_store.load()
+        self._startup_unresolved = {}
         # A failed marker write must prevent motion admission from starting.
         if not self._shutdown_store.begin_session():
-            self._startup_unresolved.update(self._shutdown_store.load())
-            self._startup_unresolved.setdefault(
-                "application_api/active_session",
-                "Application API did not acquire its shutdown session; reconciliation is required",
+            self._startup_unresolved["application_api/active_session"] = (
+                "Application API could not acquire a fresh session: another process or unreadable ownership record remains"
             )
         self.declare_parameter("shutdown.confirmation_timeout_sec", 10.0)
         self.declare_parameter("shutdown.cleanup_timeout_sec", 20.0)
@@ -171,6 +168,10 @@ class ApplicationApiNode(Node):
                 )
             )
         )
+        if self._startup_unresolved:
+            self.command_controller.restore_shutdown_uncertainty(
+                "; ".join(self._startup_unresolved.values()),
+            )
         self.command_transport = RosCommandTransport(
             self,
             self.command_controller,
@@ -398,8 +399,6 @@ class ApplicationApiNode(Node):
             self._reset_software_stop,
             callback_group=self._callback_group,
         )
-        if self._startup_unresolved:
-            self.application_controller.emergency_stop("startup_reconciliation")
 
     def _accept_operation(self, goal_request):
         if self._shutdown.is_set():
@@ -478,8 +477,8 @@ class ApplicationApiNode(Node):
         with self._lock:
             execution.submitted = True
 
-        if (goal_handle.is_cancel_requested
-                or self._operation_admission.cancel_requested(id(goal))):
+        if (not self._shutdown.is_set() and (goal_handle.is_cancel_requested
+                or self._operation_admission.cancel_requested(id(goal)))):
             self._request_execution_cancellation(execution)
 
         try:
@@ -526,7 +525,7 @@ class ApplicationApiNode(Node):
 
     def _request_execution_cancellation(self, execution):
         with self._lock:
-            if (not execution.submitted or execution.cancellation_sent
+            if (self._shutdown.is_set() or not execution.submitted or execution.cancellation_sent
                     or execution.finished.done()):
                 return
             execution.cancellation_sent = True
@@ -547,11 +546,13 @@ class ApplicationApiNode(Node):
 
     def _cancel_operation(self, request, response):
         try:
+            if self._shutdown.is_set():
+                raise RuntimeError("Application is shutting down")
             cancellation_id = self.application_controller.cancel(
                 request.client_id,
                 request.request_id,
             )
-        except (TypeError, ValueError, UnknownCommandRequest) as exception:
+        except (TypeError, ValueError, RuntimeError, UnknownCommandRequest) as exception:
             response.accepted = False
             response.detail = str(exception)
             return response
@@ -562,10 +563,12 @@ class ApplicationApiNode(Node):
 
     def _emergency_stop(self, request, response):
         try:
+            if self._shutdown.is_set():
+                raise RuntimeError("Application is shutting down")
             request_id = self.application_controller.emergency_stop(
                 request.client_id
             )
-        except (TypeError, ValueError) as exception:
+        except (TypeError, ValueError, RuntimeError) as exception:
             response.accepted = False
             response.detail = str(exception)
             return response
@@ -579,7 +582,7 @@ class ApplicationApiNode(Node):
             if self._shutdown.is_set():
                 raise RuntimeError("Application is shutting down")
             if self._startup_unresolved:
-                raise RuntimeError("Prior shutdown stop-unconfirmed; reconciliation is required")
+                raise RuntimeError("Application API has no session ownership; reset is unavailable")
             request_id = self.application_controller.reset_software_stop(
                 request.client_id
             )
@@ -673,12 +676,15 @@ class ApplicationApiNode(Node):
         return values[state]
 
     def request_shutdown(self):
-        """Request the existing owners' stop without removing their transport."""
+        """Close local ownership without sending cancellation to the robot."""
         with self._shutdown_lock:
-            if not self._shutdown_stop_request and not self.command_controller.shutdown_status()[0]:
-                self._shutdown_stop_request = self.application_controller.emergency_stop(
-                    "application_shutdown",
-                )
+            self._close_operation_admission()
+            errors = self._finish_shutdown_operations(
+                "Application closed without cancellation; dispatched execution remains unresolved",
+                public_state=ApplicationCommandState.STATE_UNKNOWN,
+            )
+            if errors:
+                raise RuntimeError("; ".join(errors))
 
     def _track_acquisition_ownership(self, _state):
         self.command_controller.set_external_session_work(
@@ -691,51 +697,51 @@ class ApplicationApiNode(Node):
         self.command_controller.close_admission()
 
     def _command_shutdown_status(self):
-        if not self._shutdown_stop_request:
-            return self.command_controller.shutdown_status()
-        status = self.command_controller.software_stop_status
-        return (
-            bool(self._shutdown_stop_request and status.request_id == self._shutdown_stop_request
-                 and status.latched and status.stop_confirmed),
-            status.detail,
-        )
+        return self.command_controller.shutdown_status()
 
     def _report_shutdown_unconfirmed(self, unresolved):
         detail = "; ".join(f"{name}: {reason}" for name, reason in unresolved.items())
         errors = []
         try:
-            self._shutdown_store.record({name: reason for name, reason in unresolved.items()
-                                         if not name.startswith("prior shutdown/")})
+            if not self._startup_unresolved:
+                self._shutdown_store.record({name: reason for name, reason in unresolved.items()
+                                             if not name.startswith("prior shutdown/")})
         except Exception as error:
             errors.append(f"persist shutdown uncertainty: {error}")
         try:
-            self.get_logger().error(f"Application shutdown stop-unconfirmed: {detail}")
+            self.get_logger().error(f"Application closed with unresolved ownership: {detail}")
         except Exception as error:
             errors.append(f"log shutdown uncertainty: {error}")
+        errors.extend(self._finish_shutdown_operations(
+            f"Application closed with unresolved ownership: {detail}",
+            public_state=ApplicationCommandState.STATE_STOP_UNCONFIRMED,
+        ))
+        if errors:
+            raise RuntimeError("; ".join(errors))
+
+    def _finish_shutdown_operations(self, detail, *, public_state):
         # Finish public actions explicitly without inventing a physical stop.
+        errors = []
         with self._lock:
             for execution in tuple(self._executions.values()):
                 if execution.finished.done():
                     continue
                 try:
                     state = self._failure_state(
-                        execution, f"Shutdown stop-unconfirmed: {detail}",
-                        public_state=ApplicationCommandState.STATE_STOP_UNCONFIRMED,
+                        execution, detail, public_state=public_state,
                     )
                 except Exception as error:
                     errors.append(f"publish shutdown uncertainty: {error}")
                     state = ApplicationCommandState(
-                        state=ApplicationCommandState.STATE_STOP_UNCONFIRMED,
-                        detail=f"Shutdown stop-unconfirmed: {detail}",
+                        state=public_state, detail=detail,
                     )
                 execution.finished.set_result(state)
-        if errors:
-            raise RuntimeError("; ".join(errors))
+        return errors
 
     def _confirm_shutdown_persistence(self):
         coordinator = self._shutdown_coordinator
         if self._startup_unresolved or coordinator.unresolved:
-            return  # Retain this session's marker for explicit reconciliation.
+            return  # Preserve diagnostics for archival on the next fresh launch.
         errors = {name: detail for name, detail in coordinator.cleanup_errors.items()
                   if name != "confirm shutdown persistence"}
         if errors:
@@ -755,17 +761,12 @@ class ApplicationApiNode(Node):
                 admission = {"application": self._close_operation_admission}
                 admission.update({name: owner.request_shutdown for name, owner in setup_owners.items()})
                 confirmations = {
-                    "commands": self._command_shutdown_status,
                     "acquisition": self.sensor_acquisition_coordinator.shutdown_status,
                     "operations": self._shutdown_callbacks.status,
                     "accepted operations": self._operation_admission.shutdown_status,
                 }
                 confirmations.update({name: owner._shutdown_callbacks.status
                                       for name, owner in setup_owners.items()})
-                for name, detail in self._startup_unresolved.items():
-                    confirmations[f"prior shutdown/{name}"] = lambda detail=detail: (
-                        False, f"Prior shutdown requires reconciliation: {detail}",
-                    )
                 cleanup = {
                     "recording": lambda: self.sensor_acquisition_coordinator.close(
                         stop_unconfirmed=bool(self._shutdown_coordinator.unresolved),
@@ -804,6 +805,9 @@ class ApplicationApiNode(Node):
                     request_stop={"commands": self.request_shutdown,
                                   "acquisition": self.sensor_acquisition_coordinator.request_shutdown},
                     confirmations=confirmations,
+                    passive_confirmations={"commands": self._command_shutdown_status},
+                    retained_unresolved={f"prior shutdown/{name}": detail
+                                         for name, detail in self._startup_unresolved.items()},
                     cleanup=cleanup,
                     progress=(lambda timeout: executor.spin_once(timeout_sec=timeout))
                     if executor is not None else Event().wait,

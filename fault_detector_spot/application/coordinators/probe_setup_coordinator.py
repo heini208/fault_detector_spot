@@ -336,6 +336,7 @@ class ProbeSetupCoordinator:
                 self.setup_coordinator.cancel_operation(
                     context,
                     request_id,
+                    cancel_dispatched=not self._closed,
                 )
             except LookupError:
                 pass
@@ -1218,7 +1219,7 @@ class ProbeSetupCoordinator:
         return self._advance(draft)
 
     def close(self) -> None:
-        """Close every probe context owned by this coordinator."""
+        """Close local contexts without cancelling robot execution on teardown."""
         with self._lock:
             self._closed = True
             detach_listener = self._command_listener_attached

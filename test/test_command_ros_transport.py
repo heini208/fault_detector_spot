@@ -551,5 +551,9 @@ def test_reconnecting_to_latched_owner_latches_application_without_replaying_mot
     controller.poll()
     assert controller.queued_request_ids == ()
     dispatch = node.publishers["fault_detector/_internal/commands/request"].messages
-    assert [message.payload.command_id for message in dispatch] == [CommandID.EMERGENCY_CANCEL.value]
+    assert dispatch == []
+    assert controller.software_stop_status.request_id == ""
+    assert controller.software_stop_status.stop_confirmed
+    controller.reset_software_stop()
+    assert [message.payload.command_id for message in dispatch] == [CommandID.RESET_SOFTWARE_STOP.value]
     assert queued.request_id != dispatch[0].request_id

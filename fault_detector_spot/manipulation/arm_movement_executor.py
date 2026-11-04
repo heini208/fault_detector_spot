@@ -35,6 +35,7 @@ from fault_detector_spot.inspection.geometry.alignment_orientation import (
 )
 from fault_detector_spot.manipulation.arm_command_builder import (
     build_arm_stop_request,
+    build_full_body_stop_request,
     build_stow_goal,
     build_gripper_goal,
     build_moveit_joint_goal,
@@ -167,6 +168,10 @@ class ArmMovementExecutor(MovementExecutor):
         config=None,
     ):
         self._execution_lock = RLock()
+        self._shutdown_stop_lock = RLock()
+        self._shutdown_stop_attempted = False
+        self._shutdown_stop_future = None
+        self._shutdown_stop_detail = "No shutdown Stop requested"
         config = config if config is not None else ArmMotionParameters(
             getattr(arm_state_source, "node", None)
         )
@@ -1538,6 +1543,8 @@ class ArmMovementExecutor(MovementExecutor):
     def poll(self) -> ArmMovementUpdate:
         """Advance the active arm operation without blocking."""
         with self._execution_lock:
+            if self._shutdown_started:
+                return self._busy_update()
             if self.cancelling:
                 owner = self._guarded_probe_monitor or self.guarded_probe_execution
                 if owner is not None:
@@ -1606,6 +1613,8 @@ class ArmMovementExecutor(MovementExecutor):
 
     def cancel(self) -> None:
         with self._execution_lock:
+            if self._shutdown_started:
+                return
             if self._observing_idle_stop:
                 # An observation owns no motion to cancel. Keep its fresh
                 # physical evidence requirement without issuing a new command.
@@ -1632,7 +1641,7 @@ class ArmMovementExecutor(MovementExecutor):
 
     def _cancellation_goal_finished(self):
         with self._execution_lock:
-            if self._closed:
+            if self._shutdown_started:
                 return
             self._cancel_goal_done = True
             # A late goal acceptance could follow the first stop request.
@@ -1657,7 +1666,7 @@ class ArmMovementExecutor(MovementExecutor):
 
     def _cancel_stop_finished(self, update):
         with self._execution_lock:
-            if self._closed:
+            if self._shutdown_started:
                 return
             if update.outcome is ArmMovementOutcome.TRAJECTORY_CANCELLED and self._cancel_goal_done:
                 self._stop_unconfirmed = False
@@ -1669,49 +1678,54 @@ class ArmMovementExecutor(MovementExecutor):
             else:
                 self._cancellation_detail = update.detail
 
-    def begin_shutdown(self):
-        """Close admission while retaining action callbacks and the stop monitor."""
-        # The action cancellation request must not wait behind planning or a
-        # workflow lock; the locked lifecycle still owns all stop evidence.
-        if not self._shutdown_started:
-            self.request_cancel()
-        with self._execution_lock:
-            if self._shutdown_started:
-                return
-            self._shutdown_started = True
-            # An idle owner has no motion to stop. Creating a fresh telemetry
-            # obligation here would make an unused application depend on the
-            # robot's connection state merely to close cleanly.
-            already_idle = self.execution_idle
-            self._shutdown_reconcile = not (already_idle or self._observing_idle_stop)
-            if already_idle:
-                return
-            self.cancel()
+    @property
+    def shutdown_stop_detail(self):
+        return self._shutdown_stop_detail
 
-    def poll_shutdown(self):
-        """Confirm action termination and physical stopping without blocking."""
+    def request_shutdown_stop(self):
+        """Attempt one full-body Stop; never retry or treat its reply as proof."""
+        if not self._shutdown_started:
+            raise RuntimeError("Shutdown admission must be closed before its one Stop attempt")
+        with self._shutdown_stop_lock:
+            if self._shutdown_stop_attempted:
+                return self._shutdown_stop_detail
+            self._shutdown_stop_attempted = True
+            client = self.arm_stop_service_client
+            if client is None:
+                self._shutdown_stop_detail = "Shutdown Stop unavailable: no RobotCommand service client"
+                return self._shutdown_stop_detail
+            try:
+                if not client.wait_for_service(timeout_sec=0.0):
+                    self._shutdown_stop_detail = "Shutdown Stop unavailable: RobotCommand service is not ready"
+                    return self._shutdown_stop_detail
+                self._shutdown_stop_future = client.call_async(build_full_body_stop_request())
+                if self._shutdown_stop_future is None:
+                    self._shutdown_stop_detail = "Shutdown Stop delivery is unknown: service returned no future"
+                else:
+                    self._shutdown_stop_detail = "One full-body Stop submitted; physical completion is unconfirmed"
+                    self._shutdown_stop_future.add_done_callback(self._record_shutdown_stop_reply)
+            except Exception as exception:
+                self._shutdown_stop_detail = f"Shutdown Stop delivery is unconfirmed: {exception}"
+            return self._shutdown_stop_detail
+
+    def _record_shutdown_stop_reply(self, future):
+        with self._shutdown_stop_lock:
+            try:
+                reply = future.result()
+                result = "acknowledged" if reply.success else "rejected"
+                self._shutdown_stop_detail = (
+                    f"Shutdown Stop {result}: {reply.message}; physical completion is unconfirmed"
+                )
+            except Exception as exception:
+                self._shutdown_stop_detail = f"Shutdown Stop reply is unconfirmed: {exception}"
+
+    def begin_shutdown(self):
+        """Detach local monitoring without sending any command to the robot."""
+        self.close_admission()
         with self._execution_lock:
-            self.begin_shutdown()
-            if self._closed:
-                return self.execution_idle, "Arm shutdown already finalized"
-            if self.active:
-                self.cancel()
-                update = self.poll()
-                if self.active:
-                    return False, update.detail
-            if not self.goals_settled():
-                return False, "Arm action termination is unconfirmed"
-            if self._shutdown_reconcile:
-                self._shutdown_reconcile = False
-                self._active = True
-                self._operation = _ArmOperation.CONFIRM_STOP
-                # Reuse cancellation's continuing stop monitor, so a missing
-                # reply remains unresolved until the coordinator's deadline.
-                self.cancel()
-                return False, self._cancellation_detail
-            if not self.execution_idle:
-                return False, self._cancellation_detail or "Arm physical stop is unconfirmed"
-            return True, "No owned arm movement remains unresolved"
+            super().begin_shutdown()
+            if self._guarded_probe_monitor is not None:
+                self._guarded_probe_monitor.close()
 
     def shutdown(self, *, stop_unconfirmed=False, stop_confirmed=False) -> None:
         with self._execution_lock:
@@ -2096,6 +2110,11 @@ class ArmMovementExecutor(MovementExecutor):
         self._reset_goal_lifecycle()
 
     def _guard_start_arm_stop(self) -> ArmMovementUpdate:
+        if self._shutdown_started:
+            return ArmMovementUpdate(
+                ArmMovementOutcome.STOP_UNCONFIRMED,
+                "Application shutdown sends no arm stop command",
+            )
         client = self.arm_stop_service_client
         if client is None:
             return ArmMovementUpdate(
