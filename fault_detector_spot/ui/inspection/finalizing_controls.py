@@ -737,7 +737,7 @@ class FinalizingInspectionControls(InspectionControls):
         """Abort the current unsaved probe-point setup."""
         if not self._can_abort_probe_refinement():
             self.refinement_recovery_status_label.setText(
-                "Wait for the movement or distance test to finish or use Emergency Stop "
+                "Wait for the movement or distance test to finish or use Software Stop "
                 "before aborting setup."
                 if self._sensor_tip_distance_test_active or self._surface_test_active
                 else "Probe-point saving is already in progress and cannot be aborted here."
@@ -834,7 +834,7 @@ class FinalizingInspectionControls(InspectionControls):
             )
         elif self._refinement_emergency_stop_requested:
             self.refinement_summary_status_label.setText(
-                "Probe-point setup paused after emergency stop. Resume it "
+                "Probe-point setup paused after software stop. Resume it "
                 "to continue, or abort it from the main panel."
             )
         else:

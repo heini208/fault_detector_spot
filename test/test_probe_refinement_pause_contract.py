@@ -34,7 +34,7 @@ def test_pause_and_resume_preserve_refinement_without_server_requests(
     assert controls._refinement_presentation is presentation
     assert controls.start_probe_refinement_button.text() == "Resume Probe Point Setup"
     if emergency_stop:
-        assert "paused after emergency stop" in controls.refinement_summary_status_label.text()
+        assert "paused after software stop" in controls.refinement_summary_status_label.text()
 
     assert controls.handle_start_probe_refinement()
     assert dialog.isVisible()
@@ -42,5 +42,5 @@ def test_pause_and_resume_preserve_refinement_without_server_requests(
     assert controls._refinement_presentation is presentation
     assert not controls.inspection_workspace_tabs.isEnabled()
     assert dialog.close()
-    assert "paused after emergency stop" not in controls.refinement_summary_status_label.text()
+    assert "paused after software stop" not in controls.refinement_summary_status_label.text()
     assert ui.requests == []

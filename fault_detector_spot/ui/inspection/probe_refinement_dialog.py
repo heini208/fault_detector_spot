@@ -124,7 +124,7 @@ class ProbeRefinementDialog(QDialog):
 
         footer = QHBoxLayout()
 
-        self.emergency_stop_button = QPushButton("EMERGENCY STOP")
+        self.emergency_stop_button = QPushButton("SOFTWARE STOP")
         self.emergency_stop_button.setStyleSheet(
             "QPushButton { background-color: #C62828; color: white; "
             "font-weight: bold; padding: 8px; }"
