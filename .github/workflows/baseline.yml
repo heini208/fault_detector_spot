@@ -89,6 +89,7 @@ jobs:
         run: |
           source /opt/ros/humble/setup.bash
           source "$RUNNER_TEMP/dependencies/install/local_setup.bash"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
           bash ci/run_humble.sh "$RUNNER_TEMP/dependencies/src/fault_detector_msgs" \
             "$RUNNER_TEMP/application-build" "/tmp/contract-validation-results"
       - name: Preserve dependency manifest
