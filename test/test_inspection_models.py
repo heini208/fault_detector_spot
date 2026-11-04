@@ -1,6 +1,7 @@
 """Tests for strict inspection and map models."""
 
 import math
+from dataclasses import replace
 
 import pytest
 
@@ -37,6 +38,18 @@ def make_probe(probe_point_id="point_a") -> ProbePoint:
         aligned_preapproach_distance_m=0.08,
         reference_pixel=ImagePoint(u=100, v=200),
         reference_view_id="slot1_hand",
+    )
+
+
+def make_custom_probe(probe_point_id="custom") -> ProbePoint:
+    return replace(
+        make_probe(probe_point_id),
+        fully_custom=True,
+        final_probe_pose_object=PoseData.identity(),
+        target_surface_distance_m=0.0,
+        aligned_preapproach_distance_m=0.0,
+        reference_pixel=None,
+        reference_view_id=None,
     )
 
 
@@ -144,14 +157,39 @@ def test_uncaptured_routine_round_trip_preserves_empty_reference_views():
     assert restored.to_dict()["reference_views"] == []
 
 
-def test_probe_points_require_a_captured_reference_view():
+@pytest.mark.parametrize("include_custom", [False, True])
+def test_surface_probe_points_require_a_captured_reference_view(include_custom):
     routine = InspectionRoutine(
         routine_id="magnetic_scan",
         display_name="Magnetic scan",
         reference_tag=ReferenceTag(tag_id=23, tag_family="36h11"),
         probe_points=[make_probe()],
     )
+    if include_custom:
+        routine.probe_points.insert(0, make_custom_probe())
     with pytest.raises(ValueError, match="requires a reference view"):
+        routine.validate()
+
+
+@pytest.mark.parametrize("with_reference_view", [False, True])
+def test_custom_probe_still_rejects_unknown_reference_view(with_reference_view):
+    routine = make_routine()
+    if not with_reference_view:
+        routine.reference_views = []
+    routine.probe_points = [replace(
+        make_custom_probe(), reference_view_id="missing",
+    )]
+
+    with pytest.raises(ValueError, match="unknown reference view"):
+        routine.validate()
+
+
+def test_custom_routine_without_reference_views_still_rejects_duplicate_probe_ids():
+    routine = make_routine()
+    routine.reference_views = []
+    routine.probe_points = [make_custom_probe(), make_custom_probe()]
+
+    with pytest.raises(ValueError, match="Duplicate probe point ID"):
         routine.validate()
 
 

@@ -559,10 +559,10 @@ class InspectionRoutine:
             slot_indices.add(reference_view.slot_index)
         if (
             not self.reference_views
-            and self.probe_points
+            and any(not point.fully_custom for point in self.probe_points)
         ):
             raise ValueError(
-                "Routine with probe points requires a reference view"
+                "Routine with surface-based probe points requires a reference view"
             )
         probe_ids: Set[str] = set()
         for probe_point in self.probe_points:

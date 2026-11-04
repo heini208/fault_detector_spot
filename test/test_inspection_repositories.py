@@ -1,6 +1,7 @@
 """Tests for strict object and map repositories."""
 
 import json
+from dataclasses import replace
 import pytest
 
 from fault_detector_spot.mapping.repository.map_repository import MapRepository
@@ -202,6 +203,30 @@ def test_object_repository_appends_probe_points_without_overwrite(tmp_path):
     assert repository.get_object_path("motor_a").read_text(
         encoding="utf-8"
     ) == before_duplicate
+
+
+def test_object_repository_saves_custom_probe_without_reference_images(tmp_path):
+    repository = ObjectRepository(tmp_path)
+    repository.create(make_object())
+    final_pose = PoseData.identity()
+    final_pose.position.x = 0.25
+    custom_probe = replace(
+        make_probe_point("custom"),
+        fully_custom=True,
+        final_probe_pose_object=final_pose,
+        target_surface_distance_m=0.0,
+        aligned_preapproach_distance_m=0.0,
+        reference_pixel=None,
+        reference_view_id=None,
+    )
+
+    saved = repository.add_probe_point("motor_a", "magnetic_scan", custom_probe)
+    restored = ObjectRepository(tmp_path).load("motor_a")
+
+    assert restored == saved
+    routine = restored.get_routine("magnetic_scan")
+    assert routine.reference_views == []
+    assert routine.probe_points == [custom_probe]
 
 
 def test_object_repository_deletes_routine_and_owned_datasets(tmp_path):

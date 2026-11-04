@@ -1,6 +1,5 @@
 """Custom authoring keeps explicit poses, independent paths and bounded speeds."""
 from copy import deepcopy
-from dataclasses import replace
 
 import pytest
 
@@ -11,12 +10,20 @@ from fault_detector_spot.inspection.setup.probe_setup_motion import ProbeMotionK
 from fault_detector_spot.inspection.setup.probe_setup_state_adapter import ProbeSetupStateAdapter
 from fault_detector_spot.ui.ros.probe_setup_state_adapter import probe_setup_state_to_view
 from test_command_request_correlation import FakeClock
-from test_probe_setup_coordinator import coordinator, create_selected_routine, pose
+from test_probe_setup_coordinator import coordinator, pose
 
 
 def begin_custom(tmp_path):
     probe, commands = coordinator(tmp_path)
-    state = create_selected_routine(probe, probe.open_context("probe-ui").context)
+    state = probe.create_object(
+        probe.open_context("probe-ui").context, "motor", "Motor",
+    )
+    state = probe.create_routine(
+        state.context, "motor", "magnetic_scan", "Magnetic scan", 7, "36h11",
+    )
+    probe.object_repository.set_routine_safe_approach_pose(
+        "motor", "magnetic_scan", pose(.8),
+    )
     # Custom mode must never ask the depth/calculated-geometry owner for a target.
     probe.geometry_editor.geometry = None
     state = probe.begin_refinement(state.context, fully_custom=True)
@@ -38,6 +45,8 @@ def move(probe, commands, state, kind, stage="alignment", achieved=None, **kwarg
 
 def test_custom_starts_without_reference_or_default_candidates(tmp_path):
     probe, commands, state = begin_custom(tmp_path)
+    routine = probe.object_repository.load("motor").get_routine("magnetic_scan")
+    assert routine.reference_views == []
     assert state.geometry is None and state.reference_pixel is None
     assert state.setup.surface_target is None
     assert state.refinement.candidate_pose(RefinementStage.ALIGNMENT) is None
@@ -76,7 +85,9 @@ def test_custom_capture_paths_save_and_replay_preserve_independent_geometry(tmp_
     state = probe.begin_finalization(state.context, "9b361339-3d85-4a2e-a5c3-88cf9a6d4872", True)
     state = probe.approve_probe_geometry_for_finalization(state.context, "9b361339-3d85-4a2e-a5c3-88cf9a6d4872")
     state = probe.save_probe_point_for_finalization(state.context, "9b361339-3d85-4a2e-a5c3-88cf9a6d4872", "custom", "Custom", .01, .1, 1.)
-    point = probe.object_repository.load("motor").get_routine("magnetic_scan").get_probe_point("custom")
+    routine = probe.object_repository.load("motor").get_routine("magnetic_scan")
+    assert routine.reference_views == []
+    point = routine.get_probe_point("custom")
     point.validate()
     restored = ProbePoint.from_dict(point.to_dict())
     assert restored == point
