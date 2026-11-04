@@ -720,7 +720,9 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
         self,
         command: SemanticCommand,
     ) -> List[ExecutionCommand]:
-        commands = self._move_to_tag(command)
+        commands = self._move_to_tag(
+            replace(command, command_id=CommandID.MOVE_ARM_TO_TAG)
+        )
         if command.wait_time <= 0.0:
             return commands
         commands.append(
