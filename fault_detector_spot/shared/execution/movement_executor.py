@@ -37,6 +37,7 @@ class MovementExecutor:
         result_timeout_sec: float = DEFAULT_RESULT_TIMEOUT_SEC,
         monotonic_clock=time.monotonic,
         logger=None,
+        submission_lock=None,
     ):
         if tf_listener is None:
             raise ValueError(
@@ -49,6 +50,7 @@ class MovementExecutor:
         self.tag_state_source = tag_state_source
         self.robot_name = robot_name
         self.action_client = action_client
+        self._submission_lock = submission_lock if submission_lock is not None else RLock()
         self.goal_response_timeout_sec = self._positive_timeout(
             goal_response_timeout_sec,
             "Goal response timeout",
@@ -196,7 +198,7 @@ class MovementExecutor:
                 # arrive synchronously, and cancel rejection is not completion.
                 if result is not None:
                     result.add_done_callback(finished)
-                handle.cancel_goal_async()
+                self._cancel_goal_if_open(handle)
             except Exception as exception:
                 self._cancellation_detail = f"Stop unconfirmed: {exception}"
 
@@ -222,7 +224,14 @@ class MovementExecutor:
 
     def close_admission(self):
         """Fence physical commands and cancellation before local teardown."""
-        self._shutdown_started = True
+        with self._submission_lock:
+            self._shutdown_started = True
+
+    def _cancel_goal_if_open(self, handle):
+        """Fence the final cancellation send against shutdown admission."""
+        with self._submission_lock:
+            if not self._shutdown_started:
+                handle.cancel_goal_async()
 
     def begin_shutdown(self):
         """Retain ownership without changing the robot's current execution."""
@@ -305,7 +314,10 @@ class MovementExecutor:
             )
 
         try:
-            future = self.action_client.send_goal_async(goal)
+            with self._submission_lock:
+                if self._shutdown_started:
+                    return self._busy_update()
+                future = self.action_client.send_goal_async(goal)
         except Exception as exception:
             with self._settlement_lock:
                 self._submitted_goals.append([None, None])
@@ -445,7 +457,7 @@ class MovementExecutor:
         handle = self._goal_handle
         if handle is not None:
             try:
-                handle.cancel_goal_async()
+                self._cancel_goal_if_open(handle)
             except Exception as exception:
                 self._log_error(
                     f"{self._movement_title} goal cancellation failed: "
@@ -466,7 +478,7 @@ class MovementExecutor:
                     accepted_handle is not None
                     and accepted_handle.accepted
                 ):
-                    accepted_handle.cancel_goal_async()
+                    self._cancel_goal_if_open(accepted_handle)
             except Exception as exception:
                 self._log_error(
                     f"Pending {self.MOVEMENT_NAME} goal cancellation "

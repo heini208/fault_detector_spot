@@ -2078,6 +2078,105 @@ def test_shutdown_full_body_stop_is_one_attempt_without_waiting_or_confirming_co
     assert not executor.execution_idle
 
 
+@pytest.mark.parametrize("paused_at", ["readiness", "request_builder"])
+def test_shutdown_stop_fences_arm_stop_preparation_without_waiting_for_execution_lock(monkeypatch, paused_at):
+    from threading import Event, Thread
+    from bosdyn.api import robot_command_pb2
+    from bosdyn_spot_api_msgs.conversions import convert
+
+    service = FakeArmStopServiceClient()
+    executor, _ = executor_with_client(FakeTransformer(), arm_stop_service_client=service)
+    entered, release, closed = Event(), Event(), Event()
+    updates = []
+
+    def pause_once(callback):
+        def paused(*args, **kwargs):
+            if not entered.is_set():
+                entered.set()
+                assert release.wait(3)
+            return callback(*args, **kwargs)
+        return paused
+
+    if paused_at == "readiness":
+        monkeypatch.setattr(service, "wait_for_service", pause_once(service.wait_for_service))
+    else:
+        monkeypatch.setattr(executor, "_build_arm_stop_request", pause_once(executor._build_arm_stop_request))
+
+    def prepare_guard_stop():
+        with executor._execution_lock:
+            updates.append(executor._guard_start_arm_stop())
+
+    def close_and_stop():
+        executor.close_admission()
+        executor.request_shutdown_stop()
+        closed.set()
+
+    preparing = Thread(target=prepare_guard_stop, daemon=True)
+    preparing.start()
+    closing = Thread(target=close_and_stop, daemon=True)
+    try:
+        assert entered.wait(2)
+        closing.start()
+        assert closed.wait(2), "Shutdown waited for an arm workflow instead of closing transport admission"
+        assert len(service.requests) == 1
+        command = robot_command_pb2.RobotCommand()
+        convert(service.requests[0].command, command)
+        assert command.WhichOneof("command") == "full_body_command"
+        assert command.full_body_command.WhichOneof("command") == "stop_request"
+    finally:
+        release.set()
+        preparing.join(3)
+        if closing.ident is not None:
+            closing.join(3)
+
+    assert not preparing.is_alive() and not closing.is_alive()
+    assert updates[0].outcome is ArmMovementOutcome.STOP_UNCONFIRMED
+    executor.request_shutdown_stop()
+    assert len(service.requests) == 1
+
+
+def test_shutdown_stop_fences_action_cancellation_already_fetching_result():
+    from threading import Event, Thread
+
+    service = FakeArmStopServiceClient()
+    executor, client = executor_with_client(FakeTransformer(), arm_stop_service_client=service)
+    assert executor.close_gripper().outcome is ArmMovementOutcome.RUNNING
+    entered, release, closed = Event(), Event(), Event()
+    handle = FakeGoalHandle()
+    result_future = handle.result_future
+
+    def get_result():
+        entered.set()
+        assert release.wait(3)
+        return result_future
+
+    handle.get_result_async = get_result
+    client.send_future.set_result(handle)
+
+    def close_and_stop():
+        executor.close_admission()
+        executor.request_shutdown_stop()
+        closed.set()
+
+    cancelling = Thread(target=executor.cancel, daemon=True)
+    cancelling.start()
+    closing = Thread(target=close_and_stop, daemon=True)
+    try:
+        assert entered.wait(2)
+        closing.start()
+        assert closed.wait(2), "Shutdown waited for a cancellation workflow before its one Stop"
+        assert len(service.requests) == 1
+    finally:
+        release.set()
+        cancelling.join(3)
+        if closing.ident is not None:
+            closing.join(3)
+
+    assert not cancelling.is_alive() and not closing.is_alive()
+    assert handle.cancel_count == 0
+    assert len(service.requests) == 1
+
+
 @pytest.mark.parametrize("acceptance_after_cleanup", [False, True])
 def test_active_arm_shutdown_never_cancels_late_goal_or_sends_stop(monkeypatch, acceptance_after_cleanup):
     executor, client, stop, clock, node, timer = shutdown_arm_rig(monkeypatch)

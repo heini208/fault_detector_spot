@@ -188,6 +188,55 @@ def test_shutdown_rejects_new_goals_without_cancelling_late_acceptance(monkeypat
     assert underlying.send_goal_async.call_count == 1
 
 
+def test_shutdown_fences_inflight_action_submission_before_its_single_stop(monkeypatch):
+    from test_arm_movement_executor import executor_with_client, FakeTransformer
+
+    resources = RobotCommandResources()
+    underlying = Mock()
+    accepted = Future()
+    entered, release, closed = Event(), Event(), Event()
+    events = []
+    def send(_goal):
+        entered.set()
+        release.wait(2.0)
+        events.append("goal submitted")
+        return accepted
+    underlying.send_goal_async.side_effect = send
+    monkeypatch.setattr(
+        "fault_detector_spot.application.behaviour_tree.behaviours.robot_command_resources.ActionClientWrapper",
+        lambda *_args, **_kwargs: underlying,
+    )
+    service = Mock()
+    service.call_async.side_effect = lambda _request: (events.append("shutdown Stop"), Future())[1]
+    arm, _ = executor_with_client(
+        FakeTransformer(), arm_stop_service_client=service, submission_lock=resources._submission_lock,
+    )
+    arm._active = True
+    resources._arm_movement_executors[""] = arm
+    client = resources.get_action_client(object())
+    worker = Thread(target=client.send_goal_async, args=(object(),))
+    worker.start()
+    assert entered.wait(1.0)
+    closer = Thread(target=lambda: (resources.begin_shutdown(), closed.set()))
+    closer.start()
+    try:
+        assert not closed.wait(0.05)
+        service.call_async.assert_not_called()
+    finally:
+        release.set()
+        worker.join(2.0)
+        closer.join(2.0)
+    assert closed.is_set()
+    assert events == ["goal submitted", "shutdown Stop"]
+    assert not client.send_goal_async(object()).result().accepted
+    handle = Mock(accepted=True)
+    accepted.set_result(handle)
+    handle.cancel_goal_async.assert_not_called()
+    underlying.send_goal_async.assert_called_once()
+    resources.begin_shutdown()
+    service.call_async.assert_called_once()
+
+
 def test_velocity_stream_requires_quiet_period_even_when_zero_and_no_nav2_goal():
     now = [0.0]
     resources = RobotCommandResources(monotonic_clock=lambda: now[0])

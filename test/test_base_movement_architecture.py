@@ -57,7 +57,8 @@ def test_base_executor_inherits_lifecycle_and_planner_builds_planar_goals():
     assert "send_goal_async(" not in executor
     assert "def cancel(" in executor
     assert "handle.get_result_async()" in executor
-    assert "cancel_goal_async(" in executor
+    assert "self._cancel_goal_if_open(handle)" in executor
+    assert "cancel_goal_async(" not in executor
 
     assert "RobotCommandBuilder.synchro_stand_command(" in executor
     assert "RobotCommandBuilder.synchro_sit_command()" in executor

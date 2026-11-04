@@ -166,6 +166,7 @@ class ArmMovementExecutor(MovementExecutor):
         monotonic_clock=time.monotonic,
         logger=None,
         config=None,
+        submission_lock=None,
     ):
         self._execution_lock = RLock()
         self._shutdown_stop_lock = RLock()
@@ -184,6 +185,7 @@ class ArmMovementExecutor(MovementExecutor):
             result_timeout_sec=result_timeout_sec,
             monotonic_clock=monotonic_clock,
             logger=logger,
+            submission_lock=submission_lock,
         )
         self._configure_motion_speeds(
             config=config,
@@ -1698,7 +1700,9 @@ class ArmMovementExecutor(MovementExecutor):
                 if not client.wait_for_service(timeout_sec=0.0):
                     self._shutdown_stop_detail = "Shutdown Stop unavailable: RobotCommand service is not ready"
                     return self._shutdown_stop_detail
-                self._shutdown_stop_future = client.call_async(build_full_body_stop_request())
+                request = build_full_body_stop_request()
+                with self._submission_lock:
+                    self._shutdown_stop_future = client.call_async(request)
                 if self._shutdown_stop_future is None:
                     self._shutdown_stop_detail = "Shutdown Stop delivery is unknown: service returned no future"
                 else:
@@ -2129,7 +2133,13 @@ class ArmMovementExecutor(MovementExecutor):
                     "RobotCommand service is unavailable",
                 )
             request = self._build_arm_stop_request()
-            future = client.call_async(request)
+            with self._submission_lock:
+                if self._shutdown_started:
+                    return ArmMovementUpdate(
+                        ArmMovementOutcome.STOP_UNCONFIRMED,
+                        "Application shutdown disabled the pending arm stop command",
+                    )
+                future = client.call_async(request)
         except Exception as exception:
             return ArmMovementUpdate(
                 ArmMovementOutcome.EXECUTION_ERROR,

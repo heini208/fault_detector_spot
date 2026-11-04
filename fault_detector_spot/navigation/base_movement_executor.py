@@ -169,6 +169,7 @@ class BaseMovementExecutor(MovementExecutor):
             DEFAULT_BASE_TAG_OBSERVATION_TIMEOUT_SEC
         ),
         arm_state_source=None,
+        submission_lock=None,
     ):
         super().__init__(
             tf_listener,
@@ -179,6 +180,7 @@ class BaseMovementExecutor(MovementExecutor):
             result_timeout_sec=result_timeout_sec,
             monotonic_clock=monotonic_clock,
             logger=logger,
+            submission_lock=submission_lock,
         )
         self.goal_verification_config = (
             goal_verification_config
@@ -1128,7 +1130,7 @@ class BaseMovementExecutor(MovementExecutor):
             self._result_future = result_future
 
         try:
-            handle.cancel_goal_async()
+            self._cancel_goal_if_open(handle)
         except Exception as exception:
             self._log_error(
                 "Base goal cancellation failed: "

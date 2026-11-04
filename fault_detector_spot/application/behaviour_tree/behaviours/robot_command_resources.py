@@ -85,7 +85,7 @@ class _StopAwareActionClient:
         self._stopped = stopped
         self._motion_started = motion_started
         self._cancel_required = stopped if cancel_required is None else cancel_required
-        self._submission_lock = submission_lock if submission_lock is not None else Lock()
+        self._submission_lock = submission_lock if submission_lock is not None else RLock()
 
     def __getattr__(self, name):
         return getattr(self._client, name)
@@ -154,7 +154,7 @@ class RobotCommandResources:
         self._velocity_publisher = None
         self._velocity_subscription = None
         self._navigation_velocity_subscription = None
-        self._submission_lock = Lock()
+        self._submission_lock = RLock()
         self._last_velocity_at = None
         self._last_velocity_command = None
         self._stop_requested_at = None
@@ -173,8 +173,8 @@ class RobotCommandResources:
         # This lock never waits for an execution owner or a workflow operation.
         with self._submission_lock:
             self._closing = True
-        for owner in self.shutdown_owners().values():
-            owner.close_admission()
+            for owner in self.shutdown_owners().values():
+                owner.close_admission()
 
     def shutdown_owners(self):
         """Snapshot the existing owners; do not create resources at teardown."""
@@ -498,6 +498,7 @@ class RobotCommandResources:
                 client = _StopAwareActionClient(
                     client, lambda: self.stop_latched, self._invalidate_stop_proof,
                     cancel_required=lambda: self._software_stop.is_set() and not self._closing,
+                    submission_lock=self._submission_lock,
                 )
                 self._clients[action_ns] = client
             return client
@@ -636,6 +637,7 @@ class RobotCommandResources:
                         SpeedAwareForceContactPolicy.from_node(node)
                     ),
                     logger=node.get_logger(),
+                    submission_lock=self._submission_lock,
                 )
                 if executor.guarded_probe_execution is not None:
                     executor.guarded_probe_execution.contact_telemetry = (
@@ -668,9 +670,11 @@ class RobotCommandResources:
                         ActionClient(node, NavigateToPose, "/navigate_to_pose"),
                         lambda: self.stop_latched, self._invalidate_stop_proof,
                         cancel_required=lambda: self._software_stop.is_set() and not self._closing,
+                        submission_lock=self._submission_lock,
                     ),
                     stamp_now=lambda: node.get_clock().now().to_msg(),
                     node=node,
+                    submission_lock=self._submission_lock,
                 )
             return self._waypoint_executor
 
@@ -730,6 +734,7 @@ class RobotCommandResources:
                         node.get_clock().now().nanoseconds * 1e-9
                     ),
                     logger=node.get_logger(),
+                    submission_lock=self._submission_lock,
                 )
                 self._base_movement_executors[robot_name] = executor
             elif tag_state_source is not None:

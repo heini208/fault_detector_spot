@@ -49,7 +49,7 @@ class WaypointNavigationExecutor:
 
     def __init__(self, arm_executor, base_executor, action_client, stamp_now,
                  monotonic_clock=time.monotonic, goal_response_timeout_sec=2.0, node=None,
-                 velocity_quiet_sec=0.3, velocity_release_timeout_sec=3.0):
+                 velocity_quiet_sec=0.3, velocity_release_timeout_sec=3.0, submission_lock=None):
         if not math.isfinite(goal_response_timeout_sec) or goal_response_timeout_sec <= 0:
             raise ValueError("Nav2 goal response timeout must be positive and finite")
         if (not math.isfinite(velocity_quiet_sec) or velocity_quiet_sec <= 0
@@ -58,6 +58,7 @@ class WaypointNavigationExecutor:
             raise ValueError("Velocity release timeout must exceed the positive quiet interval")
         self._node = node
         self._lock = RLock()
+        self._submission_lock = submission_lock if submission_lock is not None else RLock()
         self._monitor_timer = None
         self._closed = False
         self._shutdown_started = False
@@ -176,8 +177,11 @@ class WaypointNavigationExecutor:
         goal.pose.header.stamp = self._stamp_now()
         # Sending can fail after the server receives the goal. This latch is
         # cleared only by rejection or a terminal result, never by _clear().
-        self._submission_uncertain = True
-        self._send_future = self.action_client.send_goal_async(goal)
+        with self._submission_lock:
+            if self._shutdown_started:
+                return self._running("Application shutdown detached navigation before goal submission")
+            self._submission_uncertain = True
+            self._send_future = self.action_client.send_goal_async(goal)
         if self._send_future is None:
             return self._failure("Nav2 returned no goal response future")
         self._sent_at = self._clock()
@@ -250,7 +254,7 @@ class WaypointNavigationExecutor:
             try:
                 handle = completed.result()
                 if handle is not None and handle.accepted:
-                    handle.cancel_goal_async()
+                    self._cancel_goal_if_open(handle)
             except Exception:
                 # Normal cancel/poll retains unresolved ownership and reports
                 # missing acceptance/results. This fast request proves no idle.
@@ -371,7 +375,7 @@ class WaypointNavigationExecutor:
                     return
                 self._goal_handle = handle
                 self._result_future = self._result_future or handle.get_result_async()
-                handle.cancel_goal_async()
+                self._cancel_goal_if_open(handle)
             except Exception as exception:
                 self._cancel_detail = f"Navigation stop unconfirmed: {exception}"
 
@@ -432,7 +436,13 @@ class WaypointNavigationExecutor:
 
     def close_admission(self):
         """Fence navigation and action-cancel callbacks before local teardown."""
-        self._shutdown_started = True
+        with self._submission_lock:
+            self._shutdown_started = True
+
+    def _cancel_goal_if_open(self, handle):
+        with self._submission_lock:
+            if not self._shutdown_started:
+                handle.cancel_goal_async()
 
     def begin_shutdown(self):
         """Detach monitoring without cancelling the remote navigation goal."""
