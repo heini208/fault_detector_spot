@@ -171,6 +171,37 @@ def test_new_saved_reference_invalidates_target_fit(source):
     assert sample.distance_m == pytest.approx(0.24, abs=1e-6)
 
 
+def test_changed_observed_target_invalidates_fit_without_becoming_the_measurement(source):
+    reference = PoseData.identity()
+    for target, fit_count in ((None, 1), (0.25, 2), (0.25, 2), (0.254, 3)):
+        sample = source.source.sensor_tip_distance_samples(
+            reference, target_plane_probe=None if target is None else fitted_plane(target),
+        )[0]
+        assert source.fits == fit_count
+        assert sample.distance_m == pytest.approx(0.25, abs=1e-6)
+
+
+def test_failed_anchored_view_cannot_reselect_an_observation_target(source, monkeypatch):
+    from fault_detector_spot.inspection.sensing.sensor_tip_distance import SensorTipTargetUnavailable
+
+    target = fitted_plane(0.25)
+
+    def missing_target(*args, **kwargs):
+        assert kwargs["target_plane_probe"] == target
+        raise SensorTipTargetUnavailable("target depth missing")
+
+    def unexpected_hint(*args, **kwargs):
+        pytest.fail("An observed wall target must not be replaced during a retry")
+
+    monkeypatch.setattr(probe_surface_source, "measure_sensor_tip_distance", missing_target)
+    monkeypatch.setattr(probe_surface_source, "sensor_tip_observation_hint", unexpected_hint)
+    view = source.source.observation_view(PoseData.identity(), target_plane_probe=target)
+    assert not view.visible
+    assert view.target_plane_probe == target
+    assert view.hand_translation_odom == Vector3Data.zero()
+    assert "target depth missing" in view.detail
+
+
 def test_observation_and_sample_cache_distinguish_discovery_from_saved_correspondence(source):
     image, _ = target_image(depth_m=0.48)
     image.header.stamp.nanosec = 100_000_000
@@ -182,6 +213,7 @@ def test_observation_and_sample_cache_distinguish_discovery_from_saved_correspon
     view = source.source.observation_view(reference)
     assert view.visible
     assert view.hand_translation_odom == Vector3Data.zero()
+    assert view.target_plane_probe.signed_distance(Vector3Data.zero()) == pytest.approx(0.38, abs=1e-6)
     for discover in (False, True, False, True):
         if discover:
             samples = source.source.sensor_tip_distance_samples(

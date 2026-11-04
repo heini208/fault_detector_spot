@@ -55,10 +55,30 @@ class ReturnExecutor(Executor):
         return ArmMovementUpdate(outcome, outcome.value)
 
 
-def harness(**config):
+class TimedReturnExecutor(ReturnExecutor):
+    """Honor requested translation speed and a small planning latency."""
+
+    def guarded_probe(self, target, sensor_id, **options):
+        current = self.probe_motion_planner.hand.position
+        goal = target.pose.position
+        distance = math.dist(
+            (current.x, current.y, current.z), (goal.x, goal.y, goal.z),
+        )
+        self.completes_at = (
+            self.clock.now + 0.5 + distance / options["speed"].linear_speed_mps
+        )
+        return super().guarded_probe(target, sensor_id, **options)
+
+    def poll(self):
+        if self.pending is not None and self.clock.now < self.completes_at:
+            return ArmMovementUpdate(ArmMovementOutcome.RUNNING, "moving")
+        return super().poll()
+
+
+def harness(*, executor_type=ReturnExecutor, **config):
     config.setdefault("return_position_tolerance_m", 0.005)
     clock = Clock()
-    executor = ReturnExecutor(clock)
+    executor = executor_type(clock)
     source = Source(executor, clock, visible=False)
     execution = MeasureSensorTipDistanceExecution(
         executor, source, MeasureSensorTipDistanceConfig(**config),
@@ -155,6 +175,42 @@ def test_converging_7_8_to_5_7_to_3_mm_return_succeeds_after_two_corrections():
     assert case.execution.result.distance_m == pytest.approx(0.247)
     assert "2 slow return correction(s)" in case.execution.feedback_message
     assert case.executor.cancel_count == case.executor.stop_count == 0
+
+
+@pytest.mark.parametrize("deadline", [None, 60.0])
+def test_slow_maximum_excursion_and_improving_return_fit_default_deadline(monkeypatch, deadline):
+    config = {} if deadline is None else {"maximum_measurement_duration_sec": deadline}
+    case = harness(executor_type=TimedReturnExecutor, **config)
+    case.source.translation.y = case.execution.config.maximum_observation_translation_m
+    case.executor.motion_errors = {2: pose(x=0.0195), 3: pose(x=0.0175)}
+    sample = case.source.sensor_tip_distance_samples
+
+    def post_settle_samples(*args, **kwargs):
+        if case.clock.now - kwargs["receipt_not_before"] < 1.0:
+            raise ValueError("Collecting distinct post-settle samples")
+        return sample(*args, **kwargs)
+
+    monkeypatch.setattr(case.source, "sensor_tip_distance_samples", post_settle_samples)
+    started = case.clock.now
+    outcome = finish(case)
+
+    assert case.execution.config.observation_speed_mps == pytest.approx(0.010)
+    assert len(case.executor.calls) == 4
+    assert case.clock.now - started > 60.0
+    if deadline is None:
+        assert outcome is MeasureSensorTipDistanceOutcome.SUCCESS
+        assert case.clock.now - started < case.execution.config.maximum_measurement_duration_sec
+        assert case.executor.probe_motion_planner.hand == pose()
+        assert case.execution.result.distance_m == pytest.approx(0.25)
+        assert "2 slow return correction(s)" in case.execution.feedback_message
+        assert case.executor.cancel_count == 0
+    else:
+        assert outcome is MeasureSensorTipDistanceOutcome.FAILURE
+        assert case.execution.failure_outcome is ArmMovementOutcome.RECOVERY_FAILED
+        assert "timed out" in case.execution.feedback_message
+        assert case.executor.cancel_count == 1
+        assert case.execution.result is None
+        assert not case.execution.continuation_safe
 
 
 @pytest.mark.parametrize("residual", [0.0078, 0.0085, 0.0071])
@@ -479,7 +535,9 @@ def test_cancel_during_correction_stops_without_another_return():
 def test_correction_does_not_extend_overall_measurement_deadline():
     case = harness()
     begin_correction(case)
-    case.clock.now = 160.01
+    case.clock.now = (
+        case.execution._start_time + case.execution.config.maximum_measurement_duration_sec + 0.01
+    )
     assert case.execution.poll() is MeasureSensorTipDistanceOutcome.FAILURE
     assert case.executor.cancel_count == 1
     assert len(case.executor.calls) == 3

@@ -340,6 +340,9 @@ def test_completed_recovery_never_starts_another_move(remaining):
     assert "Unexpected contact" in action.feedback_message
     if remaining:
         assert "did not reach" in action.feedback_message
+        assert "return to original pre-approach pose is unverified" in action.feedback_message
+    else:
+        assert "original pre-approach pose verified" in action.feedback_message
 
 
 def test_rotation_distance_is_sign_invariant():
@@ -382,6 +385,101 @@ def test_endpoint_validation_rejects_excessive_settled_lateral_error():
         action._validate_step_motion(
             pose(x=0.010, y=0.0102)
         )
+
+
+def test_axis_guard_reports_absolute_alignment_and_initial_margin():
+    action = execution()
+    action._plan = SimpleNamespace(initial_axis_error_rad=math.radians(4.9))
+    # The admission margin does not change the absolute runtime safety limit.
+    action._validate_axis_guard(SimpleNamespace(axis_error_rad=math.radians(4.85)))
+
+    with pytest.raises(RuntimeError) as failure:
+        action._validate_axis_guard(SimpleNamespace(axis_error_rad=math.radians(5.05)))
+
+    detail = str(failure.value)
+    assert "current 5.05 deg > 5.00 deg" in detail
+    assert "initial alignment 4.90 deg left 0.10 deg margin" in detail
+    assert "rotated" not in detail
+
+
+@pytest.mark.parametrize("body_pose, expected", [
+    (pose(x=0.011), "translation 11.00 mm (limit 10.00 mm), rotation 0.00 deg (limit 2.00 deg)"),
+    (pose(orientation=quaternion_from_euler("z", math.radians(2.1))),
+     "translation 0.00 mm (limit 10.00 mm), rotation 2.10 deg (limit 2.00 deg)"),
+    (None, "Unable to verify measurement reference: TF unavailable"),
+])
+def test_reference_failure_during_recovery_preserves_initial_failure(body_pose, expected):
+    executor = FakeExecutor(hand_pose=pose(x=0.06))
+    action = execution(executor=executor)
+    action._measurement_result = SimpleNamespace(reference_body_pose=pose())
+    action._require_attachment_unchanged = lambda: None
+    action._recovery_hand_pose = pose()
+    action._approach_steps = 1
+    initial_failure = "Probe axis alignment exceeded 5.00 deg"
+    assert action._begin_recovery(initial_failure) is MoveCloseToSurfaceOutcome.RUNNING
+
+    def changed_reference(*_args):
+        if body_pose is None:
+            raise ValueError("TF unavailable")
+        return stamped(body_pose)
+
+    executor.probe_motion_planner.current_pose = changed_reference
+
+    assert action.poll() is MoveCloseToSurfaceOutcome.FAILURE
+    assert action.failure_outcome is ArmMovementOutcome.RECOVERY_FAILED
+    assert action.feedback_message.count(initial_failure) == 1
+    assert expected in action.feedback_message
+    assert "return to original pre-approach pose is unverified" in action.feedback_message
+    assert not action.active
+    assert executor.cancel_count == 1
+    assert len(executor.probe_calls) == 1
+
+
+def test_exception_during_recovery_does_not_restart_or_replace_initial_failure():
+    executor = FakeExecutor(hand_pose=pose(x=0.06))
+    action = execution(executor=executor)
+    action._recovery_hand_pose = pose()
+    action._approach_steps = 1
+    initial_failure = "Surface approach made insufficient progress"
+    assert action._begin_recovery(initial_failure) is MoveCloseToSurfaceOutcome.RUNNING
+
+    def failed_poll():
+        raise ValueError("Recovery feedback unavailable")
+
+    executor.poll = failed_poll
+
+    assert action.poll() is MoveCloseToSurfaceOutcome.FAILURE
+    assert action.failure_outcome is ArmMovementOutcome.RECOVERY_FAILED
+    assert action.feedback_message.count(initial_failure) == 1
+    assert "Surface recovery failed: Recovery feedback unavailable" in action.feedback_message
+    assert "return to original pre-approach pose is unverified" in action.feedback_message
+    assert action._recovery_detail == initial_failure
+    assert executor.cancel_count == 1
+    assert len(executor.probe_calls) == 1
+
+
+def test_recovery_start_exception_preserves_approach_exception():
+    executor = FakeExecutor(hand_pose=pose(x=0.06))
+    action = execution(executor=executor)
+    action._recovery_hand_pose = pose()
+    action._approach_steps = 1
+    action._phase = "settling"
+    action._require_attachment_unchanged = lambda: None
+
+    def approach_pose_unavailable():
+        raise ValueError("Approach pose unavailable")
+
+    def recovery_start_failed(*_args, **_kwargs):
+        raise ValueError("Recovery planning unavailable")
+
+    action._current_probe_pose = approach_pose_unavailable
+    executor.probe = recovery_start_failed
+
+    assert action.poll() is MoveCloseToSurfaceOutcome.FAILURE
+    assert action.failure_outcome is ArmMovementOutcome.RECOVERY_FAILED
+    assert action.feedback_message.startswith("Approach pose unavailable; Surface recovery failed")
+    assert "Recovery planning unavailable" in action.feedback_message
+    assert "return to original pre-approach pose is unverified" in action.feedback_message
 
 
 @pytest.mark.parametrize("outcome", [
@@ -461,5 +559,7 @@ def test_inactive_executor_without_stop_proof_never_starts_recovery(
     assert result is MoveCloseToSurfaceOutcome.FAILURE
     assert action.failure_outcome is ArmMovementOutcome.STOP_UNCONFIRMED
     assert "no return movement" in action.feedback_message
+    assert "Goal acceptance timed out; late delivery remains possible" in action.feedback_message
+    assert "return to original pre-approach pose is unverified" in action.feedback_message
     assert not action.active
     assert executor.probe_calls == []

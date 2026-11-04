@@ -14,12 +14,13 @@ from fault_detector_spot.shared.geometry.rotation import rotation_from_quaternio
 
 @dataclass(frozen=True)
 class SensorTipObservationView:
-    """Visibility and a lateral translation that brings the target patch into view."""
+    """Visibility, lateral observation move, and advisory target association."""
 
     visible: bool
     camera_pose_odom: PoseData
     hand_translation_odom: Vector3Data
     detail: str
+    target_plane_probe: SurfacePlane | None = None
 
 
 def target_camera_point(reference_probe_pose, camera_pose_odom, expected_distance_m):
@@ -77,20 +78,28 @@ def observation_translation(
     if (desired_u, desired_v) == (u, v):
         return Vector3Data.zero()
 
-    probe_axis = rotation_from_quaternion(reference_probe_pose.orientation).apply(
-        [1.0, 0.0, 0.0],
-    )
+    _, probe_axis = probe_axis_in_camera(reference_probe_pose, camera_pose_odom)
     camera_rotation = rotation_from_quaternion(camera_pose_odom.orientation)
-    desired_ray = camera_rotation.apply([(desired_u-cx)/fx, (desired_v-cy)/fy, 1.0])
-    displacement = camera_rotation.apply(point_camera)
-    denominator = float(np.dot(desired_ray, probe_axis))
-    if denominator <= 0.1:
-        raise ValueError("Camera viewing direction cannot observe the forward probe target safely")
-    optical_depth = float(np.dot(displacement, probe_axis)) / denominator
-    if optical_depth <= 0.0:
-        raise ValueError("Intended sensor-tip target is behind the camera")
-    translation = displacement - optical_depth * desired_ray
+    translation = camera_rotation.apply(observation_translations_camera(
+        point_camera, probe_axis, intrinsics, [(desired_u, desired_v)],
+    )[0])
     return Vector3Data(*(float(value) for value in translation))
+
+
+def observation_translations_camera(point_camera, probe_axis_camera, intrinsics, desired_pixels):
+    """Solve lateral observation displacements for calibrated image pixels."""
+    pixels = np.asarray(desired_pixels, dtype=float)
+    if pixels.ndim != 2 or pixels.shape[1] != 2 or not np.all(np.isfinite(pixels)):
+        raise ValueError("Observation destinations must be finite image pixel pairs")
+    fx, fy, cx, cy = intrinsics
+    rays = np.column_stack(((pixels[:, 0]-cx)/fx, (pixels[:, 1]-cy)/fy, np.ones(len(pixels))))
+    denominator = np.einsum("ij,j->i", rays, probe_axis_camera)
+    if np.any(denominator <= 0.1):
+        raise ValueError("Camera viewing direction cannot observe the forward probe target safely")
+    optical_depth = float(np.dot(point_camera, probe_axis_camera)) / denominator
+    if np.any(optical_depth <= 0.0):
+        raise ValueError("Intended sensor-tip target is behind the camera")
+    return point_camera - optical_depth[:, None] * rays
 
 
 def project_camera_point(point_camera, intrinsics):

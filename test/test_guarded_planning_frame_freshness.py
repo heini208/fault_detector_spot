@@ -6,6 +6,8 @@ from types import SimpleNamespace
 
 import pytest
 from geometry_msgs.msg import PoseStamped
+from rclpy.time import Time
+from tf2_ros import Buffer
 
 from fault_detector_spot.manipulation.arm_motion_parameters import ArmMotionParameters
 from fault_detector_spot.manipulation.arm_movement_result import ArmMovementOutcome
@@ -150,7 +152,7 @@ def test_rotation_drift_includes_target_lever_arm(monkeypatch, yaw, replans):
 @pytest.mark.parametrize("bad_transform, detail", [
     (stamped_transform(stamp=9.7), "not fresh"),
     (stamped_transform(stamp=0.0), "timestamp is empty"),
-    (stamped_transform(stamp=10.1), "not fresh"),
+    (stamped_transform(stamp=10.3), "not fresh"),
     (stamped_transform(stamp=9.99), "moved backwards"),
     (None, "Unexpected TF lookup"),
 ])
@@ -180,6 +182,48 @@ def test_snapshot_uses_the_same_tf_as_target_conversion(monkeypatch):
     assert snapshot == sampled
     sampled.transform.translation.x = 0.05
     assert snapshot.transform.translation.x == pytest.approx(0.012)
+
+
+def buffered_planning_tf(value, samples):
+    buffer = Buffer()
+    for sample in samples:
+        buffer.set_transform(sample, "spot_state")
+
+    def lookup(target, source, *, transform_time=None, timeout_sec=0.0):
+        assert timeout_sec == 0.0
+        return buffer.lookup_transform(target, source, transform_time or Time())
+
+    value.executor.tf_listener = SimpleNamespace(lookup_a_tform_b=lookup)
+    value.state.node = SimpleNamespace(get_clock=lambda: SimpleNamespace(
+        now=lambda: Time(seconds=10),
+    ))
+
+
+@pytest.mark.parametrize("lead", [0.003, 0.025])
+def test_future_latest_tf_uses_current_time_interpolation(monkeypatch, lead):
+    value = rig(monkeypatch)
+    buffered_planning_tf(value, [
+        stamped_transform(x=-0.01, stamp=9.99),
+        stamped_transform(x=lead, stamp=10.0 + lead),
+    ])
+
+    current = value.executor._fresh_planning_frame_transform()
+
+    assert Time.from_msg(current.header.stamp).nanoseconds == 10_000_000_000
+    assert current.transform.translation.x == pytest.approx(0.0, abs=1e-9)
+
+
+@pytest.mark.parametrize("samples, detail", [
+    ([stamped_transform(stamp=10.003)], "current-time transform unavailable"),
+    ([stamped_transform(stamp=9.99), stamped_transform(stamp=10.251)], "not fresh"),
+    ([stamped_transform(stamp=9.749)], "not fresh"),
+])
+def test_time_qualified_lookup_keeps_missing_history_and_age_guards(monkeypatch, samples, detail):
+    value = rig(monkeypatch)
+    buffered_planning_tf(value, samples)
+
+    with pytest.raises(ValueError, match=detail):
+        value.executor._fresh_planning_frame_transform()
 
 
 def test_default_opt_out_accepts_unstamped_tf(monkeypatch):

@@ -82,6 +82,11 @@ class MoveCloseToSurfaceConfig(MeasureSensorTipDistanceConfig):
     recovery_speed_mps: float = 0.020
     maximum_lateral_drift_m: float = 0.010
     maximum_axis_error_rad: float = math.radians(5.0)
+    # Approach geometry can tolerate more normal-estimation variation than
+    # orientation verification and the per-frame normal consistency check.
+    maximum_approach_axis_error_rad: float = math.radians(10.0)
+    approach_alignment_margin_rad: float = math.radians(1.0)
+    approach_body_position_tolerance_m: float = 0.020
     minimum_step_progress_ratio: float = 0.25
 
     @classmethod
@@ -124,6 +129,9 @@ class MoveCloseToSurfaceConfig(MeasureSensorTipDistanceConfig):
             c.recovery_speed_mps,
             c.maximum_lateral_drift_m,
             c.maximum_axis_error_rad,
+            c.maximum_approach_axis_error_rad,
+            c.approach_alignment_margin_rad,
+            c.approach_body_position_tolerance_m,
         )
         if any(not math.isfinite(value) or value <= 0.0 for value in positive):
             raise ValueError("Close-surface configuration values must be positive")
@@ -137,6 +145,10 @@ class MoveCloseToSurfaceConfig(MeasureSensorTipDistanceConfig):
             )
         if c.maximum_approach_steps < 1:
             raise ValueError("Maximum surface approach steps must be positive")
+        if c.maximum_approach_axis_error_rad >= math.pi / 2:
+            raise ValueError("Approach axis limit must be smaller than 90 degrees")
+        if c.approach_alignment_margin_rad >= c.maximum_approach_axis_error_rad:
+            raise ValueError("Approach alignment margin must be smaller than the axis safety limit")
         if c.maximum_step_m > 0.010 + 1e-12:
             raise ValueError("Surface approach step must not exceed 0.010 m")
         if c.contact_search_overtravel_m > c.maximum_step_m + 1e-12:
@@ -241,6 +253,11 @@ class MoveCloseToSurfaceExecution:
         except Exception as exception:
             if not self._started:
                 return MoveCloseToSurfaceOutcome.FAILURE
+            if self._phase in {"recovery_prepare", "recovering"}:
+                return self._fail_workflow(
+                    f"Surface recovery failed: {exception}",
+                    ArmMovementOutcome.RECOVERY_FAILED,
+                )
             if self._approach_steps > 0 and self._recovery_hand_pose is not None:
                 return self._begin_recovery(str(exception))
             return self._fail_workflow(str(exception))
@@ -348,16 +365,28 @@ class MoveCloseToSurfaceExecution:
         current_probe = self._current_probe_pose()
         plane = result.plane_at_probe(current_probe)
         axis_error = math.acos(max(-1.0, min(1.0, -plane.normal.x)))
-        if axis_error > self.config.maximum_axis_error_rad:
+        if axis_error > self.config.maximum_approach_axis_error_rad:
             return self._fail_workflow(
                 "Probe axis is not aligned with the measured surface: "
                 f"{math.degrees(axis_error):.2f} deg > "
-                f"{math.degrees(self.config.maximum_axis_error_rad):.2f} deg"
+                f"{math.degrees(self.config.maximum_approach_axis_error_rad):.2f} deg"
             )
         distance = plane.signed_distance(Vector3Data.zero())
         target = self._planning_target_distance()
         if abs(distance-target) + result.peak_to_peak_m <= self._surface_tolerance():
             return self._success(f"Surface stand-off already reached: {distance:.4f} m")
+        admission_limit = (
+            self.config.maximum_approach_axis_error_rad - self.config.approach_alignment_margin_rad
+        )
+        if axis_error > admission_limit:
+            return self._fail_workflow(
+                "Probe axis alignment leaves insufficient approach margin: "
+                f"{math.degrees(axis_error):.2f} deg, required at most "
+                f"{math.degrees(admission_limit):.2f} deg "
+                f"({math.degrees(self.config.maximum_approach_axis_error_rad):.2f} deg safety limit, "
+                f"{math.degrees(self.config.approach_alignment_margin_rad):.2f} deg reserved); "
+                "orient sensor tip to surface again before approaching"
+            )
         self._plan = freeze_probe_surface_approach(
             current_probe_pose_execution=current_probe,
             surface_plane_probe=plane, target_distance_m=target,
@@ -380,11 +409,18 @@ class MoveCloseToSurfaceExecution:
             raise
         drift = self._norm(self._translation_between(body, result.reference_body_pose))
         angle = rotation_distance_rad(body.orientation, result.reference_body_pose.orientation)
-        if (drift > self.config.reference_position_tolerance_m
+        if (drift > self.config.approach_body_position_tolerance_m
                 or angle > self.config.reference_orientation_tolerance_rad):
-            # Do not let the outer probe workflow recover in an invalid frame.
+            # Body compliance does not itself move the odom wall plane, but
+            # it can shift a body-relative arm trajectory. Bound that motion
+            # separately from the tighter observation/return pose reference.
+            # Beyond this allowance, do not recover against the old baseline.
             self._fail_workflow(
-                "Body/odom reference changed after sensor tip measurement",
+                "Body moved beyond the measured approach allowance: "
+                f"translation {drift * 1000:.2f} mm "
+                f"(limit {self.config.approach_body_position_tolerance_m * 1000:.2f} mm), "
+                f"rotation {math.degrees(angle):.2f} deg "
+                f"(limit {math.degrees(self.config.reference_orientation_tolerance_rad):.2f} deg)",
                 ArmMovementOutcome.RECOVERY_FAILED,
             )
             raise RuntimeError(self.feedback_message)
@@ -456,6 +492,8 @@ class MoveCloseToSurfaceExecution:
             # Every final surface approach, including stand-off corrections,
             # deliberately bypasses environmental occupancy while retaining the guard.
             ignore_environment_collisions=True,
+            planning_frame_position_tolerance_m=self.config.planning_frame_position_tolerance_m,
+            planning_frame_orientation_tolerance_rad=self.config.planning_frame_orientation_tolerance_rad,
         )
         stage = "approach" if self._approach_steps == 1 else "correction"
         self.feedback_message = (
@@ -566,7 +604,13 @@ class MoveCloseToSurfaceExecution:
             "pre-approach hand pose"
         )
         self._log_warning(self.feedback_message)
-        return self._update_recovery_prepare()
+        try:
+            return self._update_recovery_prepare()
+        except Exception as exception:
+            return self._fail_workflow(
+                f"Surface recovery failed: {exception}",
+                ArmMovementOutcome.RECOVERY_FAILED,
+            )
 
     def _update_recovery_prepare(self) -> MoveCloseToSurfaceOutcome:
         if self.executor.active:
@@ -603,13 +647,12 @@ class MoveCloseToSurfaceExecution:
                     f"{math.degrees(orientation_error):.2f} deg",
                     ArmMovementOutcome.RECOVERY_FAILED,
                 )
-            return self._fail_workflow(self._recovery_detail)
+            return self._fail_workflow(self._recovery_detail, recovery_verified=True)
 
         if self._recovery_started:
             return self._fail_workflow(
                 "Surface recovery did not reach the original pre-approach "
-                f"pose ({distance:.4f} m remaining). "
-                f"Original failure: {self._recovery_detail}",
+                f"pose ({distance:.4f} m remaining)",
                 ArmMovementOutcome.RECOVERY_FAILED,
             )
 
@@ -634,8 +677,7 @@ class MoveCloseToSurfaceExecution:
             return MoveCloseToSurfaceOutcome.RUNNING
         return self._fail_workflow(
             "Surface recovery movement failed: "
-            f"{update.outcome.value}: {update.detail}. Original failure: "
-            f"{self._recovery_detail}",
+            f"{update.outcome.value}: {update.detail}",
             ArmMovementOutcome.RECOVERY_FAILED,
         )
 
@@ -739,10 +781,20 @@ class MoveCloseToSurfaceExecution:
             )
 
     def _validate_axis_guard(self, evaluation) -> None:
-        if evaluation.axis_error_rad > self.config.maximum_axis_error_rad:
+        if evaluation.axis_error_rad > self.config.maximum_approach_axis_error_rad:
+            initial_detail = ""
+            if self._plan is not None:
+                initial = self._plan.initial_axis_error_rad
+                margin = self.config.maximum_approach_axis_error_rad - initial
+                initial_detail = (
+                    f"; initial alignment {math.degrees(initial):.2f} deg "
+                    f"left {math.degrees(margin):.2f} deg margin"
+                )
             raise RuntimeError(
-                "Probe axis rotated away from the frozen surface normal by "
-                f"{math.degrees(evaluation.axis_error_rad):.2f} deg"
+                "Probe axis alignment with the frozen surface normal exceeds the limit: "
+                f"current {math.degrees(evaluation.axis_error_rad):.2f} deg > "
+                f"{math.degrees(self.config.maximum_approach_axis_error_rad):.2f} deg"
+                f"{initial_detail}"
             )
 
     def _validate_step_motion(self, current_probe: PoseData):
@@ -793,6 +845,7 @@ class MoveCloseToSurfaceExecution:
 
     def _fail_workflow(
         self, detail: str, outcome=ArmMovementOutcome.EXECUTION_ERROR,
+        *, recovery_verified: bool = False,
     ) -> MoveCloseToSurfaceOutcome:
         if self._measurement.active:
             self._measurement.cancel()
@@ -800,6 +853,14 @@ class MoveCloseToSurfaceExecution:
             self.executor.cancel()
         self.failure_outcome = outcome
         self.feedback_message = str(detail).strip() or "Movement failed"
+        if self._recovery_detail:
+            if self.feedback_message != self._recovery_detail:
+                self.feedback_message = f"{self._recovery_detail}; {self.feedback_message}"
+            self.feedback_message += (
+                "; original pre-approach pose verified"
+                if recovery_verified
+                else "; return to original pre-approach pose is unverified"
+            )
         self._started = False
         return MoveCloseToSurfaceOutcome.FAILURE
 

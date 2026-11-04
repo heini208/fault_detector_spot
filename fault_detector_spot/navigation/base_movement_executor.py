@@ -1120,7 +1120,7 @@ class BaseMovementExecutor(MovementExecutor):
         result_future = self._result_future
         if result_future is None:
             try:
-                result_future = handle.get_result_async()
+                result_future = self._goal_result_future(self._send_goal_future, handle)
             except Exception as exception:
                 self._log_error(
                     "Base result request failed during cancellation: "

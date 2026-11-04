@@ -58,7 +58,7 @@ def test_near_foreground_on_probe_ray_still_blocks_with_camera_parallax(height):
 
 
 @pytest.mark.parametrize("support", ["missing", "collinear", "foreground"])
-def test_off_axis_near_return_stays_blocking_without_clear_near_axis_support(support):
+def test_unsupported_off_axis_speck_does_not_require_unrelated_near_ray_support(support):
     image, info = target_image(0.370)
     values = depth_values(image)
     values[82, 84] = 0.178
@@ -71,8 +71,14 @@ def test_off_axis_near_return_stays_blocking_without_clear_near_axis_support(sup
             values[82, 61:68] = 0.370
     image.data = values.tobytes()
 
-    with pytest.raises(ValueError, match="too close"):
-        measure_sensor_tip_distance(image, info, PoseData.identity(), camera_pose(0.03))
+    if support == "foreground":
+        with pytest.raises(ValueError, match="too close"):
+            measure_sensor_tip_distance(image, info, PoseData.identity(), camera_pose(0.03))
+    else:
+        # Unknown support at a different camera ray is not an observed
+        # obstruction. The wall contact itself still has enclosing depth.
+        sample = measure_sensor_tip_distance(image, info, PoseData.identity(), camera_pose(0.03))
+        assert sample.distance_m == pytest.approx(0.270, abs=1e-6)
 
 
 def test_near_surface_with_probe_intersection_outside_image_stays_blocking():
@@ -85,6 +91,19 @@ def test_near_surface_with_probe_intersection_outside_image_stays_blocking():
     image.data = values.tobytes()
 
     with pytest.raises(ValueError, match="too close.*0.178 m"):
+        measure_sensor_tip_distance(image, info, PoseData.identity(), camera)
+
+
+@pytest.mark.parametrize("height,near_depth,speck_depth", [(0.15, 0.320, 0.290), (0.08, 0.178, 0.158)])
+def test_off_axis_speck_cannot_discard_a_coherent_nearer_plane(height, near_depth, speck_depth):
+    camera = camera_pose(height)
+    image, info = wall_image(camera, 0.38)
+    values = depth_values(image)
+    values[450:, 290:351] = near_depth
+    values[479, 320] = speck_depth
+    image.data = values.tobytes()
+
+    with pytest.raises(ValueError, match="foreground of the fitted plane|too close|outside the camera image"):
         measure_sensor_tip_distance(image, info, PoseData.identity(), camera)
 
 

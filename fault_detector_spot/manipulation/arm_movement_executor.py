@@ -1220,8 +1220,29 @@ class ArmMovementExecutor(MovementExecutor):
         stamp_ns = self._pose_stamp_ns(transform)
         if stamp_ns <= 0:
             raise ValueError("Planning frame TF timestamp is empty")
-        now_ns = self.arm_state_source.node.get_clock().now().nanoseconds
+        clock = self.arm_state_source.node.get_clock()
+        now = clock.now()
+        now_ns = now.nanoseconds
         age = (now_ns - stamp_ns) * 1e-9
+        if -PLANNING_FRAME_MAX_AGE_SEC <= age < 0.0:
+            # Spot's time-synchronized acquisition stamps can briefly lead the
+            # host clock. Use the buffered transform at the current ROS time,
+            # rather than treating a future sample as current geometry. TF must
+            # have history bracketing this time; extrapolation is not allowed.
+            try:
+                transform = self.tf_listener.lookup_a_tform_b(
+                    self.moveit_arm_planner.planning_frame, ODOM_FRAME_NAME,
+                    transform_time=now, timeout_sec=0.0,
+                )
+            except TransformException as exception:
+                raise ValueError(
+                    f"Planning frame TF is not fresh: latest age {age:.3f} s; "
+                    f"current-time transform unavailable: {exception}"
+                ) from exception
+            stamp_ns = self._pose_stamp_ns(transform)
+            if stamp_ns != now_ns:
+                raise ValueError("Planning frame TF did not match the requested current time")
+            age = (clock.now().nanoseconds - stamp_ns) * 1e-9
         if not 0.0 <= age <= PLANNING_FRAME_MAX_AGE_SEC:
             raise ValueError(
                 f"Planning frame TF is not fresh: age {age:.3f} s, "

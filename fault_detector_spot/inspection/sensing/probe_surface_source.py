@@ -17,6 +17,7 @@ from fault_detector_spot.inspection.geometry.depth_point_cloud import camera_int
 from fault_detector_spot.inspection.geometry.surface_normal import (
     SurfaceNormalEstimate,
 )
+from fault_detector_spot.inspection.geometry.surface_plane import SurfacePlane
 from fault_detector_spot.inspection.geometry.sensor_tip_observation import (
     SensorTipObservationView,
     observation_translation,
@@ -240,6 +241,8 @@ class ProbeSurfaceSource(RuntimeSource):
         reference_probe_pose: PoseData,
         expected_distance_m: float | None = None,
         receipt_not_before: float = 0.0,
+        *,
+        target_plane_probe: SurfacePlane | None = None,
     ) -> SensorTipObservationView:
         """Inspect the intended target and propose a lateral camera observation."""
         depth_image, camera_info = self.latest_hand_depth(
@@ -254,38 +257,52 @@ class ProbeSurfaceSource(RuntimeSource):
         translation = Vector3Data.zero()
         try:
             try:
-                measure_sensor_tip_distance(
+                sample = measure_sensor_tip_distance(
                     depth_image, camera_info, reference_probe_pose,
                     camera_pose, expected_distance_m,
+                    target_plane_probe=target_plane_probe,
                 )
             except SensorTipTargetUnavailable as target_error:
+                if target_plane_probe is not None:
+                    # The observation move already chose a measured wall target.
+                    # A new side-plane fit must not replace it while retrying.
+                    raise
                 try:
-                    axis_distance, observed_pixel = sensor_tip_observation_hint(
+                    observed_plane, observed_pixel = sensor_tip_observation_hint(
                         depth_image, camera_info, reference_probe_pose,
                         camera_pose, expected_distance_m,
                     )
                 except ValueError as hint_error:
-                    raise target_error from hint_error
+                    raise SensorTipTargetUnavailable(
+                        f"{target_error}; observation unavailable: {hint_error}",
+                    ) from hint_error
                 raise SensorTipTargetOutsideView(
-                    axis_distance,
+                    -observed_plane.signed_distance(Vector3Data.zero()) / observed_plane.normal.x,
                     f"Target requires another view: {target_error}",
                     observation_pixel=observed_pixel,
+                    target_plane_probe=observed_plane,
                 ) from target_error
+            if target_plane_probe is None:
+                target_plane_probe = sample.surface_plane_probe
             visible, detail = True, "Intended sensor-tip target has valid local depth support"
         except SensorTipTargetOutsideView as exception:
             # This preliminary plane only determines where to observe. After
             # moving, the actual intersection still needs its own depth.
-            translation = observation_translation(
-                reference_probe_pose, camera_pose, exception.axis_distance_m,
-                camera_intrinsics(camera_info, (depth_image.width, depth_image.height), "Depth CameraInfo"),
-                (depth_image.width, depth_image.height),
-                SURFACE_ORIENTATION_MAXIMUM_FIT_RADIUS_PX + TARGET_SUPPORT_RADIUS_PX + 1,
-                desired_pixel=exception.observation_pixel,
-            )
+            if target_plane_probe is None:
+                target_plane_probe = exception.target_plane_probe
+                translation = observation_translation(
+                    reference_probe_pose, camera_pose, exception.axis_distance_m,
+                    camera_intrinsics(camera_info, (depth_image.width, depth_image.height), "Depth CameraInfo"),
+                    (depth_image.width, depth_image.height),
+                    SURFACE_ORIENTATION_MAXIMUM_FIT_RADIUS_PX + TARGET_SUPPORT_RADIUS_PX + 1,
+                    desired_pixel=exception.observation_pixel,
+                )
             visible, detail = False, str(exception)
         except ValueError as exception:
             visible, detail = False, str(exception)
-        return SensorTipObservationView(visible, camera_pose, translation, detail)
+        return SensorTipObservationView(
+            visible, camera_pose, translation, detail, target_plane_probe,
+        )
 
     def sensor_tip_pose_snapshot(self, sensor_id: str, receipt_not_before: float = 0.0):
         """Get hand, probe and body poses at one fresh depth acquisition stamp."""
@@ -375,6 +392,8 @@ class ProbeSurfaceSource(RuntimeSource):
         maximum_age_sec: float = MAX_HAND_DEPTH_AGE_SEC,
         minimum_samples: int = 1,
         maximum_latest_age_sec: float | None = None,
+        *,
+        target_plane_probe: SurfacePlane | None = None,
     ):
         """Return fresh target-local samples in the saved original probe frame."""
         reference_probe_pose.validate()
@@ -382,16 +401,19 @@ class ProbeSurfaceSource(RuntimeSource):
             not math.isfinite(expected_distance_m) or expected_distance_m <= 0.0
         ):
             raise ValueError("Expected sensor-tip distance must be positive and finite")
+        if target_plane_probe is not None:
+            target_plane_probe.validate()
 
         def measure(image, camera_info, camera_pose):
             return measure_sensor_tip_distance(
                 image, camera_info, reference_probe_pose, camera_pose,
                 expected_distance_m,
+                target_plane_probe=target_plane_probe,
             )
 
         return self._distance_samples(
             measurement_context=(
-                deepcopy(reference_probe_pose), expected_distance_m,
+                deepcopy(reference_probe_pose), expected_distance_m, deepcopy(target_plane_probe),
             ),
             pose_target_frame="odom",
             measure=measure,
@@ -464,11 +486,16 @@ class ProbeSurfaceSource(RuntimeSource):
         # and retain timestamped, revalidated cached fits for temporal stability.
         selected_history = list(reversed(history)) if maximum_new_fits else history
         if previous_failed_fit is not None and previous_failed_fit[1][0] == context:
-            # Resume at the previous rejection so several bad recent frames
-            # cannot alternate forever ahead of an older supported target.
-            failed_index = next((index for index, (_, image) in enumerate(selected_history)
+            # New arrivals must not wait behind a failed backlog until they
+            # become stale. Resume the old backlog only after those arrivals,
+            # so unchanged bad frames still cannot alternate forever.
+            newest_seen_index = next((index for index, (_, image) in enumerate(selected_history)
+                                      if id(image) == previous_failed_fit[2]), len(selected_history))
+            backlog = selected_history[newest_seen_index:]
+            failed_index = next((index for index, (_, image) in enumerate(backlog)
                                  if id(image) == previous_failed_fit[0]), 0)
-            selected_history = selected_history[failed_index:] + selected_history[:failed_index]
+            selected_history = (selected_history[:newest_seen_index]
+                                + backlog[failed_index:] + backlog[:failed_index])
         for history_index, (receipt_time, depth_image) in enumerate(selected_history):
             if receipt_time + 1e-9 < receipt_not_before:
                 continue
@@ -511,7 +538,8 @@ class ProbeSurfaceSource(RuntimeSource):
                     if maximum_new_fits is not None and new_fits >= maximum_new_fits:
                         deferred_count += 1
                         continue
-                    if previous_failed_fit == (id(depth_image), cache_key):
+                    if (previous_failed_fit is not None
+                            and previous_failed_fit[:2] == (id(depth_image), cache_key)):
                         # Give another frame one turn after a failed fit. If
                         # none can be fitted, retry this acquisition at the end
                         # of the same poll. Context/TF changes bypass the hint.
@@ -529,6 +557,7 @@ class ProbeSurfaceSource(RuntimeSource):
                             with self._lock:
                                 self._sensor_tip_distance_last_failed_fit = (
                                     id(depth_image), deepcopy(cache_key),
+                                    id(history[-1][1]),
                                 )
                         raise
                     with self._lock:
@@ -547,12 +576,22 @@ class ProbeSurfaceSource(RuntimeSource):
         if maximum_latest_age_sec is not None and valid_receipts:
             # Plane fitting itself takes time. Freshness must be checked when
             # returning a measurement, not only before processing the batch.
-            latest_age = time.monotonic() - max(valid_receipts)
+            with self._lock:
+                newest_raw_receipt = (self._hand_depth_history[-1][0]
+                                      if self._hand_depth_history else None)
+                completed_at = time.monotonic()
+            latest_age = completed_at - max(valid_receipts)
             if latest_age < -1e-9 or latest_age > maximum_latest_age_sec:
+                newest_raw_detail = (f"{completed_at - newest_raw_receipt:.3f}s"
+                                     if newest_raw_receipt is not None else "none")
+                detail = (f"newest raw frame age={newest_raw_detail}; "
+                          f"valid={len(samples)}, rejected={len(errors)}, deferred={deferred_count}")
+                if errors:
+                    detail += f"; last rejection: {errors[-1]}"
                 raise ValueError(
                     "Latest valid registered hand-depth sample is stale: "
                     f"age={latest_age:.3f}s, "
-                    f"max_age={maximum_latest_age_sec:.3f}s"
+                    f"max_age={maximum_latest_age_sec:.3f}s; {detail}"
                 )
 
         if len(samples) < minimum_samples:

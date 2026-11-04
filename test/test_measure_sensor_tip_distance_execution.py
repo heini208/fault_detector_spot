@@ -7,6 +7,7 @@ import math
 
 import pytest
 from geometry_msgs.msg import PoseStamped
+from test_live_surface_distance import fitted_plane
 
 from fault_detector_spot.application.commanding.command_ids import CommandID
 from fault_detector_spot.inspection.geometry.sensor_tip_observation import (
@@ -140,6 +141,7 @@ class Source:
         self.snapshot_error = None
         self.sample_calls = []
         self.view_calls = []
+        self.view_targets = []
         self.snapshot_calls = []
         self.pose_sample_calls = []
         self.normal = Vector3Data(-1.0, 0.0, 0.0)
@@ -170,13 +172,18 @@ class Source:
         )
         return SensorTipPoseSample(self.clock.now, hand, probe, body)
 
-    def observation_view(self, reference, expected_distance_m=None, *, receipt_not_before=0.0):
+    def observation_view(
+        self, reference, expected_distance_m=None, *, receipt_not_before=0.0,
+        target_plane_probe=None,
+    ):
         self.view_calls.append((deepcopy(reference), expected_distance_m, receipt_not_before))
+        self.view_targets.append(target_plane_probe)
         return SensorTipObservationView(
             visible=self.initially_visible or len(self.executor.calls) > 0,
             camera_pose_odom=pose(),
             hand_translation_odom=deepcopy(self.translation),
             detail="target in view" if self.initially_visible else "target outside image",
+            target_plane_probe=fitted_plane(0.25),
         )
 
     def sensor_tip_distance_samples(self, reference, expected_distance_m, **options):
@@ -248,6 +255,7 @@ def test_visible_target_measures_without_moving():
     assert not case.execution.active
     assert case.source.view_calls[0][1] is None
     assert case.source.sample_calls[0][1] is None
+    assert case.source.sample_calls[0][2]["target_plane_probe"] == fitted_plane(0.25)
 
 
 def test_excursion_is_guarded_collision_checked_and_returns_to_saved_hand_pose():
@@ -263,6 +271,7 @@ def test_excursion_is_guarded_collision_checked_and_returns_to_saved_hand_pose()
     for _target, _sensor, options in case.executor.calls:
         assert options["ignore_environment_collisions"] is False
         assert options["cartesian_path"] is True
+        assert options["speed"].linear_speed_mps == pytest.approx(0.010)
     saved_target = case.source.sample_calls[0][0]
     assert saved_target.position.y == 0.0
     assert saved_target.position.z == -0.10
@@ -274,6 +283,30 @@ def test_distance_uses_achieved_return_pose_instead_of_assuming_exact_return():
 
     assert finish(case) is MeasureSensorTipDistanceOutcome.SUCCESS
     assert case.execution.result.distance_m == pytest.approx(0.247)
+
+
+def test_observation_target_stays_fixed_through_sparse_retry_and_sampling():
+    case = harness(visible=False)
+    read_view = case.source.observation_view
+    retries = []
+
+    def changing_patch(*args, **kwargs):
+        view = read_view(*args, **kwargs)
+        if len(case.executor.calls) == 1:
+            retries.append(1)
+            return replace(
+                view, visible=len(retries) > 1,
+                target_plane_probe=fitted_plane(0.12), detail="transient side-plane fit",
+            )
+        return view
+
+    case.source.observation_view = changing_patch
+    assert finish(case) is MeasureSensorTipDistanceOutcome.SUCCESS
+    assert len(retries) == 2
+    assert case.source.view_targets == [None, fitted_plane(0.25), fitted_plane(0.25)]
+    assert all(call[2]["target_plane_probe"] == fitted_plane(0.25) for call in case.source.sample_calls)
+    assert len(case.executor.calls) == 2
+    assert case.execution.result.distance_m == pytest.approx(0.25)
 
 
 def test_failed_measurement_returns_before_reporting_failure():
@@ -307,6 +340,7 @@ def test_new_attempt_and_cancellation_clear_previous_measurement_evidence():
 
     assert case.execution.start(case.command) is MeasureSensorTipDistanceOutcome.RUNNING
     assert not case.execution.continuation_safe
+    assert case.execution._target_plane_probe is None
     case.execution.cancel()
     assert not case.execution.continuation_safe
 
@@ -434,6 +468,20 @@ def test_failed_observation_confirms_stop_before_return():
     assert len(case.executor.calls) == 2
     assert case.source.sample_calls == []
     assert "Observation movement failed" in case.execution.feedback_message
+
+
+def test_unconfirmed_return_preserves_measurement_failure_and_unverified_pose():
+    case = harness(visible=False)
+    case.source.sample_error = "Target patch has no reliable depth"
+    case.executor.outcomes[2] = ArmMovementOutcome.STOP_UNCONFIRMED
+
+    assert finish(case) is MeasureSensorTipDistanceOutcome.FAILURE
+    assert len(case.executor.calls) == 2
+    assert case.execution.failure_outcome is ArmMovementOutcome.STOP_UNCONFIRMED
+    assert not case.execution.continuation_safe
+    assert "Target patch has no reliable depth" in case.execution.feedback_message
+    assert "Observation return failed: stop_unconfirmed" in case.execution.feedback_message
+    assert "original pose not verified" in case.execution.feedback_message
 
 
 def test_return_requires_fresh_post_return_snapshot():

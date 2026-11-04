@@ -55,7 +55,7 @@ class MeasureSensorTipDistanceConfig:
     surface_stability_tolerance_m: float = 0.005
     maximum_axis_error_rad: float = math.radians(5.0)
     maximum_observation_translation_m: float = 0.20
-    observation_speed_mps: float = 0.020
+    observation_speed_mps: float = 0.010
     return_position_tolerance_m: float = 0.010
     return_orientation_tolerance_rad: float = math.radians(2.0)
     tip_alignment_position_tolerance_m: float = 0.010
@@ -75,7 +75,7 @@ class MeasureSensorTipDistanceConfig:
     planning_frame_orientation_tolerance_rad: float = math.radians(0.2)
     reference_position_tolerance_m: float = 0.010
     reference_orientation_tolerance_rad: float = math.radians(2.0)
-    maximum_measurement_duration_sec: float = 60.0
+    maximum_measurement_duration_sec: float = 120.0
     force_contact_threshold_n: float = 5.0
 
     @classmethod
@@ -181,6 +181,7 @@ class MeasureSensorTipDistanceExecution:
         self.continuation_safe = False
         self._return_verified = False
         self._samples = {}
+        self._target_plane_probe = None
         self._aggregate = None
         self._failure_detail = ""
         self._moved = False
@@ -367,10 +368,13 @@ class MeasureSensorTipDistanceExecution:
         try:
             view = self.surface_source.observation_view(
                 self._return_probe, self.expected_distance_m,
-                receipt_not_before=self._receipt_after)
+                receipt_not_before=self._receipt_after,
+                target_plane_probe=self._target_plane_probe)
         except Exception as error:
             return self._wait_or_fail(error)
         if view.visible:
+            if self._target_plane_probe is None:
+                self._target_plane_probe = deepcopy(view.target_plane_probe)
             self._phase = "sampling"
             self._phase_start = self._clock()
             self.feedback_message = "Collecting sensor tip distance at the original target"
@@ -393,6 +397,9 @@ class MeasureSensorTipDistanceExecution:
         hand = deepcopy(self._original_hand)
         hand.position = Vector3Data(hand.position.x + delta.x, hand.position.y + delta.y, hand.position.z + delta.z)
         self._observation_hand = hand
+        # Keep the original observed wall associated with the saved probe ray;
+        # post-move discovery must not substitute nearby gripper geometry.
+        self._target_plane_probe = deepcopy(view.target_plane_probe)
         self._phase = "observing"
         self.feedback_message = f"Moving camera to observe target ({distance * 1000:.1f} mm translation)"
         self._moved = True
@@ -405,7 +412,8 @@ class MeasureSensorTipDistanceExecution:
                 receipt_not_before=self._receipt_after,
                 maximum_age_sec=max(self.config.sample_timeout_sec, self.config.minimum_surface_span_sec),
                 minimum_samples=self.config.minimum_surface_samples,
-                maximum_latest_age_sec=MAX_HAND_DEPTH_AGE_SEC)
+                maximum_latest_age_sec=MAX_HAND_DEPTH_AGE_SEC,
+                target_plane_probe=self._target_plane_probe)
             for sample in fresh:
                 self._samples[sample.stamp_seconds] = sample
             aggregate = aggregate_surface_distance_samples(
@@ -460,13 +468,15 @@ class MeasureSensorTipDistanceExecution:
                 self._log_return(self.feedback_message)
             return MeasureSensorTipDistanceOutcome.RUNNING
         if update.outcome is not ArmMovementOutcome.SUCCESS:
+            detail = (self._return_failure_detail(update.detail)
+                      if self._phase == "returning" else update.detail)
             if update.outcome in self.UNSAFE_TO_RETURN:
                 return self._fail(
-                    update.detail, update.outcome,
+                    detail, update.outcome,
                     cancel_motion=update.outcome is not ArmMovementOutcome.BUSY,
                 )
             if self._phase == "returning":
-                return self._fail(f"Observation return failed: {update.detail}", ArmMovementOutcome.RECOVERY_FAILED)
+                return self._fail(detail, ArmMovementOutcome.RECOVERY_FAILED)
             self._failure_detail = f"Observation movement failed: {update.detail}"
             self._phase = "confirm_stop"
             return self._stop_update(self.executor.confirm_stop())
@@ -491,7 +501,7 @@ class MeasureSensorTipDistanceExecution:
                 self.executor.probe_motion_planner.current_pose("odom", "body")))
             if self.executor.active:
                 return self._fail(
-                    "Arm executor is busy; observation return cannot start",
+                    self._return_failure_detail("Arm executor is busy; observation return cannot start"),
                     ArmMovementOutcome.BUSY, cancel_motion=False,
                 )
             self._phase = "returning"
@@ -506,7 +516,12 @@ class MeasureSensorTipDistanceExecution:
                 speed_scale=self.config.return_correction_speed_scale if correction else 1.0,
             ))
         except Exception as error:
-            return self._fail(f"Observation return failed: {error}", ArmMovementOutcome.RECOVERY_FAILED)
+            return self._fail(self._return_failure_detail(str(error)), ArmMovementOutcome.RECOVERY_FAILED)
+
+    def _return_failure_detail(self, detail):
+        context = f"{self._failure_detail}; " if self._failure_detail else ""
+        return (f"{context}Observation return failed: {detail}; "
+                f"{self._return_label} not verified")
 
     def _verify_return(self):
         if self._clock() < self._receipt_after:

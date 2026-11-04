@@ -118,6 +118,41 @@ def test_configuration_rejects_step_larger_than_ten_millimeters():
         execution(maximum_step_m=0.0101)
 
 
+@pytest.mark.parametrize("margin_deg", [0.0, -1.0, 10.0, 11.0])
+def test_configuration_requires_positive_alignment_margin_below_axis_limit(margin_deg):
+    with pytest.raises(ValueError):
+        execution(approach_alignment_margin_rad=math.radians(margin_deg))
+
+
+def test_custom_axis_limit_requires_compatible_alignment_margin():
+    with pytest.raises(ValueError, match="margin must be smaller"):
+        execution(maximum_approach_axis_error_rad=math.radians(0.5))
+    action = execution(
+        maximum_approach_axis_error_rad=math.radians(0.5),
+        approach_alignment_margin_rad=math.radians(0.1),
+    )
+    assert action.config.approach_alignment_margin_rad == pytest.approx(math.radians(0.1))
+
+
+def test_approach_allowances_preserve_observation_and_alignment_quality_limits():
+    config = execution().config
+
+    assert config.maximum_approach_axis_error_rad == pytest.approx(math.radians(10.0))
+    assert config.maximum_axis_error_rad == pytest.approx(math.radians(5.0))
+    assert config.approach_body_position_tolerance_m == pytest.approx(0.020)
+    assert config.reference_position_tolerance_m == pytest.approx(0.010)
+    assert config.reference_orientation_tolerance_rad == pytest.approx(math.radians(2.0))
+
+
+@pytest.mark.parametrize("name", [
+    "maximum_approach_axis_error_rad", "approach_body_position_tolerance_m",
+])
+@pytest.mark.parametrize("value", [0.0, -1.0, math.nan, math.inf])
+def test_approach_allowances_require_positive_finite_values(name, value):
+    with pytest.raises(ValueError, match="positive"):
+        execution(**{name: value})
+
+
 def test_configuration_rejects_contact_search_beyond_one_step():
     with pytest.raises(ValueError, match="Contact search overtravel"):
         execution(contact_search_overtravel_m=0.011)

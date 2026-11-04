@@ -318,6 +318,10 @@ Software-stop acceptance means `STOP_REQUESTED`. The original request remains
 associated with the lane, and `STOP_UNCONFIRMED` means the required stop evidence
 is still missing. Only `STOP_CONFIRMED` from the execution owner releases the
 execution barrier; the software-stop latch remains set until an explicit reset.
+Movement executors retain one result future per submitted action through normal
+completion, cancellation and later admission checks. A verified terminal result
+is reused when admitting an observation return; a new result request must not
+turn completed motion back into an unresolved action.
 Each interrupted request must also be confirmed stopped. Stop
 envelopes fence the affected request identities so delayed or duplicate delivery
 cannot restart them. Duplicate normal requests return retained owner status
@@ -868,20 +872,40 @@ can start. Standalone measurements keep the actual starting pose as their
 return target. Depth near the forward probe ray seeds a local plane fit,
 preferring nearer axial surfaces over a farther wall. Its actual intersection
 with probe +X must have local unoccluded depth and lie within the fitted region.
+Unsupported off-ray depth specks may be skipped with a bounded number of local
+fits. Returns within the projected probe footprint at their own camera depth,
+and coherent nearer surfaces, remain blocking. Skipping a seed never removes
+raw returns from the actual target's support or foreground checks.
 A visible, supported target patch is measured directly. If it is outside the
 image, a nearby fitted surface can guide one observation translation that
 brings the target just inside the image with room for the full plane-fit patch.
 If near foreground or missing local depth obscures an in-view target, a reliable
-lower-middle surface patch can instead guide a translation that projects the
-target onto that measured clear patch. Both proposals allow at most 0.15 m
+nearby surface patch can guide a translation that projects the target onto
+supported depth. Candidate patches are ordered by lateral displacement across
+the image, with their own local plane fit and a 3 mm positioning margin. Their
+normals must agree with the observed wall within 10 degrees, and the original
+target must lie within 15 mm of their measured plane. The observed target's
+position along the original probe ray and observed wall normal stay fixed through
+movement, retries, and sampling. Each fresh image fits the patch at that target's
+projected pixel, requiring its normal within 10 degrees and its probe-axis
+intersection within 15 mm of the original estimate. Off-ray planes
+with unsupported in-image intersections cannot replace it. Actual nearer returns
+on the probe ray and established nearer surfaces still take precedence, including
+nearer surfaces whose intersection is outside the image. The target estimate
+selects and validates the patch only; the reported
+distance and normal always come from newly measured depth. This
+search is not restricted to the lower-middle fit or a 25 mm foreground corridor.
+The proposal only chooses where to observe; fresh target depth is still required.
+Both proposals allow at most 0.15 m
 extension from measured support; neither preliminary plane is accepted as the
 final measurement. The translation preserves orientation and makes no inward
 movement along the saved probe axis. Without a reliable nearby observation
 hint, missing depth is retried in place. After an excursion,
 sparse depth frames are retried within the sampling timeout before returning;
 the operation never searches farther blindly.
-The translation is capped at 0.20 m and requires a complete, collision-checked,
-force-guarded Cartesian path. It measures the original target, not the tip's
+The translation is capped at 0.20 m and runs at 10 mm/s by default, including
+the return. It requires a complete, collision-checked, force-guarded Cartesian
+path. It measures the original target, not the tip's
 new location. Hidden-target extrapolation cannot produce a distance or normal
 result; the moved camera must directly observe the actual intersection.
 
@@ -897,10 +921,13 @@ After settling, the operation requires five distinct frames spanning one
 second, at most 5 mm distance variation, consistent fitted normals, and a
 newest valid reading no older than 0.5 seconds. Fits are reused only while their
 camera calibration, timestamped TF, target and attachment remain unchanged.
-Sensor-tip sampling fits at most one uncached frame per poll, starting with
-the newest frame, and reuses previously validated fits. This
+Sensor-tip sampling fits at most one uncached frame per poll, prioritizing
+new arrivals ahead of retries of older rejected frames, and reuses previously
+validated fits. An unchanged backlog still advances past repeated failures. This
 avoids making the latest sample stale while processing a depth backlog; the
-0.5-second freshness check still applies after processing.
+0.5-second freshness check still applies after processing. Stale-valid errors
+include the newest raw-frame age and rejection details to distinguish missing
+input from fresh images that cannot support the target.
 The camera depth must be at least 0.210 m (10 mm above the 0.200 m near limit),
 and the measured axis intersection
 must be 3–500 mm ahead. Measurements anchored to a saved tag target additionally
@@ -925,17 +952,23 @@ correction requires at least 10% improvement in the worst error relative to
 its position/orientation tolerance. Both hand and tip errors must stay within
 20 mm and 5 degrees per correction, with summed requested corrections capped
 at 40 mm and 10 degrees. Corrections retain collision and force guards and run
-at one quarter of the observation speeds (5 mm/s linear by default).
+at one quarter of the observation speeds (2.5 mm/s linear by default).
 
-Before submitting an observation or return trajectory, execution rechecks
+Before submitting an observation, return, or measured surface-approach trajectory, execution rechecks
 the odom-to-body conversion used for planning. A shift of the implied hand
 target above 1 mm or 0.2 degrees discards the trajectory and repeats planning
 and force-baseline acquisition, at most twice. Missing or stale transforms
-prohibit dispatch. This does not continuously compensate body movement during
+prohibit dispatch. If Spot's latest synchronized TF stamp is slightly ahead of
+the host clock, execution uses buffered interpolation at the current ROS time.
+The existing 250 ms bound still applies; missing interpolation history or an
+out-of-range timestamp prevents dispatch. This does not continuously compensate
+body movement during
 joint trajectory execution. Return diagnostics report hand, tip and body
 displacements by odom axis. Missing transforms, changed reference/attachment,
 contact/failure during return, or non-improving corrections prevent further
-correction. The whole operation retains its 60-second deadline.
+correction. The whole operation has a 120-second deadline to accommodate the
+slower excursion, return and bounded corrections; individual sampling timeouts
+and freshness limits remain unchanged.
 
 Tag and relative movements offer **Normal / Precision** selection in the main
 manipulator tab. Aligned and custom final probe poses, and each path waypoint,
@@ -948,11 +981,25 @@ required improvement, and angular limits used by measurement returns; observatio
 returns keep their smaller 20 mm / 40 mm translation limits. Collision and force guards
 remain independent of this setting. Existing saved poses default to Normal.
 
-The reported distance and final approach use the actual returned
-tip pose. Body/reference or attachment changes invalidate the operation;
-failed returns prohibit further autonomous recovery. Cancellation stops without
-starting a return. A standalone test can report a tilted surface, but the final
-approach still rejects axis misalignment above 5 degrees. Measurement and
+The reported distance and final approach use the actual returned tip pose.
+Observation and return retain their 10 mm / 2-degree body-reference limits.
+After measurement, the approach separately allows up to 20 mm body translation
+through `close_surface.approach_body_position_tolerance_m`, retaining the 2-degree
+rotation bound. Body displacement is not proof of odometry drift: the wall stays
+fixed in odom during physical body movement. The bound limits body compliance
+that can shift the body-relative arm trajectory, and is not continuous motion
+compensation. Exceeding it, losing the transform, or changing the attachment
+stops the operation and prohibits automatic recovery against the old baseline.
+Failed returns also prohibit recovery. Cancellation stops without starting a return.
+A standalone test can report a tilted surface. Final approach uses its own
+10-degree axis limit, `close_surface.maximum_approach_axis_error_rad`, while
+normal consistency and orientation verification keep their 5-degree limit.
+Before starting an approach, it reserves a 1-degree alignment margin, requiring
+an initial angle of at most 9 degrees. A tighter orientation is requested before
+translation when that margin is missing. The margin is configured through
+`close_surface.approach_alignment_margin_rad`. If recovery fails, feedback retains
+the original approach failure, reports body displacement against its limits, and states
+whether the original pre-approach pose was verified. Measurement and
 approach share `close_surface.*` quality parameters; excursion limits include
 `maximum_observation_translation_m`, `observation_speed_mps`,
 `return_position_tolerance_m`, `return_orientation_tolerance_rad`, and

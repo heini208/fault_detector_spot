@@ -41,7 +41,9 @@ def sampling_execution():
             sensor_tip_pose_sample=lambda *args, **kwargs: SensorTipPoseSample(
                 state.now, pose(), pose(), pose(),
             ),
-            observation_view=lambda *args, **kwargs: SimpleNamespace(visible=True),
+            observation_view=lambda *args, **kwargs: SimpleNamespace(
+                visible=True, target_plane_probe=fitted_plane(0.08),
+            ),
         ),
         MoveCloseToSurfaceConfig(), monotonic_clock=lambda: state.now,
     )
@@ -105,6 +107,9 @@ def test_later_stable_window_can_start_approach_after_old_three_second_budget():
     assert len(executor.guarded_calls) == 1
     target = executor.guarded_calls[0][0][0].pose
     assert target.position.x == pytest.approx(0.05)
+    options = executor.guarded_calls[0][1]
+    assert options["planning_frame_position_tolerance_m"] == pytest.approx(0.001)
+    assert options["planning_frame_orientation_tolerance_rad"] == pytest.approx(math.radians(0.2))
 
 
 def test_persistent_instability_still_fails_without_submitting_arm_motion():
@@ -168,7 +173,7 @@ def test_invalid_measurement_reference_prohibits_approach_recovery(change, settl
     if change == "body_transform_unavailable":
         executor.probe_motion_planner.current_pose = unavailable
     elif change in {"body_position", "body_orientation"}:
-        body = (pose(x=0.011) if change == "body_position" else pose(
+        body = (pose(x=0.0201) if change == "body_position" else pose(
             orientation=quaternion_from_euler("z", math.radians(2.1)),
         ))
         executor.probe_motion_planner.current_pose = lambda *_args: stamped(body)
@@ -187,10 +192,35 @@ def test_invalid_measurement_reference_prohibits_approach_recovery(change, settl
     assert executor.cancel_count == (0 if settled else 1)
 
 
+@pytest.mark.parametrize("settled", [False, True])
+def test_body_compliance_above_ten_millimeters_does_not_invalidate_approach(settled):
+    action, state, executor = sampling_execution()
+    settle_initial_pose(action, state)
+    state.samples = samples(10.6, [0.08] * 5)
+    assert poll_at(action, state, 11.8, 12.0, 12.2) is MoveCloseToSurfaceOutcome.RUNNING
+    executor.poll = lambda: ArmMovementUpdate(ArmMovementOutcome.RUNNING, "moving")
+    if settled:
+        executor.active = False
+        action._handle_approach_update(ArmMovementUpdate(ArmMovementOutcome.SUCCESS, "completed"))
+        assert action._phase == "settling"
+    original_current_pose = executor.probe_motion_planner.current_pose
+    executor.probe_motion_planner.current_pose = lambda frame, controlled: (
+        stamped(pose(x=0.01004, orientation=quaternion_from_euler("z", math.radians(0.07))))
+        if controlled == "body" else original_current_pose(frame, controlled)
+    )
+
+    assert action.poll() is MoveCloseToSurfaceOutcome.RUNNING
+    assert action.active
+    assert len(executor.guarded_calls) == 1
+    assert not executor.probe_calls
+    assert executor.cancel_count == 0
+    assert action.config.reference_position_tolerance_m == pytest.approx(0.010)
+
+
 def test_consistently_misaligned_measurement_cannot_start_surface_approach():
     action, state, executor = sampling_execution()
     settle_initial_pose(action, state)
-    angle = math.radians(9.0)
+    angle = math.radians(10.1)
     plane = replace(fitted_plane(0.08), normal=Vector3Data(
         -math.cos(angle), math.sin(angle), 0.0,
     ))
@@ -202,6 +232,56 @@ def test_consistently_misaligned_measurement_cannot_start_surface_approach():
     assert poll_at(action, state, 11.8, 12.0, 12.2) is MoveCloseToSurfaceOutcome.FAILURE
     assert action._measurement.result is not None
     assert "not aligned" in action.feedback_message
-    assert "9.00 deg > 5.00 deg" in action.feedback_message
+    assert "10.10 deg > 10.00 deg" in action.feedback_message
+    assert not executor.guarded_calls
+    assert not executor.probe_calls
+
+
+@pytest.mark.parametrize("initial_angle, expected", [
+    (5.12, MoveCloseToSurfaceOutcome.RUNNING),
+    (8.9, MoveCloseToSurfaceOutcome.RUNNING),
+    (9.85, MoveCloseToSurfaceOutcome.FAILURE),
+])
+def test_surface_approach_reserves_alignment_margin_before_moving(initial_angle, expected):
+    action, state, executor = sampling_execution()
+    settle_initial_pose(action, state)
+    angle = math.radians(initial_angle)
+    plane = replace(fitted_plane(0.08), normal=Vector3Data(
+        -math.cos(angle), math.sin(angle), 0.0,
+    ))
+    distance = plane.signed_distance(Vector3Data.zero())
+    state.samples = tuple(
+        distance_sample(distance, 10.6 + index * 0.3, surface_plane_probe=plane)
+        for index in range(5)
+    )
+
+    assert poll_at(action, state, 11.8, 12.0, 12.2) is expected
+    assert action.config.maximum_axis_error_rad == pytest.approx(math.radians(5.0))
+    assert action.config.maximum_approach_axis_error_rad == pytest.approx(math.radians(10.0))
+    if expected is MoveCloseToSurfaceOutcome.FAILURE:
+        assert "9.85 deg, required at most 9.00 deg" in action.feedback_message
+        assert "10.00 deg safety limit, 1.00 deg reserved" in action.feedback_message
+        assert "orient sensor tip to surface again before approaching" in action.feedback_message
+        assert not executor.guarded_calls
+    else:
+        assert len(executor.guarded_calls) == 1
+    assert not executor.probe_calls
+
+
+def test_approach_allowance_does_not_admit_inconsistent_measurement_normals():
+    action, state, executor = sampling_execution()
+    settle_initial_pose(action, state)
+    state.samples = tuple(
+        distance_sample(
+            0.08 * math.cos(math.radians(angle)), 15.3 + index * 0.3,
+            surface_plane_probe=replace(fitted_plane(0.08), normal=Vector3Data(
+                -math.cos(math.radians(angle)), math.sin(math.radians(angle)), 0.0,
+            )),
+        )
+        for index, angle in enumerate((-6.0, 6.0, -6.0, 6.0, 0.0))
+    )
+
+    assert poll_at(action, state, 16.91) is MoveCloseToSurfaceOutcome.FAILURE
+    assert "surface normals are unstable" in action.feedback_message
     assert not executor.guarded_calls
     assert not executor.probe_calls

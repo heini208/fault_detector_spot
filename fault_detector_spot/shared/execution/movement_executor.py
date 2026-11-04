@@ -122,8 +122,7 @@ class MovementExecutor:
                     if not handle.accepted:
                         continue
                     if result_future is None:
-                        result_future = handle.get_result_async()
-                        record[1] = result_future
+                        result_future = self._goal_result_future(future, handle)
                     if result_future is None or not result_future.done():
                         pending.append(record)
                         continue
@@ -136,6 +135,25 @@ class MovementExecutor:
                     pending.append(record)
             self._submitted_goals = pending
             return not pending
+
+    def _goal_result_future(self, send_future, handle):
+        """Share one result request between polling, cancellation and settlement."""
+        with self._settlement_lock:
+            record = next((record for record in self._submitted_goals
+                           if record[0] is send_future), None)
+            current = send_future is not None and send_future is self._send_goal_future
+            result = self._result_future if current else None
+            if result is None and record is not None:
+                result = record[1]
+            if result is None:
+                # rclpy creates a new future on each call. Retain this one even
+                # after ordinary execution resets its current goal fields.
+                result = handle.get_result_async()
+            if record is not None:
+                record[1] = result
+            if current:
+                self._result_future = result
+            return result
 
     def poll(self):
         """Advance the active RobotCommand lifecycle without blocking."""
@@ -192,7 +210,7 @@ class MovementExecutor:
                     self._cancellation_goal_finished()
                     return
                 self._goal_handle = handle
-                result = self._result_future or handle.get_result_async()
+                result = self._goal_result_future(future, handle)
                 self._result_future = result
                 # Register before requesting cancellation: a fast result may
                 # arrive synchronously, and cancel rejection is not completion.
@@ -383,7 +401,7 @@ class MovementExecutor:
 
         self._goal_handle = goal_handle
         try:
-            self._result_future = goal_handle.get_result_async()
+            self._result_future = self._goal_result_future(self._send_goal_future, goal_handle)
         except Exception as exception:
             return self._finish(
                 self.OUTCOME_TYPE.EXECUTION_ERROR,

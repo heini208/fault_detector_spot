@@ -177,8 +177,112 @@ def test_recent_rejected_frame_does_not_refresh_valid_measurement(harness):
     harness.now = 100.6
     harness.receive(11)
     harness.fit_error = "no plane support"
-    with pytest.raises(ValueError, match="Latest valid.*stale"):
+    with pytest.raises(ValueError, match="Latest valid.*stale") as failure:
         harness.sample(maximum_age_sec=6.0, maximum_latest_age_sec=0.5)
+    detail = str(failure.value)
+    assert "newest raw frame age=0.000s" in detail
+    assert "valid=1, rejected=1" in detail
+    assert "last rejection: no plane support" in detail
+
+
+def budgeted_sample(harness, **options):
+    return harness.source._distance_samples(
+        measurement_context=("hall_probe",), pose_target_frame="hall_probe_probe",
+        measure=probe_surface_source.measure_probe_surface_distance,
+        cache=harness.source._sensor_tip_distance_cache,
+        **{"receipt_not_before": 0.0, "maximum_age_sec": 6.0, "minimum_samples": 1,
+           "maximum_latest_age_sec": 0.5, "maximum_new_fits": 1, **options},
+    )
+
+
+def test_new_target_frame_preempts_failed_full_backlog(harness, monkeypatch):
+    first_stamp = 10
+    new_stamp = first_stamp + HAND_DEPTH_HISTORY_MAX_SAMPLES
+    measure = probe_surface_source.measure_probe_surface_distance
+
+    def reject_backlog(image, *args):
+        harness.fit_error = None if image.header.stamp.sec == new_stamp else "no target support"
+        return measure(image, *args)
+
+    monkeypatch.setattr(probe_surface_source, "measure_probe_surface_distance", reject_backlog)
+    for stamp in range(first_stamp, new_stamp):
+        harness.receive(stamp)
+        harness.now += 0.1
+    with pytest.raises(ValueError, match="no target support"):
+        budgeted_sample(harness)
+    assert len(harness.fit_calls) == 1
+    assert harness.fit_calls[-1][0].header.stamp.sec == new_stamp - 1
+
+    harness.now += 0.05
+    harness.receive(new_stamp)
+    samples = budgeted_sample(harness)
+
+    assert len(harness.fit_calls) == 2  # One fit per poll, including failures.
+    assert harness.fit_calls[-1][0].header.stamp.sec == new_stamp
+    assert [sample.stamp_seconds for sample in samples] == [float(new_stamp)]
+
+
+def test_unchanged_failure_backlog_reaches_older_target_without_alternating(harness, monkeypatch):
+    measure = probe_surface_source.measure_probe_surface_distance
+
+    def reject_recent(image, *args):
+        harness.fit_error = None if image.header.stamp.sec == 10 else "no target support"
+        return measure(image, *args)
+
+    monkeypatch.setattr(probe_surface_source, "measure_probe_surface_distance", reject_recent)
+    for stamp in range(10, 14):
+        harness.receive(stamp)
+    for _ in range(3):
+        with pytest.raises(ValueError, match="no target support"):
+            budgeted_sample(harness)
+    assert len(budgeted_sample(harness)) == 1
+    assert [entry[0].header.stamp.sec for entry in harness.fit_calls] == [13, 12, 11, 10]
+
+
+def test_budgeted_fit_retries_one_failed_frame_when_no_other_frame_exists(harness):
+    harness.receive()
+    harness.fit_error = "temporarily unavailable"
+    with pytest.raises(ValueError, match="temporarily unavailable"):
+        budgeted_sample(harness)
+    harness.fit_error = None
+    assert len(budgeted_sample(harness)) == 1
+    assert len(harness.fit_calls) == 2
+
+
+def test_newest_tf_delay_does_not_consume_fit_budget(harness):
+    harness.receive(10)
+    harness.receive(11)
+    lookup = harness.source._lookup_pose
+    delayed = [True]
+
+    def lookup_with_delay(*args, lookup_time):
+        if delayed[0] and lookup_time.nanoseconds == 11_000_000_000:
+            raise ValueError("newest TF has not arrived")
+        return lookup(*args, lookup_time=lookup_time)
+
+    harness.source._lookup_pose = lookup_with_delay
+    assert [sample.stamp_seconds for sample in budgeted_sample(harness)] == [10.0]
+    assert len(harness.fit_calls) == 1
+    delayed[0] = False
+    assert [sample.stamp_seconds for sample in budgeted_sample(harness)] == [10.0, 11.0]
+    assert len(harness.fit_calls) == 2
+
+
+@pytest.mark.parametrize("change", ["tf", "calibration"])
+def test_changed_geometry_retries_previous_failed_frame_before_older_backlog(harness, change):
+    harness.receive(10)
+    harness.receive(11)
+    harness.fit_error = "temporarily unavailable"
+    with pytest.raises(ValueError, match="temporarily unavailable"):
+        budgeted_sample(harness)
+    harness.fit_error = None
+    if change == "tf":
+        harness.pose.position.x += 0.01
+    else:
+        harness.camera.k[0] += 1.0
+        harness.source._receive_hand_depth_camera_info(harness.camera)
+    assert [sample.stamp_seconds for sample in budgeted_sample(harness)] == [11.0]
+    assert len(harness.fit_calls) == 2
 
 
 def test_cache_is_bounded_to_buffered_depth_and_cleared_on_destroy(harness):
