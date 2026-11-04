@@ -1804,6 +1804,9 @@ class InspectionControls(UIControlHelper):
         self.refine_rotation_step_field.setEnabled(not pending)
         self.refine_frame_dropdown.setEnabled(not pending)
         self.open_fine_adjustment_button.setEnabled(alignment_enabled and alignment_adjustable)
+        self.refinement_dialog.back_away_surface_button.setEnabled(
+            alignment_enabled and alignment_adjustable
+        )
         self.refinement_dialog.fine_adjustment_dialog.refresh(
             alignment_enabled and alignment_adjustable, alignment_enabled
         )

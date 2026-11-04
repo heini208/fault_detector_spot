@@ -9,9 +9,6 @@ from fault_detector_spot.application.commanding.command_ids import CommandID
 from fault_detector_spot.application.controllers.command_controller import (
     CommandControllerState,
 )
-from fault_detector_spot.application.coordinators.setup_coordinator import (
-    SetupOperationStatus,
-)
 from fault_detector_spot.application.setup.setup_operation_registry import (
     SetupOperationRegistry,
 )
@@ -586,13 +583,10 @@ class ProbeRefinementController:
                     )
             except Exception as exception:
                 refinement.fail_motion(status.operation.request_id)
-                status = SetupOperationStatus(
-                    operation=status.operation,
+                status = replace(
+                    status,
                     state=CommandControllerState.FAILED,
                     detail=str(exception),
-                    buffered_command_count=(
-                        status.buffered_command_count
-                    ),
                 )
         else:
             refinement.fail_motion(status.operation.request_id)
