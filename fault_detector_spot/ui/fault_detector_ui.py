@@ -763,8 +763,8 @@ class Fault_Detector_UI(QWidget):
         row.addWidget(self.reset_software_stop_button)
         self.recover_arm_button = QPushButton("Recover arm (stow)")
         self.recover_arm_button.setToolTip(
-            "Request a separate recovery movement after reset. Requires confirmed "
-            "bare-hand attachment, fresh pose and collision checks."
+            "Request a separate recovery movement after reset. Requires a "
+            "confirmed attachment, fresh pose and collision checks."
         )
         self.recover_arm_button.setEnabled(False)
         self.recover_arm_button.clicked.connect(self.handle_recover_arm)

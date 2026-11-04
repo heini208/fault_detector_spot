@@ -97,24 +97,34 @@ def test_recovery_rechecks_confirmation_and_binds_current_bare_hand(tmp_path):
     assert not prepared.command.ignore_environment_collisions
 
 
-def test_recovery_refuses_attached_sensor_with_unproved_native_stow_clearance(tmp_path):
+def test_recovery_rechecks_confirmation_and_binds_current_sensor(tmp_path):
     controller, repository, _, _ = build_controller(tmp_path)
     repository.create(sensor_definition())
     pending = controller.select_sensor("bmm150_01")
+    with pytest.raises(RuntimeError, match="confirmation is pending"):
+        controller.prepare_request(recovery_request())
     controller.confirm_sensor("bmm150_01", pending.attachment_revision)
 
-    with pytest.raises(RuntimeError, match="native stow clearance"):
-        controller.prepare_request(recovery_request())
+    prepared = controller.prepare_request(recovery_request())
+    assert prepared.command.motion_sensor_id == "bmm150_01"
+    assert not prepared.command.ignore_environment_collisions
+    assert controller.prepare_request(prepared) == prepared
 
 
-def test_recovery_refuses_collision_bypass_and_stale_attachment(tmp_path):
-    controller, _, _, _ = build_controller(tmp_path)
-    controller.confirm_sensor("", controller.snapshot().attachment_revision)
+@pytest.mark.parametrize("sensor_id", ["", "bmm150_01"])
+def test_recovery_refuses_collision_bypass_and_stale_attachment(tmp_path, sensor_id):
+    controller, repository, _, _ = build_controller(tmp_path)
+    if sensor_id:
+        repository.create(sensor_definition(sensor_id))
+        controller.select_sensor(sensor_id)
+    controller.confirm_sensor(sensor_id, controller.snapshot().attachment_revision)
 
     with pytest.raises(ValueError, match="collision checks"):
         controller.prepare_request(recovery_request(ignore_environment_collisions=True))
     with pytest.raises(RuntimeError, match="different attachment"):
-        controller.prepare_request(recovery_request(motion_sensor_id="bmm150_01"))
+        controller.prepare_request(recovery_request(
+            motion_sensor_id=BARE_HAND_MOTION_ID if sensor_id else "bmm150_01",
+        ))
 
 
 def test_first_startup_requires_bare_hand_confirmation(tmp_path):

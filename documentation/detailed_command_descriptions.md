@@ -326,9 +326,9 @@ not establish that the base had stopped.
 - **Category:** System
 - **Description:** Performs a separately requested, guarded arm stow after software-stop reset (`recover_arm`).
 - **Parameters:** None.
-- **Preconditions:** Confirmed stopping, reset software-stop latch, quiet base command sources, confirmed bare-hand attachment, a fresh measured arm pose and enabled environment collision policy are revalidated.
-- **Effects:** Stows the arm without closing the gripper. Recovery is excluded from recording and automatic playback.
-- **Errors:** Recovery with an attached sensor is rejected because its native-stow clearance has not been established. Missing stop, attachment, pose or collision-policy evidence rejects recovery.
+- **Preconditions:** Confirmed stopping, reset software-stop latch, quiet base command sources, the current confirmed attachment, a fresh measured arm pose and enabled environment collision policy are revalidated.
+- **Effects:** Stows the arm with either bare hand or an attached sensor, without closing the gripper. Recovery is excluded from recording and automatic playback.
+- **Errors:** Missing stop, attachment, pose or collision-policy evidence rejects recovery. A request prepared for a different attachment is rejected.
 - **Public interface:** `OperationalIntent.INTENT_RECOVER_ARM` through the normal application command controller.
 
 The former `ESTOP_STATE` / `estop_state` identifier and implicit reset-and-recovery

@@ -513,7 +513,9 @@ def test_explicit_recovery_rejects_missing_current_prerequisites(monkeypatch, fa
     elif failure == "moving":
         base.poll_stop_confirmation.return_value = (False, "base moved")
     elif failure == "attachment":
-        attachment.active_attachment = lambda: ("sensor-with-unproven-stow-clearance", 5)
+        attachment.active_attachment = Mock(
+            side_effect=ValueError("Sensor attachment confirmation is pending"),
+        )
     elif failure == "collision":
         collision.state = lambda: SimpleNamespace(enabled=False)
     elif failure == "pose":
@@ -525,16 +527,20 @@ def test_explicit_recovery_rejects_missing_current_prerequisites(monkeypatch, fa
     arm.stow.assert_not_called()
 
 
-def test_recovery_validation_requires_bare_hand_current_pose_and_collision_policy(monkeypatch):
+@pytest.mark.parametrize("sensor_id", [BARE_HAND_MOTION_ID, "bmm150_01"])
+def test_recovery_validation_accepts_confirmed_attachment_with_current_safety_evidence(
+    monkeypatch, sensor_id,
+):
     resources, arm, base, _clock = resource_harness(monkeypatch)
     resources._stop_confirmed = True
     resources._stop_bases = (base,)
     node = recovery_node(arm)
-    source = SimpleNamespace(active_attachment=lambda: (BARE_HAND_MOTION_ID, 4))
+    source = SimpleNamespace(active_attachment=Mock(return_value=(sensor_id, 4)))
     collision = SimpleNamespace(state=lambda: SimpleNamespace(enabled=True))
     monkeypatch.setattr(resources, "get_probe_surface_source", lambda node: source)
     monkeypatch.setattr(resources, "get_arm_collision_control", lambda node: collision)
     assert resources.validate_recovery(node)[0]
+    source.active_attachment.assert_called_once()
     arm.probe_motion_planner.current_hand_pose.assert_called_once()
     arm.stow.assert_not_called()
 

@@ -389,11 +389,11 @@ pending reset supersedes that reset.
 
 **Recover arm (stow)** is a separate operator action after reset, submitted
 through the normal command controller as `OperationalIntent.INTENT_RECOVER_ARM`.
-It revalidates confirmed stopping, quiet base command sources, current confirmed
-bare-hand attachment, a fresh measured arm pose and enabled environment collision
-checks before stowing. Recovery with an attached sensor is rejected because
-native stow clearance for that sensor is not established. Recovery does not close
-the gripper and is excluded from recording/playback. The former **Reset State**
+It revalidates confirmed stopping, quiet base command sources, the current confirmed
+attachment, a fresh measured arm pose and enabled environment collision
+checks before stowing. Recovery supports both bare hand and an attached sensor.
+Recovery does not close the gripper and is excluded from recording/playback.
+The former **Reset State**
 operation and intent value 6 are retired; callers must request reset and recovery
 separately. The former zero-velocity-only stop intent (value 7) is also retired;
 callers must use the confirmed software-stop protocol.

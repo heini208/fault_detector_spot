@@ -373,7 +373,6 @@ class RobotCommandResources:
     def validate_recovery(self, node):
         """Validate explicit recovery without moving or clearing the latch."""
         from bosdyn.client.frame_helpers import BODY_FRAME_NAME
-        from fault_detector_spot.inspection.model.sensor_models import BARE_HAND_MOTION_ID
         if self.stop_latched or not self._stop_confirmed or not self.execution_idle():
             return False, "Recovery requires an explicitly reset, confirmed software stop"
         if not self.stop_sources_quiet():
@@ -384,9 +383,7 @@ class RobotCommandResources:
                 return False, detail
         try:
             source = self.get_probe_surface_source(node)
-            sensor_id, _revision = source.active_attachment()
-            if sensor_id != BARE_HAND_MOTION_ID:
-                return False, "Recovery stow requires confirmed bare hand; attached-sensor clearance is not proven"
+            source.active_attachment()
             if not self.get_arm_collision_control(node).state().enabled:
                 return False, "Recovery requires environment collision checking enabled"
             arm = self.get_arm_movement_executor(node)
@@ -399,7 +396,7 @@ class RobotCommandResources:
             pose_to_pose_data(pose.pose).validate()
         except Exception as exception:
             return False, f"Recovery validation failed: {exception}"
-        return True, "Fresh stop, bare-hand attachment, pose and collision policy validated"
+        return True, "Fresh stop, confirmed attachment, pose and collision policy validated"
 
     def reset_software_stop(self, clear_ledger_latch):
         """A reset changes admission only; it never submits movement."""

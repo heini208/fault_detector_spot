@@ -106,10 +106,10 @@ never resumes discarded commands, playback or acquisition.
 
 `RECOVER_ARM` (`recover_arm`) is a separate operator action after reset, submitted
 through `OperationalIntent.INTENT_RECOVER_ARM`. It revalidates confirmed stopping,
-quiet base command sources, confirmed bare-hand attachment, a fresh measured arm
-pose and enabled environment collision policy before guarded stow. Attached-sensor
-recovery is rejected; recovery does not close the gripper and cannot be recorded
-or replayed automatically.
+quiet base command sources, the current confirmed attachment, a fresh measured arm
+pose and enabled environment collision policy before guarded stow. Both bare-hand
+and attached-sensor recovery are supported; recovery does not close the gripper
+and cannot be recorded or replayed automatically.
 
 The former `ESTOP_STATE` / `estop_state` identifier is retired and rejected,
 including in historical command examples or recordings. Use the explicit stop,
