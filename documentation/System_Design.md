@@ -300,7 +300,6 @@ The core ROS2 nodes of the Fault Detector Spot system are started using a unifie
     - [`bt_runner`](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fbt_runner.py) (behaviour tree execution node)
     - [`apriltag_node`](https://github.com/christianrauch/apriltag_ros) (AprilTag perception via `apriltag_ros`)
     - `tag_observation_node` (tag fusion, TF resolution, freshness, and state publishing)
-    - `move_close_to_surface_node` (force-guarded surface approach action server)
     - [`record_manager`](..%2Ffault_detector_spot%2Fbehaviour_tree%2Frecord_manager_node.py) (command recording and playback)
     - `micro_ros_agent` (UDP bridge for ESP32 sensor mounts, automatically respawned after failure)
     - `sensor_head_connection` (typed sensor endpoint discovery and attachment-ID matching)
@@ -833,11 +832,11 @@ Current behavior-tree adapters include `ArmGoalBehaviour`,
 `BaseGoalBehaviour`, `ReadyArmBehaviour`, `StowArmBehaviour`,
 `StandUpBehaviour`, and `SitDownBehaviour`.
 
-`ManipulatorMoveCloseToSurfaceAction` is deliberately different. It is a thin
-client for the internal `MoveCloseToSurface` ROS action. Its dedicated server
-process owns continuous depth, force, attachment, and TF state plus the Spot
-robot-command sequence. Tree ticks therefore cannot delay sensor collection or
-create repeated runtime subscriptions.
+`MoveCloseToSurfaceBehaviour` starts, polls, and cancels
+`MoveCloseToSurfaceExecution`. That execution component owns the incremental
+approach and recovery through the shared `ArmMovementExecutor`.
+`RobotCommandResources` supplies shared depth, attachment, arm state, and TF
+sources. Sensor collection and force guarding run independently of tree ticks.
 
 ### 6.3.2 Other Commands (`py_trees.behaviour.Behaviour`)
 
@@ -882,7 +881,7 @@ The exact functionality of each command will become clear either:
 | MOVE_ARM_TO_TAG               | `ArmGoalBehaviour` → `ArmMovementExecutor` |
 | MOVE_BASE_TO_TAG              | `BaseGoalBehaviour` → `BaseMovementExecutor` |
 | MOVE_ARM_RELATIVE             | `ArmGoalBehaviour` → `ArmMovementExecutor` |
-| MOVE_CLOSE_TO_SURFACE         | `ManipulatorMoveCloseToSurfaceAction` → dedicated `MoveCloseToSurface` ROS action server                                                                                                                                                           |
+| MOVE_CLOSE_TO_SURFACE         | `MoveCloseToSurfaceBehaviour` → `MoveCloseToSurfaceExecution` → `ArmMovementExecutor` |
 | MOVE_BASE_RELATIVE            | `BaseGoalBehaviour` → `BaseMovementExecutor` |
 | STAND_UP                      | `StandUpBehaviour` → `BaseMovementExecutor` |
 | SIT_DOWN                      | `SitDownBehaviour` → `BaseMovementExecutor` |

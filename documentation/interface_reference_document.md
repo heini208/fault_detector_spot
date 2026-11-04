@@ -146,20 +146,20 @@ at this one execution boundary. The current backend still uses Spot Cartesian
 pose commands. Arm stop, gripper commands, and native `stow()` are deliberate
 exceptions to the normal planned-motion path.
 
-### 2.2 Internal Close-Surface Action
+### 2.2 Close-Surface Execution
 
-The Behaviour Tree delegates `MOVE_CLOSE_TO_SURFACE` to a dedicated process:
+Submit `OperationalIntent.INTENT_MOVE_CLOSE_TO_SURFACE` through the public
+`fault_detector/application/execute_operation` action
+(`fault_detector_msgs/action/ExecuteOperation`). The application routes the
+intent through `CommandController` and the ROS command transport to the
+Behaviour Tree's `MoveCloseToSurfaceBehaviour`.
 
-- **Action:** `fault_detector/manipulation/move_close_to_surface`
-- **Type:** `fault_detector_msgs/action/MoveCloseToSurface`
-- **Goal:** request ID and positive target probe-to-surface distance
-- **Result:** success flag and terminal detail
-- **Feedback:** execution phase and current detail
-
-The action server owns hand-depth history, camera calibration, end-effector
-force history, attachment state, TF lookup, incremental robot commands, and
-recovery. The Behaviour Tree owns only command selection, result handling, and
-goal cancellation.
+The behaviour starts and polls `MoveCloseToSurfaceExecution`, forwards its
+feedback, and cancels execution when invalidated. The execution component owns
+the incremental approach and recovery through the shared `ArmMovementExecutor`.
+`RobotCommandResources` supplies the shared surface source, arm state source,
+and TF listener; surface observations and force guarding use these existing
+runtime owners.
 
 #### 2.1.1 Example: Simple command (no extra context)
 
