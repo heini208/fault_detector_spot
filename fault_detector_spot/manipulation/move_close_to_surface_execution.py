@@ -578,6 +578,12 @@ class MoveCloseToSurfaceExecution:
                         ArmMovementOutcome.STOP_UNCONFIRMED,
                     )
                 return MoveCloseToSurfaceOutcome.RUNNING
+        if not self.executor.execution_idle:
+            return self._fail_workflow(
+                "Surface recovery prohibited: action termination or physical "
+                "stop is unconfirmed; no return movement was commanded",
+                ArmMovementOutcome.STOP_UNCONFIRMED,
+            )
         current = self._current_hand_pose()
         remaining = self._translation_between(
             current,

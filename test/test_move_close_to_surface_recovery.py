@@ -66,6 +66,12 @@ class FakeExecutor:
         self.guarded_calls = []
         self.probe_calls = []
         self.cancel_count = 0
+        self.goals_settled = True
+        self.stop_confirmed = True
+
+    @property
+    def execution_idle(self):
+        return not self.active and self.goals_settled and self.stop_confirmed
 
     def guarded_probe(self, *args, **kwargs):
         self.guarded_calls.append((args, kwargs))
@@ -182,6 +188,7 @@ def test_contact_search_without_contact_recovers_at_planned_endpoint():
     action._handle_approach_update(
         ArmMovementUpdate(ArmMovementOutcome.SUCCESS, "endpoint reached")
     )
+    executor.active = False
     action._clock = lambda: action._settle_deadline + 1.0
 
     assert action.poll() is MoveCloseToSurfaceOutcome.RUNNING
@@ -431,3 +438,28 @@ def test_recovery_waits_for_cancelled_motion_to_stop_before_moving():
     executor.active = False  # Executor releases ownership only after confirmed stop.
     assert action._update_recovery_prepare() is MoveCloseToSurfaceOutcome.RUNNING
     assert len(executor.probe_calls) == 1
+
+
+@pytest.mark.parametrize("goals_settled,stop_confirmed", [
+    (False, False), (False, True), (True, False),
+])
+def test_inactive_executor_without_stop_proof_never_starts_recovery(
+    goals_settled, stop_confirmed,
+):
+    executor = FakeExecutor(hand_pose=pose(x=0.06))
+    executor.goals_settled = goals_settled
+    executor.stop_confirmed = stop_confirmed
+    action = execution(executor=executor)
+    action._approach_steps = 1
+    action._recovery_hand_pose = pose()
+
+    result = action._handle_approach_update(ArmMovementUpdate(
+        ArmMovementOutcome.GOAL_RESPONSE_TIMEOUT,
+        "Goal acceptance timed out; late delivery remains possible",
+    ))
+
+    assert result is MoveCloseToSurfaceOutcome.FAILURE
+    assert action.failure_outcome is ArmMovementOutcome.STOP_UNCONFIRMED
+    assert "no return movement" in action.feedback_message
+    assert not action.active
+    assert executor.probe_calls == []

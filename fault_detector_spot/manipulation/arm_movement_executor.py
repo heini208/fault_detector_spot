@@ -432,6 +432,17 @@ class ArmMovementExecutor(MovementExecutor):
                     self.guarded_probe_execution,
                 )
 
+    def _motion_admission_error(self):
+        """A new motion needs both action termination and confirmed stopping."""
+        if self.active or self._shutdown_started:
+            return self._busy_update()
+        if not self.execution_idle:
+            return ArmMovementUpdate(
+                ArmMovementOutcome.STOP_UNCONFIRMED,
+                "Arm action termination or physical stop is unconfirmed",
+            )
+        return None
+
     def relative(
         self,
         command,
@@ -449,8 +460,9 @@ class ArmMovementExecutor(MovementExecutor):
 
     def _commanded_pose(self, command, absolute, speed, force_threshold_n):
         with self._execution_lock:
-            if self.active or self._shutdown_started:
-                return self._busy_update()
+            admission_error = self._motion_admission_error()
+            if admission_error is not None:
+                return admission_error
             self._retry_target = None
             return self._start_commanded_pose(command, absolute, speed, force_threshold_n)
 
@@ -558,8 +570,9 @@ class ArmMovementExecutor(MovementExecutor):
             raise ValueError("Probe checkpoint must be expressed in odom")
         pose_to_pose_data(checkpoint.target.pose).validate()
         with self._execution_lock:
-            if self.active or self._shutdown_started:
-                return self._busy_update()
+            admission_error = self._motion_admission_error()
+            if admission_error is not None:
+                return admission_error
             target = ResolvedProbeTarget(deepcopy(checkpoint.target), checkpoint.sensor_id)
             self._tag_accuracy = {
                 "tolerance": CHECKPOINT_POSITION_TOLERANCE_M,
@@ -599,8 +612,9 @@ class ArmMovementExecutor(MovementExecutor):
                 force_threshold_n,
             )
         with self._execution_lock:
-            if self.active or self._shutdown_started:
-                return self._busy_update()
+            admission_error = self._motion_admission_error()
+            if admission_error is not None:
+                return admission_error
             tolerance = float(command.tag_position_tolerance_m)
             if not math.isfinite(tolerance) or tolerance <= 0:
                 return ArmMovementUpdate(
@@ -625,8 +639,9 @@ class ArmMovementExecutor(MovementExecutor):
     def _start_precision_movement(self, command, resolve_target, speed, force_threshold_n):
         """Use the existing post-motion verifier for an opt-in frozen odom goal."""
         with self._execution_lock:
-            if self.active or self._shutdown_started:
-                return self._busy_update()
+            admission_error = self._motion_admission_error()
+            if admission_error is not None:
+                return admission_error
             if type(command.precision_mode) is not bool:
                 raise ValueError("Precision mode must be a boolean")
             tolerance = float(command.tag_position_tolerance_m)
@@ -903,8 +918,9 @@ class ArmMovementExecutor(MovementExecutor):
                 ArmMovementOutcome.EXECUTION_ERROR,
                 "Surface orientation source is not configured",
             )
-        if self.active or self._shutdown_started:
-            return self._busy_update()
+        admission_error = self._motion_admission_error()
+        if admission_error is not None:
+            return admission_error
 
         started_at = self._monotonic_clock()
         self._surface_orientation_sensor_id = sensor_id
@@ -993,8 +1009,9 @@ class ArmMovementExecutor(MovementExecutor):
         conversion and dispatch, with up to two replans before any execution.
         """
         with self._execution_lock:
-            if self.active or self._shutdown_started:
-                return self._busy_update()
+            admission_error = self._motion_admission_error()
+            if admission_error is not None:
+                return admission_error
             if type(ignore_environment_collisions) is not bool:
                 raise TypeError("Environment collision bypass must be a boolean")
             error = self._guarded_probe_precondition_error(cartesian_path)
@@ -1070,8 +1087,9 @@ class ArmMovementExecutor(MovementExecutor):
         """Ensure the arm is deployed, then start one probe operation."""
         if not callable(start_probe):
             raise TypeError("Ready probe requires a callable probe starter")
-        if self.active or self._shutdown_started:
-            return self._busy_update()
+        admission_error = self._motion_admission_error()
+        if admission_error is not None:
+            return admission_error
 
         self._active = True
         self._operation = _ArmOperation.READY_WAIT
@@ -1113,6 +1131,9 @@ class ArmMovementExecutor(MovementExecutor):
                 "Probe continuation has no active arm operation",
             )
         else:
+            admission_error = self._motion_admission_error()
+            if admission_error is not None:
+                return admission_error
             self._active = True
             self._operation = _ArmOperation.MOVEMENT
 
@@ -1393,8 +1414,9 @@ class ArmMovementExecutor(MovementExecutor):
         speed=None,
     ) -> ArmMovementUpdate:
         """Move to the fixed body-frame ready pose at the configured ready speed."""
-        if self.active or self._shutdown_started:
-            return self._busy_update()
+        admission_error = self._motion_admission_error()
+        if admission_error is not None:
+            return admission_error
         self._active = True
         self._operation = _ArmOperation.PREPARE
         self._operation_speed = (
@@ -1405,8 +1427,9 @@ class ArmMovementExecutor(MovementExecutor):
     def toggle_gripper(self) -> ArmMovementUpdate:
         """Toggle toward the opposite endpoint of the measured opening."""
         with self._execution_lock:
-            if self.active or self._shutdown_started:
-                return self._busy_update()
+            admission_error = self._motion_admission_error()
+            if admission_error is not None:
+                return admission_error
             percentage = (
                 self.arm_state_source.gripper_open_percentage()
                 if self.arm_state_source is not None else None
@@ -1422,8 +1445,9 @@ class ArmMovementExecutor(MovementExecutor):
     def close_gripper(self) -> ArmMovementUpdate:
         """Request closing explicitly without guessing the current position."""
         with self._execution_lock:
-            if self.active or self._shutdown_started:
-                return self._busy_update()
+            admission_error = self._motion_admission_error()
+            if admission_error is not None:
+                return admission_error
             return self._start_gripper(0.0)
 
     def _start_gripper(self, open_fraction):
@@ -1432,8 +1456,9 @@ class ArmMovementExecutor(MovementExecutor):
 
     def stow(self) -> ArmMovementUpdate:
         """Return to the fixed ready pose and confirm stop before native stow."""
-        if self.active or self._shutdown_started:
-            return self._busy_update()
+        admission_error = self._motion_admission_error()
+        if admission_error is not None:
+            return admission_error
         self._active = True
         self._operation = _ArmOperation.STOW
         return self._advance_stow_start()
@@ -1443,6 +1468,11 @@ class ArmMovementExecutor(MovementExecutor):
         with self._execution_lock:
             if self.active or self._shutdown_started:
                 return self._busy_update()
+            if not self.goals_settled():
+                return ArmMovementUpdate(
+                    ArmMovementOutcome.STOP_UNCONFIRMED,
+                    "Arm action termination must precede physical stop confirmation",
+                )
             self._active = True
             self._operation = _ArmOperation.CONFIRM_STOP
             return self._begin_stop_confirmation()
