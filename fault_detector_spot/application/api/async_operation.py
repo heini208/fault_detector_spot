@@ -1,4 +1,4 @@
-"""Bound accepted work before an executor schedules its yielding callback."""
+"""Track accepted commands and exclude conflicting setup workflows."""
 
 from dataclasses import dataclass
 from threading import RLock
@@ -8,12 +8,13 @@ from threading import RLock
 class _Reservation:
     context_id: str
     lane: str
+    queued_command: bool = False
     claimed: bool = False
     cancelled: bool = False
 
 
 class OperationAdmission:
-    """Reserve capacity by request, context and physical lane until completion."""
+    """Keep accepted ownership until completion, sharing only queued commands."""
 
     def __init__(self, limit=1):
         if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
@@ -24,19 +25,40 @@ class OperationAdmission:
         self._closed = False
 
     def reserve(self, key, *, context_id="", lane=""):
+        """Reserve exclusive workflow capacity by context and physical lane."""
+        return self._reserve(key, context_id, lane, queued_command=False)
+
+    def reserve_command(self, key, *, context_id=""):
+        """Track a command whose execution is serialized by CommandController.
+
+        Commands may share a context and wait in the controller's queue, but
+        setup workflows remain exclusive with all accepted commands.
+        """
+        return self._reserve(key, context_id, "physical", queued_command=True)
+
+    def _reserve(self, key, context_id, lane, *, queued_command):
         with self._lock:
             if self._closed:
                 return False
             if key in self._reservations:
                 item = self._reservations[key]
-                return (item.context_id, item.lane) == (context_id, lane)
-            if len(self._reservations) >= self._limit:
-                return False
-            if any((context_id and context_id == item.context_id)
-                   or (lane and lane == item.lane)
-                   for item in self._reservations.values()):
-                return False
-            self._reservations[key] = _Reservation(context_id, lane)
+                return (item.context_id, item.lane, item.queued_command) == (
+                    context_id, lane, queued_command,
+                )
+            if queued_command:
+                if any(not item.queued_command for item in self._reservations.values()):
+                    return False
+            else:
+                if len(self._reservations) >= self._limit:
+                    return False
+                if any(item.queued_command
+                       or (context_id and context_id == item.context_id)
+                       or (lane and lane == item.lane)
+                       for item in self._reservations.values()):
+                    return False
+            self._reservations[key] = _Reservation(
+                context_id, lane, queued_command=queued_command,
+            )
             return True
 
     def claim(self, key):

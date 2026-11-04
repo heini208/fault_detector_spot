@@ -7,13 +7,18 @@ from unittest.mock import Mock
 import pytest
 from builtin_interfaces.msg import Time
 from fault_detector_msgs.action import ExecuteOperation
-from fault_detector_msgs.msg import ApplicationCommandState
+from fault_detector_msgs.msg import ApplicationCommandState, OperationalIntent
 from rclpy.action import GoalResponse
 
 from fault_detector_spot.application.api.application_api_node import ApplicationApiNode
 from fault_detector_spot.application.api.async_operation import OperationAdmission
 from fault_detector_spot.application.api.shutdown_callbacks import ShutdownCallbackActivity
-from fault_detector_spot.application.controllers.command_controller import CommandControllerState
+from fault_detector_spot.application.controllers.application_controller import ApplicationController
+from fault_detector_spot.application.controllers.command_controller import (
+    CommandController,
+    CommandControllerState,
+    CommandExecutionStatus,
+)
 
 
 @pytest.fixture
@@ -40,6 +45,105 @@ def finish(coroutine):
     with pytest.raises(StopIteration) as completed:
         coroutine.send(None)
     return completed.value.value
+
+
+@pytest.fixture
+def command_rig(rig):
+    node, _, _ = rig
+    dispatched = []
+    node.command_controller = CommandController(dispatch_request=dispatched.append)
+    node.application_controller = ApplicationController(node.command_controller)
+    node.application_controller.add_status_listener(node._handle_application_status)
+    return node, dispatched
+
+
+def start_operation(node, intent):
+    handle = Mock(request=ExecuteOperation.Goal(
+        client_id='client', context_id='context',
+        intent=OperationalIntent(intent=intent),
+    ), is_cancel_requested=False)
+    assert node._accept_operation(handle.request) == GoalResponse.ACCEPT
+    callback = node._execute_operation(handle)
+    waiting = callback.send(None)
+    assert not waiting.done()
+    return handle, callback, waiting
+
+
+def report_execution(node, request_id, state, *, sequence=1, buffered_count=0):
+    assert node.command_controller.handle_execution_status(CommandExecutionStatus(
+        request_id=request_id, state=state, status_sequence=sequence,
+        execution_instance_id='test-owner', buffered_command_count=buffered_count,
+        execution_idle=state is CommandControllerState.SUCCEEDED,
+    ))
+
+
+def test_operations_buffer_while_moving_and_dispatch_in_order(command_rig):
+    node, dispatched = command_rig
+    first = start_operation(node, OperationalIntent.INTENT_STAND_UP)
+    first_id = node.command_controller.active_request_id
+    report_execution(node, first_id, CommandControllerState.RUNNING)
+
+    second = start_operation(node, OperationalIntent.INTENT_READY_ARM)
+    third = start_operation(node, OperationalIntent.INTENT_STOW_ARM)
+    second_id, third_id = node.command_controller.queued_request_ids
+    assert [request.request_id for request in dispatched] == [first_id]
+    assert third[0].publish_feedback.call_args.args[0].state.state == (
+        ApplicationCommandState.STATE_QUEUED
+    )
+    assert third[0].publish_feedback.call_args.args[0].state.buffered_command_count == 2
+
+    report_execution(node, first_id, CommandControllerState.SUCCEEDED,
+                     sequence=2, buffered_count=1)
+    assert not first[2].done()
+    assert [request.request_id for request in dispatched] == [first_id]
+
+    report_execution(node, first_id, CommandControllerState.SUCCEEDED, sequence=3)
+    assert finish(first[1]).state.state == ApplicationCommandState.STATE_SUCCEEDED
+    assert [request.request_id for request in dispatched] == [first_id, second_id]
+    assert node.command_controller.queued_request_ids == (third_id,)
+    assert not second[2].done() and not third[2].done()
+
+    report_execution(node, second_id, CommandControllerState.SUCCEEDED)
+    finish(second[1])
+    assert [request.request_id for request in dispatched] == [first_id, second_id, third_id]
+    report_execution(node, third_id, CommandControllerState.SUCCEEDED)
+    finish(third[1])
+    assert node._operation_admission.shutdown_status()[0]
+    assert not node._executions
+    for handle, _, _ in (first, second, third):
+        handle.succeed.assert_called_once()
+
+
+def test_cancelling_buffered_operation_preserves_active_and_other_queued_operations(command_rig):
+    node, dispatched = command_rig
+    first = start_operation(node, OperationalIntent.INTENT_STAND_UP)
+    first_id = node.command_controller.active_request_id
+    report_execution(node, first_id, CommandControllerState.RUNNING)
+    second = start_operation(node, OperationalIntent.INTENT_READY_ARM)
+    third = start_operation(node, OperationalIntent.INTENT_STOW_ARM)
+    second_id, third_id = node.command_controller.queued_request_ids
+
+    second[0].is_cancel_requested = True
+    node._accept_cancellation(second[0])
+    assert finish(second[1]).state.state == ApplicationCommandState.STATE_CANCELLED
+    second[0].canceled.assert_called_once()
+    assert node.command_controller.active_request_id == first_id
+    assert node.command_controller.queued_request_ids == (third_id,)
+    assert [request.request_id for request in dispatched] == [first_id]
+    assert not node.command_controller.software_stop_status.latched
+    assert not first[2].done() and not third[2].done()
+    assert second_id not in node._executions
+    assert not node._operation_admission.shutdown_status()[0]
+    assert not node._operation_admission.cancel_requested(id(first[0].request))
+    assert not node._operation_admission.cancel_requested(id(third[0].request))
+    assert not node._operation_admission.reserve('setup', context_id='setup', lane='physical')
+
+    report_execution(node, first_id, CommandControllerState.SUCCEEDED, sequence=2)
+    finish(first[1])
+    assert [request.request_id for request in dispatched] == [first_id, third_id]
+    report_execution(node, third_id, CommandControllerState.SUCCEEDED)
+    finish(third[1])
+    assert node._operation_admission.shutdown_status()[0]
 
 
 def test_cancellation_during_preparation_survives_ros_cancel_transition(rig):

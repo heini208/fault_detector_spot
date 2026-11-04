@@ -413,8 +413,8 @@ class ApplicationApiNode(Node):
                 f"Rejected operational intent: {exception}"
             )
             return GoalResponse.REJECT
-        return (GoalResponse.ACCEPT if self._operation_admission.reserve(
-            id(goal_request), context_id=goal_request.context_id.strip(), lane="physical",
+        return (GoalResponse.ACCEPT if self._operation_admission.reserve_command(
+            id(goal_request), context_id=goal_request.context_id.strip(),
         ) else GoalResponse.REJECT)
 
     def _accept_cancellation(self, goal_handle):

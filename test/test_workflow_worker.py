@@ -131,6 +131,74 @@ def test_context_and_lane_are_exclusive_even_with_spare_capacity():
     worker.close()
 
 
+def test_commands_share_admission_and_context_without_consuming_workflow_capacity():
+    admission = OperationAdmission(1)
+    assert admission.reserve_command('first', context_id='manual')
+    assert admission.claim('first')
+    assert admission.reserve_command('second', context_id='manual')
+    assert admission.reserve_command('third', context_id='other-client')
+    assert admission.reserve_command('second', context_id='manual')
+    assert not admission.reserve_command('second', context_id='wrong-context')
+    assert not admission.reserve('second', context_id='manual', lane='physical')
+
+
+@pytest.mark.parametrize('command_first', [False, True])
+def test_queued_commands_and_workflows_exclude_each_other(command_first):
+    admission = OperationAdmission(2)
+
+    def command():
+        return admission.reserve_command('command', context_id='manual')
+
+    def workflow():
+        return admission.reserve('capture', context_id='setup', lane='probe')
+
+    first, second = (command, workflow) if command_first else (workflow, command)
+    assert first()
+    assert not second()
+    admission.release('command' if command_first else 'capture')
+    assert second()
+
+
+def test_command_context_cancellation_retains_claimed_and_other_contexts():
+    admission = OperationAdmission(1)
+    assert admission.reserve_command('active', context_id='manual')
+    assert admission.claim('active')
+    assert admission.reserve_command('pending', context_id='manual')
+    assert admission.reserve_command('other', context_id='other-client')
+
+    admission.cancel_context('manual')
+
+    assert admission.cancel_requested('active')
+    assert not admission.claim('pending')
+    assert not admission.cancel_requested('other')
+    admission.release_pending('active')
+    admission.release_pending('other')
+    assert not admission.shutdown_status()[0]
+    assert not admission.reserve('capture')
+    admission.release('active')
+    assert admission.shutdown_status()[0]
+    assert admission.reserve('capture')
+
+
+def test_command_shutdown_tracks_every_accepted_callback_until_completion():
+    admission = OperationAdmission(1)
+    assert admission.reserve_command('active', context_id='manual')
+    assert admission.claim('active')
+    assert admission.reserve_command('pending', context_id='manual')
+
+    admission.close()
+
+    assert not admission.reserve_command('late', context_id='manual')
+    assert admission.cancel_requested('active')
+    assert admission.cancel_requested('pending')
+    assert not admission.claim('pending')
+    assert not admission.shutdown_status()[0]
+    admission.release('active')
+    assert not admission.shutdown_status()[0]
+    admission.release_pending('pending')
+    assert admission.shutdown_status()[0]
+
+
 def test_worker_exception_has_one_terminal_result_and_releases_capacity():
     worker = OperationAdmission(1)
     assert worker.reserve('request', context_id='context', lane='probe')
