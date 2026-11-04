@@ -342,6 +342,11 @@ class SensorAttachmentController:
                 ))
         requires_automatic_binding = (
             command.command_id in _AUTOMATIC_SENSOR_COMMANDS
+            # A saved observation return target is a tag-relative probe move.
+            or (command.tag is not None and command.command_id in {
+                CommandID.MOVE_CLOSE_TO_SURFACE,
+                CommandID.MEASURE_SENSOR_TIP_DISTANCE,
+            })
         )
         if (
             command.command_id not in _PLANNED_ARM_COMMANDS

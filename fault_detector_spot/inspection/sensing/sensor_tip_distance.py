@@ -8,6 +8,7 @@ from scipy.spatial import ConvexHull, QhullError
 from fault_detector_spot.inspection.geometry.depth_point_cloud import (
     camera_intrinsics,
     create_organized_depth_point_cloud,
+    depth_below_minimum,
 )
 from fault_detector_spot.inspection.geometry.pose import relative_pose
 from fault_detector_spot.inspection.geometry.sensor_tip_observation import (
@@ -25,6 +26,7 @@ from fault_detector_spot.inspection.sensing.live_surface_plane import (
     SURFACE_ORIENTATION_MAXIMUM_FIT_RADIUS_PX,
     SURFACE_ORIENTATION_MINIMUM_SAMPLE_COUNT,
     SURFACE_ORIENTATION_WINDOW_RADIUS_PX,
+    estimate_live_surface_normal,
 )
 from fault_detector_spot.inspection.setup.reference_view_depth_projection import (
     ImageRegion,
@@ -46,9 +48,14 @@ PROBE_AXIS_SEARCH_RADIUS_M = 0.025
 class SensorTipTargetOutsideView(ValueError):
     """A nearby plane can guide observation, but is not a target measurement."""
 
-    def __init__(self, axis_distance_m, detail):
+    def __init__(self, axis_distance_m, detail, *, observation_pixel=None):
         super().__init__(detail)
         self.axis_distance_m = axis_distance_m
+        self.observation_pixel = observation_pixel
+
+
+class SensorTipTargetUnavailable(ValueError):
+    """Local depth cannot establish the target, but another view may help."""
 
 
 def measure_sensor_tip_distance(
@@ -72,7 +79,9 @@ def measure_sensor_tip_distance(
         camera_info, (depth_image.width, depth_image.height), "Depth CameraInfo",
     )
     cloud = create_organized_depth_point_cloud(depth_image, camera_info)
-    center = _nearest_axis_depth_pixel(cloud, reference_probe_pose, camera_pose_odom)
+    center = _nearest_axis_depth_pixel(
+        cloud, reference_probe_pose, camera_pose_odom, intrinsics,
+    )
     fit_radius = SURFACE_ORIENTATION_WINDOW_RADIUS_PX
     recentered = False
     while True:
@@ -82,63 +91,38 @@ def measure_sensor_tip_distance(
             point_cloud=cloud,
             rgb_size=(int(depth_image.width), int(depth_image.height)),
         )
-        if projected.depth_m < MINIMUM_SURFACE_ORIENTATION_CAMERA_DISTANCE_M:
-            raise ValueError(
-                "Sensor-tip target is too close for reliable depth: "
+        if depth_below_minimum(projected.depth_m, MINIMUM_SURFACE_ORIENTATION_CAMERA_DISTANCE_M):
+            raise SensorTipTargetUnavailable(
+                "Depth return near probe +X is too close for reliable measurement: "
                 f"camera distance {projected.depth_m:.3f} m, minimum "
-                f"{MINIMUM_SURFACE_ORIENTATION_CAMERA_DISTANCE_M:.3f} m"
+                f"{MINIMUM_SURFACE_ORIENTATION_CAMERA_DISTANCE_M:.3f} m "
+                f"at pixel ({projected.sampled_pixel.u}, {projected.sampled_pixel.v})"
             )
-        estimate = estimate_surface_normal(
-            projected, depth_image, camera_info,
-            neighborhood_radius_px=fit_radius,
-            maximum_neighborhood_radius_px=SURFACE_ORIENTATION_MAXIMUM_FIT_RADIUS_PX,
-            minimum_sample_count=SURFACE_ORIENTATION_MINIMUM_SAMPLE_COUNT,
-            maximum_plane_rmse_m=DEFAULT_DEPTH_PLANE_TOLERANCE_M,
-            minimum_tangent_spread_m=0.003,
-            point_cloud=cloud,
-            neighborhood_center_pixel=center,
-        )
+        try:
+            estimate = estimate_surface_normal(
+                projected, depth_image, camera_info,
+                neighborhood_radius_px=fit_radius,
+                maximum_neighborhood_radius_px=SURFACE_ORIENTATION_MAXIMUM_FIT_RADIUS_PX,
+                minimum_sample_count=SURFACE_ORIENTATION_MINIMUM_SAMPLE_COUNT,
+                maximum_plane_rmse_m=DEFAULT_DEPTH_PLANE_TOLERANCE_M,
+                minimum_tangent_spread_m=0.003,
+                point_cloud=cloud,
+                neighborhood_center_pixel=center,
+            )
+        except ValueError as error:
+            raise SensorTipTargetUnavailable(str(error)) from error
         camera_plane = estimate.surface_plane_camera
         if camera_plane.signed_distance(projected.point_camera) > DEFAULT_DEPTH_PLANE_TOLERANCE_M:
-            raise ValueError("Closest probe-axis depth is foreground of the fitted plane")
-        plane = transform_surface_plane(
-            camera_plane, relative_pose(reference_probe_pose, camera_pose_odom), "probe",
-        ).oriented_toward(Vector3Data.zero())
-        distance = plane.signed_distance(Vector3Data.zero())
-        if not math.isfinite(distance) or plane.normal.x >= -1e-6:
-            raise ValueError(
-                "Measured target plane does not intersect forward probe +X: "
-                f"normal_x={plane.normal.x:+.4f}, distance={distance:.3f} m, "
-                f"camera depth={projected.depth_m:.3f} m at "
-                f"pixel ({projected.sampled_pixel.u}, {projected.sampled_pixel.v})"
-            )
-        axis_distance = -distance / plane.normal.x
-        if not 0.003 <= axis_distance <= 0.50:
-            raise ValueError(
-                f"Measured sensor-tip target is outside the 0.003–0.500 m range: {axis_distance:.3f} m"
-            )
-        if (expected_distance_m is not None
-                and abs(axis_distance - expected_distance_m) > MAXIMUM_TARGET_DISTANCE_MISMATCH_M):
-            raise ValueError(
-                "Measured surface does not match the intended sensor-tip target: "
-                f"axis distance {axis_distance:.3f} m, expected {expected_distance_m:.3f} m; "
-                f"maximum difference {MAXIMUM_TARGET_DISTANCE_MISMATCH_M:.3f} m"
-            )
+            raise SensorTipTargetUnavailable("Closest probe-axis depth is foreground of the fitted plane")
+        plane, distance, axis_distance = _probe_target_geometry(
+            camera_plane, projected, reference_probe_pose, camera_pose_odom, expected_distance_m,
+        )
 
         intersection_camera = target_camera_point(
             reference_probe_pose, camera_pose_odom, axis_distance,
         )
         iu, iv = project_camera_point(intersection_camera, intrinsics)
         intersection_pixel = ImagePoint(u=int(round(iu)), v=int(round(iv)))
-        # A nearby visible plane may propose a camera move, but must never
-        # become a measurement of an unseen contact region. Bound even this
-        # proposal by its distance from actual fitted support.
-        extension = float(np.linalg.norm(plane.point_array() - [axis_distance, 0.0, 0.0]))
-        if extension > MAXIMUM_OBSERVATION_PLANE_EXTENSION_M:
-            raise ValueError(
-                "Visible surface is too far from probe +X to locate its target: "
-                f"{extension:.3f} m > {MAXIMUM_OBSERVATION_PLANE_EXTENSION_M:.3f} m"
-            )
         margin = TARGET_SUPPORT_RADIUS_PX
         if not (margin <= intersection_pixel.u < cloud.width - margin
                 and margin <= intersection_pixel.v < cloud.height - margin):
@@ -146,9 +130,12 @@ def measure_sensor_tip_distance(
                 axis_distance,
                 "Measured probe-axis target patch is outside the camera image",
             )
-        support_ratio = _target_patch(
-            cloud, intersection_pixel, projected_pixel=(iu, iv), camera_plane=camera_plane,
-        )
+        try:
+            support_ratio = _target_patch(
+                cloud, intersection_pixel, projected_pixel=(iu, iv), camera_plane=camera_plane,
+            )
+        except ValueError as error:
+            raise SensorTipTargetUnavailable(str(error)) from error
         radius = estimate.neighborhood_radius_px
         required_radius = math.ceil(
             math.hypot(iu - center.u, iv - center.v) + TARGET_SUPPORT_RADIUS_PX,
@@ -163,7 +150,7 @@ def measure_sensor_tip_distance(
                 fit_radius = SURFACE_ORIENTATION_WINDOW_RADIUS_PX
                 recentered = True
                 continue
-            raise ValueError("Measured probe-axis intersection lies outside the observed target patch")
+            raise SensorTipTargetUnavailable("Measured probe-axis intersection lies outside the observed target patch")
         # Include the actual supported intersection in the local plane fit.
         fit_radius = required_radius
     x0, y0 = max(0, center.u - radius), max(0, center.v - radius)
@@ -182,12 +169,71 @@ def measure_sensor_tip_distance(
     )
 
 
-def _nearest_axis_depth_pixel(cloud, reference_probe_pose, camera_pose_odom):
+def sensor_tip_observation_hint(
+    depth_image, camera_info, reference_probe_pose, camera_pose_odom, expected_distance_m=None,
+):
+    """Locate a supported camera patch to inspect an unresolved tip target.
+
+    The neighboring plane supplies only an observation direction. Its
+    extrapolated contact is never returned as a distance measurement.
+    """
+    estimate = estimate_live_surface_normal(depth_image, camera_info)
+    _, _, axis_distance = _probe_target_geometry(
+        estimate.surface_plane_camera, estimate.projected_point,
+        reference_probe_pose, camera_pose_odom, expected_distance_m,
+    )
+    cloud = create_organized_depth_point_cloud(depth_image, camera_info)
+    pixel = estimate.projected_point.sampled_pixel
+    _target_patch(cloud, pixel, camera_plane=estimate.surface_plane_camera)
+    return axis_distance, pixel
+
+
+def _probe_target_geometry(
+    camera_plane, projected, reference_probe_pose, camera_pose_odom, expected_distance_m,
+):
+    """Share target-range and bounded plane-extension checks with view hints."""
+    if expected_distance_m is not None and (
+        not math.isfinite(expected_distance_m) or expected_distance_m <= 0.0
+    ):
+        raise ValueError("Expected sensor-tip distance must be positive and finite")
+    plane = transform_surface_plane(
+        camera_plane, relative_pose(reference_probe_pose, camera_pose_odom), "probe",
+    ).oriented_toward(Vector3Data.zero())
+    distance = plane.signed_distance(Vector3Data.zero())
+    if not math.isfinite(distance) or plane.normal.x >= -1e-6:
+        raise ValueError(
+            "Measured target plane does not intersect forward probe +X: "
+            f"normal_x={plane.normal.x:+.4f}, distance={distance:.3f} m, "
+            f"camera depth={projected.depth_m:.3f} m at "
+            f"pixel ({projected.sampled_pixel.u}, {projected.sampled_pixel.v})"
+        )
+    axis_distance = -distance / plane.normal.x
+    if not 0.003 <= axis_distance <= 0.50:
+        raise ValueError(
+            f"Measured sensor-tip target is outside the 0.003–0.500 m range: {axis_distance:.3f} m"
+        )
+    if (expected_distance_m is not None
+            and abs(axis_distance - expected_distance_m) > MAXIMUM_TARGET_DISTANCE_MISMATCH_M):
+        raise ValueError(
+            "Measured surface does not match the intended sensor-tip target: "
+            f"axis distance {axis_distance:.3f} m, expected {expected_distance_m:.3f} m; "
+            f"maximum difference {MAXIMUM_TARGET_DISTANCE_MISMATCH_M:.3f} m"
+        )
+    extension = float(np.linalg.norm(plane.point_array() - [axis_distance, 0.0, 0.0]))
+    if extension > MAXIMUM_OBSERVATION_PLANE_EXTENSION_M:
+        raise ValueError(
+            "Visible surface is too far from probe +X to locate its target: "
+            f"{extension:.3f} m > {MAXIMUM_OBSERVATION_PLANE_EXTENSION_M:.3f} m"
+        )
+    return plane, distance, axis_distance
+
+
+def _nearest_axis_depth_pixel(cloud, reference_probe_pose, camera_pose_odom, intrinsics):
     """Locate measured support nearest the forward ray, including near edges.
 
-    The distance is learned from depth. Foreground returns are not filtered
-    by the reliable camera range: if chosen, the subsequent minimum-depth
-    check rejects them rather than looking through them at a farther wall.
+    Near returns away from the ray can be gripper pixels. Exclude them only
+    when measured depth demonstrates that the ray is clear at their depth.
+    Keep the original cloud for target occlusion and local support checks.
     """
     rows, columns = np.nonzero(cloud.valid_mask)
     points = cloud.points_camera[rows, columns]
@@ -200,6 +246,9 @@ def _nearest_axis_depth_pixel(cloud, reference_probe_pose, camera_pose_odom):
     candidates = np.flatnonzero(
         (axial >= 0.003) & (axial <= 0.50)
         & (radial_squared <= MAXIMUM_OBSERVATION_PLANE_EXTENSION_M ** 2)
+    )
+    candidates = _exclude_off_axis_near_returns(
+        cloud, rows, columns, points, origin, direction, candidates, intrinsics,
     )
     if not len(candidates):
         raise ValueError("No measured depth near forward probe +X in the 0.003–0.500 m range")
@@ -214,6 +263,65 @@ def _nearest_axis_depth_pixel(cloud, reference_probe_pose, camera_pose_odom):
         ]
     index = candidates[np.argmin(radial_squared[candidates])]
     return ImagePoint(u=int(columns[index]), v=int(rows[index]))
+
+
+def _exclude_off_axis_near_returns(
+    cloud, rows, columns, points, origin, direction, candidates, intrinsics,
+):
+    """Require visible free space at a near return's own probe-axis depth.
+
+    Camera/probe parallax means a nearer obstruction can project somewhere
+    other than the final wall target. An unknown or occluded near footprint
+    must therefore remain blocking even if the farther wall is visible.
+    """
+    near = candidates[depth_below_minimum(
+        points[candidates, 2], MINIMUM_SURFACE_ORIENTATION_CAMERA_DISTANCE_M,
+    )]
+    if not len(near) or direction[2] <= 1e-6:
+        return candidates
+    depth = points[near, 2]
+    axis_distance = (depth - origin[2]) / direction[2]
+    axis_points = origin + axis_distance[:, None] * direction
+    fx, fy, cx, cy = intrinsics
+    u = fx * axis_points[:, 0] / depth + cx
+    v = fy * axis_points[:, 1] / depth + cy
+    radius = TARGET_SUPPORT_RADIUS_PX
+    eligible = (
+        np.isfinite(u) & np.isfinite(v)
+        & (axis_distance >= 0.003) & (axis_distance <= 0.50)
+        & (u >= radius) & (u < cloud.width - radius - 1)
+        & (v >= radius) & (v < cloud.height - radius - 1)
+    )
+    near, depth, u, v = near[eligible], depth[eligible], u[eligible], v[eligible]
+    center_u, center_v = np.rint(u).astype(int), np.rint(v).astype(int)
+    off_patch = ((np.abs(columns[near] - center_u) > radius)
+                 | (np.abs(rows[near] - center_v) > radius))
+    near, depth, u, v = near[off_patch], depth[off_patch], u[off_patch], v[off_patch]
+    center_u, center_v = center_u[off_patch], center_v[off_patch]
+    keep = np.ones(len(points), dtype=bool)
+    # Many near pixels share one projected footprint. Check its measured
+    # support once per image location instead of fitting every near pixel.
+    keys = center_v * cloud.width + center_u
+    for key in np.unique(keys):
+        group = np.flatnonzero(keys == key)
+        first, last = group[np.argmin(depth[group])], group[np.argmax(depth[group])]
+        center = ImagePoint(u=int(center_u[first]), v=int(center_v[first]))
+        patch = np.s_[center.v-radius:center.v+radius+1, center.u-radius:center.u+radius+1]
+        observed = cloud.depth_m[patch][cloud.valid_mask[patch]]
+        if (not len(observed)
+                or depth_below_minimum(np.min(observed), MINIMUM_SURFACE_ORIENTATION_CAMERA_DISTANCE_M)
+                or np.min(observed) <= depth[last] + DEFAULT_DEPTH_PLANE_TOLERANCE_M):
+            continue
+        try:
+            # The projected probe ray is a line. Enclosing both endpoints
+            # encloses every candidate projection within this footprint.
+            _target_patch(cloud, center, projected_pixel=(u[first], v[first]))
+            if last != first:
+                _target_patch(cloud, center, projected_pixel=(u[last], v[last]))
+        except ValueError:
+            continue
+        keep[near[group]] = False
+    return candidates[keep[candidates]]
 
 
 def depth_frame_id(depth_image, camera_info):

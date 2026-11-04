@@ -42,8 +42,10 @@ from fault_detector_spot.inspection.sensing.live_surface_distance import (
 from fault_detector_spot.inspection.sensing.sensor_tip_distance import (
     depth_frame_id,
     measure_sensor_tip_distance,
+    sensor_tip_observation_hint,
     TARGET_SUPPORT_RADIUS_PX,
     SensorTipTargetOutsideView,
+    SensorTipTargetUnavailable,
 )
 from fault_detector_spot.shared.ros.qos_profiles import APPLICATION_STATE_QOS
 from fault_detector_spot.shared.ros.tf_transforms import lookup_pose_data
@@ -251,10 +253,24 @@ class ProbeSurfaceSource(RuntimeSource):
         )
         translation = Vector3Data.zero()
         try:
-            measure_sensor_tip_distance(
-                depth_image, camera_info, reference_probe_pose,
-                camera_pose, expected_distance_m,
-            )
+            try:
+                measure_sensor_tip_distance(
+                    depth_image, camera_info, reference_probe_pose,
+                    camera_pose, expected_distance_m,
+                )
+            except SensorTipTargetUnavailable as target_error:
+                try:
+                    axis_distance, observed_pixel = sensor_tip_observation_hint(
+                        depth_image, camera_info, reference_probe_pose,
+                        camera_pose, expected_distance_m,
+                    )
+                except ValueError as hint_error:
+                    raise target_error from hint_error
+                raise SensorTipTargetOutsideView(
+                    axis_distance,
+                    f"Target requires another view: {target_error}",
+                    observation_pixel=observed_pixel,
+                ) from target_error
             visible, detail = True, "Intended sensor-tip target has valid local depth support"
         except SensorTipTargetOutsideView as exception:
             # This preliminary plane only determines where to observe. After
@@ -264,6 +280,7 @@ class ProbeSurfaceSource(RuntimeSource):
                 camera_intrinsics(camera_info, (depth_image.width, depth_image.height), "Depth CameraInfo"),
                 (depth_image.width, depth_image.height),
                 SURFACE_ORIENTATION_MAXIMUM_FIT_RADIUS_PX + TARGET_SUPPORT_RADIUS_PX + 1,
+                desired_pixel=exception.observation_pixel,
             )
             visible, detail = False, str(exception)
         except ValueError as exception:

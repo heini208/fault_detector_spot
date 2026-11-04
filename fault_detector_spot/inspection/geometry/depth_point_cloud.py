@@ -8,6 +8,11 @@ import numpy as np
 from sensor_msgs.msg import CameraInfo, Image
 
 
+def depth_below_minimum(depth_m, minimum_m):
+    """Compare at 32FC1 precision, including decimal distance boundaries."""
+    return np.asarray(depth_m, dtype=np.float32) < np.float32(minimum_m)
+
+
 @dataclass(frozen=True)
 class OrganizedDepthPointCloud:
     """One point per depth pixel, preserving the source raster layout."""

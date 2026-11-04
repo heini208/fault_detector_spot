@@ -12,6 +12,8 @@ from fault_detector_spot.application.commanding.command_request import (
 )
 from fault_detector_spot.application.commanding.semantic_command import (
     SemanticCommand,
+    SemanticTag,
+    StampedPose,
 )
 from fault_detector_spot.application.controllers.command_controller import (
     CommandController,
@@ -533,7 +535,10 @@ def test_reserved_head_geometry_is_isolated_from_definition_and_callers():
     assert definition.head_geometry.hand_to_geometry.position.x == 1.0
 
 
-@pytest.mark.parametrize("command_id", [CommandID.MOVE_ARM_TO_TAG, CommandID.FOLLOW_MOVE_TO_TAG_PATH])
+@pytest.mark.parametrize("command_id", [
+    CommandID.MOVE_ARM_TO_TAG, CommandID.FOLLOW_MOVE_TO_TAG_PATH,
+    CommandID.MOVE_CLOSE_TO_SURFACE, CommandID.MEASURE_SENSOR_TIP_DISTANCE,
+])
 def test_move_to_tag_request_is_bound_to_confirmed_sensor(tmp_path, command_id):
     controller, repository, _, command_controller = build_controller(
         tmp_path
@@ -548,7 +553,7 @@ def test_move_to_tag_request_is_bound_to_confirmed_sensor(tmp_path, command_id):
     accepted = []
     command_controller.add_accepted_listener(accepted.append)
     request = CommandRequest.create(
-        command=SemanticCommand(command_id=command_id),
+        command=SemanticCommand(command_id=command_id, tag=SemanticTag(7, StampedPose())),
         client_id="test",
         origin=CommandOrigin.SYSTEM,
         recording_policy=RecordingPolicy.EXCLUDE,
@@ -559,14 +564,17 @@ def test_move_to_tag_request_is_bound_to_confirmed_sensor(tmp_path, command_id):
     assert accepted[0].command.motion_sensor_id == "bmm150_01"
 
 
-@pytest.mark.parametrize("command_id", [CommandID.MOVE_ARM_TO_TAG, CommandID.FOLLOW_MOVE_TO_TAG_PATH])
+@pytest.mark.parametrize("command_id", [
+    CommandID.MOVE_ARM_TO_TAG, CommandID.FOLLOW_MOVE_TO_TAG_PATH,
+    CommandID.MOVE_CLOSE_TO_SURFACE, CommandID.MEASURE_SENSOR_TIP_DISTANCE,
+])
 def test_move_to_tag_requires_then_uses_confirmed_bare_hand(tmp_path, command_id):
     controller, _, _, command_controller = build_controller(tmp_path)
     command_controller.add_request_preparer(controller.prepare_request)
     accepted = []
     command_controller.add_accepted_listener(accepted.append)
     request = CommandRequest.create(
-        command=SemanticCommand(command_id=command_id),
+        command=SemanticCommand(command_id=command_id, tag=SemanticTag(7, StampedPose())),
         client_id="test",
         origin=CommandOrigin.SYSTEM,
         recording_policy=RecordingPolicy.EXCLUDE,

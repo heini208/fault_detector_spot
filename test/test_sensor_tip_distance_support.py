@@ -103,8 +103,8 @@ def test_discovery_cannot_skip_missing_occluded_or_different_actual_surface(dept
 
 
 @pytest.mark.parametrize("optical_depth, reason", [
-    (0.200, "too close.*minimum 0.230 m"),
-    (0.229, "too close.*minimum 0.230 m"),
+    (0.200, "too close.*minimum 0.210 m"),
+    (0.209, "too close.*minimum 0.210 m"),
     (0.610, "0.003–0.500 m range"),
 ])
 def test_discovery_keeps_camera_minimum_and_probe_maximum_distance_limits(
@@ -118,9 +118,16 @@ def test_discovery_keeps_camera_minimum_and_probe_maximum_distance_limits(
         )
 
 
-@pytest.mark.parametrize("optical_depth", [0.230, 0.250])
-def test_measurement_accepts_camera_clearance_from_23_cm(optical_depth):
+@pytest.mark.parametrize("optical_depth", [0.210, 0.250])
+@pytest.mark.parametrize("encoding", ["32FC1", "16UC1"])
+def test_measurement_accepts_camera_clearance_from_21_cm(optical_depth, encoding):
     image, info = planar_depth(width=128, height=96, depth_m=optical_depth)
+    if encoding == "16UC1":
+        image.encoding = encoding
+        image.step = image.width * 2
+        image.data = np.full(
+            (image.height, image.width), round(optical_depth * 1000), dtype="<u2",
+        ).tobytes()
     sample = measure_sensor_tip_distance(
         image, info, PoseData.identity(), camera_pose(),
     )

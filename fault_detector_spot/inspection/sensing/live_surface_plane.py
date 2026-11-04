@@ -7,6 +7,7 @@ from sensor_msgs.msg import CameraInfo, Image
 
 from fault_detector_spot.inspection.geometry.depth_point_cloud import (
     create_organized_depth_point_cloud,
+    depth_below_minimum,
 )
 from fault_detector_spot.inspection.geometry.surface_normal import (
     SurfaceNormalEstimate,
@@ -24,8 +25,8 @@ from fault_detector_spot.inspection.setup.reference_view_depth_projection import
 SURFACE_ORIENTATION_WINDOW_RADIUS_PX = 16
 SURFACE_ORIENTATION_MAXIMUM_FIT_RADIUS_PX = 32
 SURFACE_ORIENTATION_MINIMUM_SAMPLE_COUNT = 30
-# Keep 30 mm of margin above the hand depth camera's 200 mm near limit.
-MINIMUM_SURFACE_ORIENTATION_CAMERA_DISTANCE_M = 0.230
+# Keep 10 mm of margin above the hand depth camera's 200 mm near limit.
+MINIMUM_SURFACE_ORIENTATION_CAMERA_DISTANCE_M = 0.210
 
 
 def estimate_live_surface_normal(
@@ -96,7 +97,7 @@ def estimate_live_surface_normal(
         ) from exception
 
     camera_distance_m = float(projected.depth_m)
-    if camera_distance_m < MINIMUM_SURFACE_ORIENTATION_CAMERA_DISTANCE_M:
+    if depth_below_minimum(camera_distance_m, MINIMUM_SURFACE_ORIENTATION_CAMERA_DISTANCE_M):
         raise ValueError(
             "Surface is too close for reliable orientation: "
             f"camera distance {camera_distance_m:.3f} m, minimum "

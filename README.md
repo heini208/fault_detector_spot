@@ -869,13 +869,15 @@ return target. Depth near the forward probe ray seeds a local plane fit,
 preferring nearer axial surfaces over a farther wall. Its actual intersection
 with probe +X must have local unoccluded depth and lie within the fitted region.
 A visible, supported target patch is measured directly. If it is outside the
-image, a nearby fitted surface can guide one observation translation, with at
-most 0.15 m extension from measured support. That preliminary plane is never
-accepted as the final measurement. The translation brings the target just
-inside the image with room for the
-full plane-fit patch, preserving orientation and making no inward movement
-along that saved axis. It does not move all the way to image center. An already
-in-view target with missing depth is retried in place. After an excursion,
+image, a nearby fitted surface can guide one observation translation that
+brings the target just inside the image with room for the full plane-fit patch.
+If near foreground or missing local depth obscures an in-view target, a reliable
+lower-middle surface patch can instead guide a translation that projects the
+target onto that measured clear patch. Both proposals allow at most 0.15 m
+extension from measured support; neither preliminary plane is accepted as the
+final measurement. The translation preserves orientation and makes no inward
+movement along the saved probe axis. Without a reliable nearby observation
+hint, missing depth is retried in place. After an excursion,
 sparse depth frames are retried within the sampling timeout before returning;
 the operation never searches farther blindly.
 The translation is capped at 0.20 m and requires a complete, collision-checked,
@@ -899,7 +901,7 @@ Sensor-tip sampling fits at most one uncached frame per poll, starting with
 the newest frame, and reuses previously validated fits. This
 avoids making the latest sample stale while processing a depth backlog; the
 0.5-second freshness check still applies after processing.
-The camera depth must be at least 0.230 m (30 mm above the 0.200 m near limit),
+The camera depth must be at least 0.210 m (10 mm above the 0.200 m near limit),
 and the measured axis intersection
 must be 3–500 mm ahead. Measurements anchored to a saved tag target additionally
 require agreement within 0.10 m of its expected wall distance. These are

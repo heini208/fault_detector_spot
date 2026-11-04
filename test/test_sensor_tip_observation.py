@@ -12,6 +12,7 @@ from fault_detector_spot.inspection.geometry.sensor_tip_observation import (
     target_camera_point,
     transform_surface_plane,
 )
+from fault_detector_spot.inspection.model.models import ImagePoint
 from fault_detector_spot.inspection.sensing import probe_surface_source
 from fault_detector_spot.inspection.sensing.probe_surface_source import (
     ProbeSurfaceSource, NoNewSensorTipPoseSample,
@@ -238,6 +239,37 @@ def test_visible_target_does_not_require_motion_to_image_center():
         PoseData.identity(), camera, 0.25, (200, 200, 64, 48), (128, 96), 36,
     )
     assert translation == Vector3Data.zero()
+
+
+@pytest.mark.parametrize("rotation", [np.eye(3), np.array([[0, -1, 0], [1, 0, 0], [0, 0, 1]])])
+@pytest.mark.parametrize("destination", [ImagePoint(40, 40), ImagePoint(36, 36), ImagePoint(91, 59)])
+def test_observation_moves_original_target_to_measured_patch_without_advancing(rotation, destination):
+    reference = PoseData(Vector3Data(1.0, -2.0, 3.0), quaternion_from_matrix(rotation))
+    camera = compose_poses(reference, camera_pose(height=0.01))
+    intrinsics = (200, 200, 64, 48)
+    translation = observation_translation(
+        reference, camera, 0.25, intrinsics, (128, 96), 36,
+        desired_pixel=destination,
+    )
+    delta = np.array([translation.x, translation.y, translation.z])
+    assert np.linalg.norm(delta) > 0.001
+    assert np.dot(delta, rotation[:, 0]) == pytest.approx(0.0, abs=1e-12)
+    camera.position = Vector3Data(
+        camera.position.x + translation.x,
+        camera.position.y + translation.y,
+        camera.position.z + translation.z,
+    )
+    after = project_camera_point(target_camera_point(reference, camera, 0.25), intrinsics)
+    assert after == pytest.approx((destination.u, destination.v))
+
+
+@pytest.mark.parametrize("destination", [ImagePoint(35, 48), ImagePoint(92, 48), ImagePoint(64, 35), ImagePoint(64, 60)])
+def test_observation_destination_requires_full_patch_margin(destination):
+    with pytest.raises(ValueError, match="full patch margin"):
+        observation_translation(
+            PoseData.identity(), camera_pose(), 0.25, (200, 200, 64, 48),
+            (128, 96), 36, desired_pixel=destination,
+        )
 
 
 def test_captured_mount_geometry_needs_far_less_than_full_centering():

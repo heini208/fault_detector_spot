@@ -7,6 +7,7 @@ import numpy as np
 
 from fault_detector_spot.inspection.geometry.pose import relative_pose
 from fault_detector_spot.inspection.geometry.surface_plane import SurfacePlane
+from fault_detector_spot.inspection.model.models import ImagePoint
 from fault_detector_spot.shared.geometry.models import PoseData, Vector3Data
 from fault_detector_spot.shared.geometry.rotation import rotation_from_quaternion
 
@@ -40,14 +41,14 @@ def probe_axis_in_camera(reference_probe_pose, camera_pose_odom):
 
 def observation_translation(
     reference_probe_pose, camera_pose_odom, expected_distance_m,
-    intrinsics, image_size, patch_margin_px,
+    intrinsics, image_size, patch_margin_px, *, desired_pixel: ImagePoint | None = None,
 ):
-    """Bring the target to the nearest usable image pixel, without advancing.
+    """Bring the target to a usable image pixel, without advancing.
 
-    A visible patch need not be centered. Clip only out-of-bounds coordinates
-    to an inset that leaves room for the full plane fit. Solve translation
-    along the plane perpendicular to the saved probe +X; hand orientation
-    stays unchanged and no mount-specific offsets are introduced.
+    By default, clip only out-of-bounds coordinates to the full-fit inset.
+    A measured clear patch can instead provide an explicit destination for an
+    occluded target. Solve translation perpendicular to the saved probe +X;
+    hand orientation stays unchanged and no mount-specific offsets are used.
     """
     reference_probe_pose.validate()
     camera_pose_odom.validate()
@@ -62,8 +63,17 @@ def observation_translation(
         reference_probe_pose, camera_pose_odom, expected_distance_m,
     )
     u, v = project_camera_point(point_camera, intrinsics)
-    desired_u = max(patch_margin_px, min(width - 1 - patch_margin_px, u))
-    desired_v = max(patch_margin_px, min(height - 1 - patch_margin_px, v))
+    if desired_pixel is None:
+        desired_u = max(patch_margin_px, min(width - 1 - patch_margin_px, u))
+        desired_v = max(patch_margin_px, min(height - 1 - patch_margin_px, v))
+    else:
+        if not isinstance(desired_pixel, ImagePoint):
+            raise TypeError("Observation destination must be an ImagePoint")
+        desired_pixel.validate()
+        desired_u, desired_v = desired_pixel.u, desired_pixel.v
+        if not (patch_margin_px <= desired_u <= width - 1 - patch_margin_px
+                and patch_margin_px <= desired_v <= height - 1 - patch_margin_px):
+            raise ValueError("Observation destination does not preserve the full patch margin")
     if (desired_u, desired_v) == (u, v):
         return Vector3Data.zero()
 

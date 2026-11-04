@@ -9,6 +9,9 @@ from fault_detector_msgs.msg import OperationalIntent
 from geometry_msgs.msg import PoseStamped
 
 from fault_detector_spot.application.commanding.command_ids import CommandID
+from fault_detector_spot.application.commanding.command_request import (
+    CommandOrigin, CommandRequest, RecordingPolicy,
+)
 from fault_detector_spot.application.commanding.semantic_command import (
     SemanticCommand, SemanticTag, StampedPose,
 )
@@ -16,6 +19,9 @@ from fault_detector_spot.application.recording.semantic_command_codec import (
     deserialize_recorded_command, serialize_recorded_command,
 )
 from fault_detector_spot.application.ros.operational_intent_adapter import operational_intent_to_command
+from fault_detector_spot.application.ros.command_request_adapter import (
+    command_request_from_message, command_request_to_message,
+)
 from fault_detector_spot.application.ros.semantic_command_adapter import (
     semantic_command_from_message, semantic_command_to_message,
 )
@@ -25,6 +31,7 @@ from fault_detector_spot.manipulation.commands.measure_sensor_tip_distance_comma
 from fault_detector_spot.manipulation.commands.move_close_to_surface_command import MoveCloseToSurfaceCommand
 from fault_detector_spot.shared.geometry.movement_frames import OrientationModes
 from test_pre_approach_path_transport import executable_path
+from test_sensor_attachment_controller import build_controller, sensor_definition
 
 
 def tag_command():
@@ -148,7 +155,14 @@ def test_unanchored_measurement_has_no_return_target(operation):
     assert executable_path(command)[0].return_target is None
 
 
-def test_setup_close_intent_preserves_optional_saved_object_pose_as_return_target():
+def test_setup_close_intent_preserves_optional_saved_object_pose_as_return_target(tmp_path):
+    attachments, repository, _, commands = build_controller(tmp_path)
+    repository.create(sensor_definition("probe"))
+    pending = attachments.select_sensor("probe")
+    attachments.confirm_sensor("probe", pending.attachment_revision)
+    commands.add_request_preparer(attachments.prepare_request)
+    accepted = []
+    commands.add_accepted_listener(accepted.append)
     intent = OperationalIntent()
     intent.intent = OperationalIntent.INTENT_MOVE_CLOSE_TO_SURFACE
     intent.tag.id = 7
@@ -158,8 +172,13 @@ def test_setup_close_intent_preserves_optional_saved_object_pose_as_return_targe
     intent.orientation_mode = OrientationModes.CUSTOM_ORIENTATION.value
     intent.target_surface_distance_m = 0.03
     intent.precision_mode = True
-    command = replace(operational_intent_to_command(intent), motion_sensor_id="probe")
-    target = executable_path(command)[0].return_target
+    commands.submit(CommandRequest.create(
+        command=operational_intent_to_command(intent), client_id="operator_ui",
+        origin=CommandOrigin.OPERATIONAL, recording_policy=RecordingPolicy.EXCLUDE,
+    ))
+    restored = command_request_from_message(command_request_to_message(accepted[0]))
+    target = executable_path(restored.command)[0].return_target
+    assert target.motion_sensor_id == "probe"
     assert target.tag_id == 7
     assert target.offset.header.frame_id == "filtered_fiducial_7"
     assert target.offset.pose.position.z == 0.15

@@ -18,6 +18,7 @@ from rclpy.time import Time
 from sensor_msgs.msg import CameraInfo, Image
 import tf2_ros
 
+from fault_detector_spot.inspection.geometry.depth_point_cloud import depth_below_minimum
 from fault_detector_spot.shared.geometry.rotation import (
     quaternion_from_euler,
     quaternion_to_rpy,
@@ -55,8 +56,8 @@ BASE_TAG_MINIMUM_SPAN_SEC = 0.10
 HAND_DEPTH_HISTORY_MAX_SAMPLES = 32
 MAX_HAND_DEPTH_AGE_SEC = 0.5
 HAND_DEPTH_SEARCH_RADIUS_PX = 16
-# Keep the same 30 mm near-field margin as live surface measurements.
-MINIMUM_HAND_CAMERA_SURFACE_CLEARANCE_M = 0.230
+# Keep the same 10 mm near-field margin as live surface measurements.
+MINIMUM_HAND_CAMERA_SURFACE_CLEARANCE_M = 0.210
 
 
 class ProbeSetupMotionStateSource:
@@ -369,7 +370,7 @@ class ProbeSetupMotionStateSource:
                 "distance and try again. "
                 f"Detail: {exception}"
             ) from exception
-        if clearance_m + 1e-9 < minimum_camera_clearance_m:
+        if depth_below_minimum(clearance_m, minimum_camera_clearance_m):
             raise ValueError(
                 "Reached aligned pre-approach is inside the hand ToF near "
                 f"field: measured camera clearance {clearance_m:.3f} m, "
