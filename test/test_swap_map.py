@@ -22,6 +22,10 @@ class _Helper:
     def get_running_mode(self):
         return self.mode
 
+    def has_pending_operation(self):
+        # This fake completes callbacks synchronously, before they are polled.
+        return False
+
     def begin_runtime_operation(self, name, callback, *args):
         if self._operation is not None:
             return False
@@ -92,3 +96,14 @@ def test_swap_map_returns_success_after_switch():
     assert behavior.update() == py_trees.common.Status.RUNNING
     assert behavior.update() == py_trees.common.Status.SUCCESS
     assert helper.calls == ["map_b"]
+
+
+def test_swap_map_already_active_does_not_submit_runtime_work():
+    helper = _Helper()
+    behavior = _behavior(helper, requested="map_a")
+
+    behavior.tick_once()
+
+    assert behavior.status == py_trees.common.Status.SUCCESS
+    assert helper.calls == []
+    assert helper._operation is None

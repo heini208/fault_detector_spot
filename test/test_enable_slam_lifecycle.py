@@ -3,6 +3,7 @@
 from types import SimpleNamespace
 
 import py_trees
+import pytest
 
 from fault_detector_spot.mapping.behaviours.enable_slam import EnableSLAM
 
@@ -11,6 +12,7 @@ class FakeHelper:
     def __init__(self):
         self.running = False
         self.start_calls = 0
+        self.start_maps = []
         self.change_calls = []
         self._operation = None
         self._result = None
@@ -41,8 +43,11 @@ class FakeHelper:
         self.change_calls.append(map_name)
         return True
 
-    def start_mapping(self):
+    def start_mapping(self, map_name=None):
         self.start_calls += 1
+        self.start_maps.append(map_name)
+        if map_name is not None:
+            self.blackboard.active_map_name = map_name
         self.running = True
         return SimpleNamespace(poll=lambda: None)
 
@@ -56,6 +61,7 @@ def _behavior(helper, active_map="plant", requested_map="plant"):
         active_map_name=active_map,
         last_command=SimpleNamespace(map_name=requested_map),
     )
+    helper.blackboard = behavior.blackboard
     return behavior
 
 
@@ -71,16 +77,31 @@ def test_mapping_start_finishes_when_launch_process_is_running():
     assert behavior.feedback_message == "Mapping enabled"
 
 
-def test_mapping_start_synchronizes_requested_map_before_launch():
+@pytest.mark.parametrize("requested_map,active_map", [
+    ("new", "old"), ("new", "new"), ("new", None), ("", "selected"),
+])
+def test_mapping_start_passes_target_directly_to_runtime(requested_map, active_map):
     helper = FakeHelper()
     behavior = _behavior(
         helper,
-        active_map="old",
-        requested_map="new",
+        active_map=active_map,
+        requested_map=requested_map,
     )
 
     assert behavior.update() == py_trees.common.Status.RUNNING
-    assert helper.change_calls == ["new"]
+    assert helper.start_maps == [requested_map or active_map]
+    assert helper.change_calls == []
+    assert behavior.update() == py_trees.common.Status.SUCCESS
+
+
+def test_mapping_start_requires_requested_map_before_reporting_success():
+    helper = FakeHelper()
+    behavior = _behavior(helper)
+    assert behavior.update() == py_trees.common.Status.RUNNING
+    helper.blackboard.active_map_name = "other"
+
+    assert behavior.update() == py_trees.common.Status.FAILURE
+    assert "without selecting 'plant'" in behavior.feedback_message
 
 
 def test_mapping_start_fails_if_process_dies_after_launch():

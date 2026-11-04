@@ -9,6 +9,8 @@ import pytest
 import py_trees
 
 from fault_detector_spot.mapping.behaviours.enable_localization import EnableLocalization
+from fault_detector_spot.mapping.behaviours.enable_slam import EnableSLAM
+from fault_detector_spot.mapping.behaviours.swap_map import SwapMap
 from fault_detector_spot.shared.ros import runtime_manager as runtime_module
 from fault_detector_spot.shared.ros.runtime_manager import RuntimeManager
 from fault_detector_spot.navigation.runtime.nav2_runtime_manager import Nav2RuntimeManager
@@ -201,11 +203,21 @@ def test_matching_localization_recovers_nav2_without_restarting_map(runtime, tmp
     assert process.alive
 
 
-def test_cancelled_launch_completion_cannot_satisfy_next_map_request(runtime, tmp_path):
+@pytest.mark.parametrize("behavior_type,initial_mode,expected_mode,launch_count", [
+    (EnableLocalization, None, "localization", 4),
+    (EnableSLAM, None, "mapping", 2),
+    (SwapMap, "mapping", "mapping", 3),
+    (SwapMap, "localization", "localization", 6),
+])
+def test_cancelled_launch_completion_cannot_satisfy_next_map_request(
+    runtime, tmp_path, behavior_type, initial_mode, expected_mode, launch_count,
+):
     manager, launches, stops = runtime
-    (tmp_path / "one.db").touch()
-    (tmp_path / "two.db").touch()
-    behavior = EnableLocalization(manager)
+    for name in ("initial", "one", "two"):
+        (tmp_path / f"{name}.db").touch()
+    if initial_mode is not None:
+        getattr(manager, f"start_{initial_mode}")("initial")
+    behavior = behavior_type(manager)
     behavior.blackboard = manager.bb
     manager.bb.last_command = SimpleNamespace(map_name="one")
     behavior.tick_once()
@@ -224,8 +236,71 @@ def test_cancelled_launch_completion_cannot_satisfy_next_map_request(runtime, tm
 
     assert behavior.status == py_trees.common.Status.SUCCESS
     assert manager.bb.active_map_name == "two"
-    assert manager.is_localization_running()
-    assert len(launches) == 4
+    assert manager.get_running_mode() == expected_mode
+    assert manager.nav2_runtime.is_running() == (expected_mode == "localization")
+    assert len(launches) == launch_count
+
+
+@pytest.mark.parametrize("behavior_type,initial_mode,expected_mode", [
+    (EnableLocalization, "mapping", "localization"),
+    (EnableSLAM, "mapping", "mapping"),
+    (SwapMap, "mapping", "mapping"),
+    (SwapMap, "localization", "localization"),
+])
+@pytest.mark.parametrize("target_map", ["initial", "two"])
+@pytest.mark.parametrize("old_failure", [False, True])
+def test_preempted_map_worker_drains_before_replacement_request(
+    runtime, tmp_path, monkeypatch, behavior_type, initial_mode, expected_mode,
+    target_map, old_failure,
+):
+    manager, launches, stops = runtime
+    for name in ("initial", "one", "two"):
+        (tmp_path / f"{name}.db").touch()
+    getattr(manager, f"start_{initial_mode}")("initial")
+    entered, release = Event(), Event()
+    original_start = manager._start_rtabmap
+
+    def start(map_name, *args, **kwargs):
+        if map_name == "one":
+            entered.set()
+            assert release.wait(2)
+            if old_failure:
+                raise RuntimeError("preempted launch failed")
+        return original_start(map_name, *args, **kwargs)
+
+    monkeypatch.setattr(manager, "_start_rtabmap", start)
+    behavior = behavior_type(manager)
+    behavior.blackboard = manager.bb
+    manager.bb.last_command = SimpleNamespace(map_name="one")
+    try:
+        behavior.tick_once()
+        assert entered.wait(1)
+        old_future = manager._runtime_future
+        behavior.stop(py_trees.common.Status.INVALID)
+        manager.bb.last_command = SimpleNamespace(map_name=target_map)
+        behavior.tick_once()
+
+        assert behavior.status == py_trees.common.Status.RUNNING
+        assert manager._runtime_future is old_future
+        assert manager.bb.active_map_name == "initial"
+    finally:
+        release.set()
+    if old_failure:
+        with pytest.raises(RuntimeError, match="preempted launch failed"):
+            old_future.result(timeout=2)
+    else:
+        assert old_future.result(timeout=2)
+
+    behavior.tick_once()
+    if behavior.status == py_trees.common.Status.RUNNING:
+        assert manager._runtime_future is not old_future
+        assert manager._runtime_future.result(timeout=2)
+        behavior.tick_once()
+
+    assert behavior.status == py_trees.common.Status.SUCCESS
+    assert manager.bb.active_map_name == target_map
+    assert manager.get_running_mode() == expected_mode
+    assert manager.nav2_runtime.is_running() == (expected_mode == "localization")
 
 
 @pytest.mark.parametrize("failed_runtime", ["rtab", "nav2"])

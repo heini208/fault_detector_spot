@@ -23,6 +23,11 @@ class SwapMap(py_trees.behaviour.Behaviour):
         self._previous_mode = RtabmapRuntimeManager.MODE_NONE
         self._swap_requested = False
 
+    def initialise(self):
+        # A preempted operation belongs to the previous invocation. The runtime
+        # drains it before accepting this invocation's map switch.
+        self._reset()
+
     def _validate_last_command(self):
         last_command = getattr(self.blackboard, "last_command", None)
         if not last_command or not getattr(last_command, "map_name", None):
@@ -35,6 +40,14 @@ class SwapMap(py_trees.behaviour.Behaviour):
             requested_map = self._validate_last_command()
             if not requested_map:
                 return py_trees.common.Status.FAILURE
+
+            # A preempted worker may still change the active map and mode.
+            # Wait before inspecting either, including the already-active case.
+            if self.rtabmap_runtime.has_pending_operation():
+                self.feedback_message = (
+                    "Waiting for another mapping runtime operation to finish"
+                )
+                return py_trees.common.Status.RUNNING
 
             current_map = self.blackboard.active_map_name
             if requested_map == current_map:

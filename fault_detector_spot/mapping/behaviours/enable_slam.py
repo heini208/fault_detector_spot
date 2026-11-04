@@ -20,18 +20,22 @@ class EnableSLAM(py_trees.behaviour.Behaviour):
         )
         self._operation_name = f"enable_slam:{name}"
         self._launch_requested = False
+        self._launch_map_name = ""
+
+    def initialise(self):
+        # Reusing the leaf must submit this invocation's target after the
+        # runtime drains any preempted worker, rather than poll its result.
+        self._launch_requested = False
+        self._launch_map_name = ""
 
     def _requested_map(self):
         command = getattr(self.blackboard, "last_command", None)
         return getattr(command, "map_name", "").strip()
 
-    def _start_mapping(self, requested_map, current_map):
-        if requested_map and requested_map != current_map:
-            if self.rtabmap_runtime.change_map(requested_map) is False:
-                raise RuntimeError(
-                    "Could not synchronize the selected map"
-                )
-        process = self.rtabmap_runtime.start_mapping()
+    def _start_mapping(self, map_name):
+        # The runtime owns the map/mode transition. Passing the target directly
+        # avoids relying on an active-map snapshot taken before worker admission.
+        process = self.rtabmap_runtime.start_mapping(map_name)
         if process is None:
             raise RuntimeError(
                 "Mapping launch did not return a process"
@@ -56,8 +60,7 @@ class EnableSLAM(py_trees.behaviour.Behaviour):
                 started = self.rtabmap_runtime.begin_runtime_operation(
                     self._operation_name,
                     self._start_mapping,
-                    requested_map,
-                    current_map,
+                    requested_map or current_map,
                 )
             except Exception as exception:
                 self.feedback_message = (
@@ -72,6 +75,7 @@ class EnableSLAM(py_trees.behaviour.Behaviour):
                 return py_trees.common.Status.RUNNING
 
             self._launch_requested = True
+            self._launch_map_name = requested_map or current_map
             self.feedback_message = "Launching Mapping"
             return py_trees.common.Status.RUNNING
 
@@ -91,6 +95,11 @@ class EnableSLAM(py_trees.behaviour.Behaviour):
             return py_trees.common.Status.RUNNING
 
         self._launch_requested = False
+        if self.blackboard.active_map_name != self._launch_map_name:
+            self.feedback_message = (
+                f"Mapping completed without selecting '{self._launch_map_name}'"
+            )
+            return py_trees.common.Status.FAILURE
         if self.rtabmap_runtime.is_mapping_running():
             self.feedback_message = "Mapping enabled"
             return py_trees.common.Status.SUCCESS
