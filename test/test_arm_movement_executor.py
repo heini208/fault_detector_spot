@@ -1043,19 +1043,29 @@ def test_cancel_retries_failed_stop_with_cooldown():
     assert not executor.active
 
 
-def test_explicit_stop_confirmation_still_times_out():
+@pytest.mark.parametrize("unconfirmed_motion", [False, True])
+def test_stop_confirmation_retains_idle_observation_after_timeout(unconfirmed_motion):
     clock = ManualClock()
     stop_client = FakeArmStopServiceClient()
     executor, _ = executor_with_client(
         FakeTransformer(), arm_stop_service_client=stop_client,
         monotonic_clock=clock,
     )
+    executor._stop_unconfirmed = unconfirmed_motion
     assert executor.confirm_stop().outcome is ArmMovementOutcome.RUNNING
+    assert len(stop_client.requests) == int(unconfirmed_motion)
     stop_client.future.set_result(SimpleNamespace(success=True))
     executor.poll()
     clock.now = 3.0
-    assert executor.poll().outcome is ArmMovementOutcome.STOP_UNCONFIRMED
-    assert not executor.active
+    expected = ArmMovementOutcome.STOP_UNCONFIRMED if unconfirmed_motion else ArmMovementOutcome.RUNNING
+    assert executor.poll().outcome is expected
+    assert executor.active == (not unconfirmed_motion)
+    if not unconfirmed_motion:
+        assert executor.confirm_stop().outcome is ArmMovementOutcome.BUSY
+        executor.cancel()
+        assert stop_client.requests == []
+        assert confirm_physical_stop(executor, clock, 3.1).outcome is ArmMovementOutcome.SUCCESS
+        assert executor.execution_idle
 
 
 def test_executor_rejects_overlapping_arm_movement(monkeypatch):
@@ -1849,14 +1859,17 @@ def test_tag_accuracy_cancellation_does_not_start_correction(monkeypatch):
     assert not corrections
 
 
-def test_explicit_stop_confirmation_requires_stationary_feedback():
+@pytest.mark.parametrize("unconfirmed_motion", [False, True])
+def test_explicit_stop_confirmation_requires_stationary_feedback(unconfirmed_motion):
     clock = ManualClock()
     stop_client = FakeArmStopServiceClient()
     executor, _ = executor_with_client(FakeTransformer({}), monotonic_clock=clock,
                                        arm_stop_service_client=stop_client)
+    executor._stop_unconfirmed = unconfirmed_motion
     update = executor.confirm_stop()
     assert update.outcome is ArmMovementOutcome.RUNNING
     assert executor.active
+    assert len(stop_client.requests) == int(unconfirmed_motion)
     stop_client.future.set_result(SimpleNamespace(success=True))
     assert executor.poll().outcome is ArmMovementOutcome.RUNNING
     update = confirm_physical_stop(executor, clock, 0.1)
@@ -2090,13 +2103,15 @@ def test_idle_arm_shutdown_requires_new_stop_evidence_and_retryable_cleanup(monk
     executor, _, stop, clock, node, timer = shutdown_arm_rig(monkeypatch)
     executor.begin_shutdown()
     assert not executor.poll_shutdown()[0]
-    stop.future.set_result(SimpleNamespace(success=True))
+    assert stop.requests == []
     timer.callback()
     for value in (0.1, 0.6):
         clock.now = value
         executor.arm_state_source.velocity = hand_velocity_sample(value)
         timer.callback()
+        executor.poll_shutdown()
     assert executor.poll_shutdown()[0]
+    assert stop.requests == []
     node.destroy_timer.side_effect = [RuntimeError("guard cleanup failed"), None]
     with pytest.raises(RuntimeError, match="guard cleanup failed"):
         executor.shutdown()
@@ -2106,3 +2121,62 @@ def test_idle_arm_shutdown_requires_new_stop_evidence_and_retryable_cleanup(monk
     executor.shutdown()
     assert node.destroy_timer.call_count == 2
     stop.destroy.assert_called_once()
+
+
+@pytest.mark.parametrize("feedback", ["missing", "old", "moving"])
+def test_idle_arm_shutdown_waits_without_commands_for_fresh_stationary_feedback(monkeypatch, feedback):
+    executor, client, stop, clock, node, timer = shutdown_arm_rig(monkeypatch)
+    executor.begin_shutdown()
+    for value in (0.1, 0.6, 3.1):
+        clock.now = value
+        if feedback != "missing":
+            executor.arm_state_source.velocity = hand_velocity_sample(
+                0.0 if feedback == "old" else value,
+                linear=0.1 if feedback == "moving" else 0.0,
+            )
+        timer.callback()
+        assert not executor.poll_shutdown()[0]
+    assert client.sent_goals == []
+    assert stop.requests == []
+    node.destroy_timer.assert_not_called()
+    for value in (3.2, 3.7):
+        clock.now = value
+        executor.arm_state_source.velocity = hand_velocity_sample(value)
+        timer.callback()
+    assert executor.poll_shutdown()[0]
+    assert stop.requests == []
+
+
+def test_cancelling_idle_stop_observation_does_not_issue_arm_command(monkeypatch):
+    executor, client, stop, clock, _, timer = shutdown_arm_rig(monkeypatch)
+    assert executor.confirm_stop().outcome is ArmMovementOutcome.RUNNING
+    executor.cancel()
+    assert executor.active
+    assert not executor.cancelling
+    for value in (0.1, 0.6):
+        clock.now = value
+        executor.arm_state_source.velocity = hand_velocity_sample(value)
+        timer.callback()
+    assert executor.poll().outcome is ArmMovementOutcome.SUCCESS
+    assert executor.execution_idle
+    assert client.sent_goals == []
+    assert stop.requests == []
+
+
+def test_shutdown_restarts_idle_stop_observation_boundary_without_command(monkeypatch):
+    executor, _, stop, clock, _, timer = shutdown_arm_rig(monkeypatch)
+    assert executor.confirm_stop().outcome is ArmMovementOutcome.RUNNING
+    clock.now = 0.1
+    executor.arm_state_source.velocity = hand_velocity_sample(clock.now)
+    timer.callback()
+    clock.now = 0.5
+    executor.begin_shutdown()
+    executor.arm_state_source.velocity = hand_velocity_sample(0.5)
+    timer.callback()
+    assert not executor.poll_shutdown()[0]
+    for value in (0.6, 1.1):
+        clock.now = value
+        executor.arm_state_source.velocity = hand_velocity_sample(value)
+        timer.callback()
+    assert executor.poll_shutdown()[0]
+    assert stop.requests == []

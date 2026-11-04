@@ -291,6 +291,15 @@ class GuardedProbeExecution:
                 terminal_detail="Arm cancellation physically confirmed",
             )
 
+    def observe_stop(self, *, continue_after_timeout=False):
+        """Confirm an idle owner's fresh stationary feedback without a command."""
+        with self.lock:
+            self.reset()
+            self._continue_stop_confirmation = bool(continue_after_timeout)
+            self._stop_terminal_outcome = ArmMovementOutcome.TRAJECTORY_CANCELLED
+            self._stop_terminal_detail = "Idle arm physical stop confirmation"
+            return self._begin_arm_settling()
+
     def reset(self) -> None:
         with self.lock:
             self._terminal_update = None
@@ -1073,10 +1082,12 @@ class GuardedProbeExecution:
         self._stop_accepted_at = self._monotonic_clock()
         self._stop_stable_since = None
         self._stop_last_velocity_received_at = None
-        self.record_diagnostic_event("stop_accepted")
+        commanded = self._stop_requested_at is not None
+        self.record_diagnostic_event("stop_accepted" if commanded else "stop_observation_started")
         return ArmMovementUpdate(
             ArmMovementOutcome.RUNNING,
-            "ArmStopCommand accepted; confirming physical stop",
+            ("ArmStopCommand accepted; confirming physical stop" if commanded
+             else "Confirming idle arm physical stop from fresh feedback"),
         )
 
     def _poll_arm_settling(self) -> ArmMovementUpdate:
@@ -1117,8 +1128,9 @@ class GuardedProbeExecution:
             >= self._stop_timeout_sec
         ):
             detail = self._stop_detail(
-                "ArmStopCommand was accepted, but physical stop was not "
-                "confirmed before the timeout; "
+                ("ArmStopCommand was accepted, but physical stop was not "
+                 if self._stop_requested_at is not None else "Idle arm physical stop was not ")
+                + "confirmed before the timeout; "
                 + (
                     "no fresh hand velocity sample available"
                     if sample is None else
@@ -1161,7 +1173,8 @@ class GuardedProbeExecution:
             or ArmMovementOutcome.EXECUTION_ERROR
         )
         detail = self._stop_terminal_detail
-        suffix = "ArmStopCommand accepted and physical stop confirmed"
+        suffix = ("ArmStopCommand accepted and physical stop confirmed"
+                  if self._stop_requested_at is not None else "Physical stop confirmed from fresh feedback")
         return self._terminal(
             outcome,
             f"{detail}; {suffix}" if detail else suffix,

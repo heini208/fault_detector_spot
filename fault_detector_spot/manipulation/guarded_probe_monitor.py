@@ -78,6 +78,19 @@ class GuardedProbeMonitor:
                 continue_after_timeout=continue_after_timeout,
             ))
 
+    def observe_stop(self, *, continue_after_timeout=False):
+        """Use the steady monitor for passive physical stop confirmation."""
+        with self._execution.lock:
+            if self._closed:
+                raise RuntimeError("Guarded probe monitor is closed")
+            self.stop()
+            self._cancel_complete = None
+            self._start_timer()
+            self._record(self._execution.observe_stop(
+                continue_after_timeout=continue_after_timeout,
+            ))
+            return self._update
+
     def poll(self):
         """Return status without advancing the operation a second time."""
         with self._execution.lock:

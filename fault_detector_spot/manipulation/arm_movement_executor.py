@@ -1464,7 +1464,7 @@ class ArmMovementExecutor(MovementExecutor):
         return self._advance_stow_start()
 
     def confirm_stop(self) -> ArmMovementUpdate:
-        """Issue a stop and require fresh stationary feedback before recovery."""
+        """Require fresh stationary feedback, stopping unresolved owned motion."""
         with self._execution_lock:
             if self.active or self._shutdown_started:
                 return self._busy_update()
@@ -1473,9 +1473,10 @@ class ArmMovementExecutor(MovementExecutor):
                     ArmMovementOutcome.STOP_UNCONFIRMED,
                     "Arm action termination must precede physical stop confirmation",
                 )
+            observe_only = self.execution_idle
             self._active = True
             self._operation = _ArmOperation.CONFIRM_STOP
-            return self._begin_stop_confirmation()
+            return self._begin_stop_confirmation(observe_only=observe_only)
 
     def _begin_prepare_stop(self):
         self._operation = {
@@ -1485,13 +1486,21 @@ class ArmMovementExecutor(MovementExecutor):
         }[self._operation]
         return self._begin_stop_confirmation()
 
-    def _begin_stop_confirmation(self):
+    def _begin_stop_confirmation(self, *, observe_only=False):
         if self.guarded_probe_execution is None:
             return self._finish_stop_confirmation(ArmMovementUpdate(
                 ArmMovementOutcome.STOP_UNCONFIRMED,
                 "Stop confirmation monitor is unavailable",
             ))
         self.guarded_probe_execution.reset()
+        self._observing_idle_stop = observe_only
+        if observe_only:
+            owner = self._guarded_probe_monitor or self.guarded_probe_execution
+            return self._finish_stop_confirmation(owner.observe_stop(
+                # Missing telemetry must not turn an idle observation into a
+                # command on a retry. The coordinator owns the overall deadline.
+                continue_after_timeout=True,
+            ))
         if self._guarded_probe_monitor is not None:
             self._guarded_probe_monitor.cancel(None)
             update = self._guarded_probe_monitor.poll()
@@ -1597,6 +1606,10 @@ class ArmMovementExecutor(MovementExecutor):
 
     def cancel(self) -> None:
         with self._execution_lock:
+            if self._observing_idle_stop:
+                # An observation owns no motion to cancel. Keep its fresh
+                # physical evidence requirement without issuing a new command.
+                return
             if self.cancelling:
                 guard = self.guarded_probe_execution
                 if (
@@ -1665,11 +1678,17 @@ class ArmMovementExecutor(MovementExecutor):
         with self._execution_lock:
             if self._shutdown_started:
                 return
+            observe_only = self.execution_idle or self._observing_idle_stop
             self._shutdown_started = True
-            # Even an idle owner needs fresh shutdown evidence. Older action
-            # delivery can also outlive the operation that submitted it.
-            self._shutdown_reconcile = True
-            self.cancel()
+            self._shutdown_reconcile = not observe_only
+            if observe_only:
+                # Even an idle owner needs fresh evidence, but a robot command
+                # can power the motors. Observe without changing robot state.
+                self._active = True
+                self._operation = _ArmOperation.CONFIRM_STOP
+                self._begin_stop_confirmation(observe_only=True)
+            else:
+                self.cancel()
 
     def poll_shutdown(self):
         """Confirm action termination and physical stopping without blocking."""
@@ -2217,6 +2236,7 @@ class ArmMovementExecutor(MovementExecutor):
                 self.guarded_probe_execution.reset()
 
     def _clear_arm_operation_state(self) -> None:
+        self._observing_idle_stop = False
         self._retry_target = None
         self._preparing_guarded_motion = False
         self._tag_accuracy = None

@@ -147,6 +147,7 @@ class RobotCommandResources:
         self._velocity_publisher = None
         self._velocity_subscription = None
         self._last_velocity_at = None
+        self._last_velocity_command = None
         self._stop_requested_at = None
         self._velocity_quiet_sec = 0.5
         self._closing = False
@@ -173,8 +174,7 @@ class RobotCommandResources:
     def begin_shutdown(self):
         self.close_admission()
         self._stop_requested_at = self._monotonic_clock()
-        if self._velocity_publisher is not None:
-            self._velocity_publisher.publish(Twist())
+        self._stop_velocity_stream()
 
     def poll_shutdown(self):
         return self.stop_sources_quiet(), "Waiting for base velocity command sources to become quiet"
@@ -208,10 +208,31 @@ class RobotCommandResources:
                 callback_group=ReentrantCallbackGroup(),
             )
 
-    def _receive_velocity(self, _message):
-        self._last_velocity_at = self._monotonic_clock()
+    def _receive_velocity(self, message):
+        received_at = self._monotonic_clock()
+        self._last_velocity_at = received_at
+        self._last_velocity_command = (received_at, any((
+            message.linear.x, message.linear.y, message.linear.z,
+            message.angular.x, message.angular.y, message.angular.z,
+        )))
         for owner in tuple(self._base_movement_executors.values()):
             owner.invalidate_shutdown_stop()
+
+    def _stop_velocity_stream(self):
+        # Spot treats even zero velocity as a mobility command, which can
+        # override a sit. Only supersede a nonzero velocity stream that is
+        # recent or still owned by navigation. The quiet interval alone does
+        # not prove an owned command has expired in the driver.
+        command = self._last_velocity_command
+        if self._velocity_publisher is None or command is None:
+            return
+        received_at, moving = command
+        navigation = self._waypoint_executor
+        if moving and (
+            self._monotonic_clock() - received_at < self._velocity_quiet_sec
+            or (navigation is not None and navigation.active)
+        ):
+            self._velocity_publisher.publish(Twist())
 
     def stop_sources_quiet(self):
         if self._stop_requested_at is None:
@@ -242,9 +263,7 @@ class RobotCommandResources:
         self._stop_arms = dict.fromkeys(tuple(self._arm_movement_executors.values()), False)
         self._stop_bases = tuple(self._base_movement_executors.values())
         self._stop_retry_after = {}
-        operations = []
-        if self._velocity_publisher is not None:
-            operations.append(lambda: self._velocity_publisher.publish(Twist()))
+        operations = [self._stop_velocity_stream]
         navigation = self._waypoint_executor
         # First ask every active physical source to cancel through its async
         # transport. A busy preparation lock in one owner must not delay the

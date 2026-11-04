@@ -9,7 +9,7 @@ from unittest.mock import Mock
 import pytest
 from fault_detector_msgs.msg import CommandStatus
 from py_trees.common import Status
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, Twist
 
 from fault_detector_spot.application.behaviour_tree.behaviours.robot_command_resources import (
     RobotCommandResources, _StopAwareActionClient,
@@ -118,6 +118,9 @@ def test_stop_callback_cancels_each_owner_before_a_tree_tick_or_resource_workflo
     resources._base_movement_executors[""] = base
     resources._waypoint_executor = navigation
     resources._velocity_publisher = Mock()
+    velocity = Twist()
+    velocity.linear.x = 0.2
+    resources._receive_velocity(velocity)
     owner = consumer()
     owner.robot_command_resources = resources
     held, release = Event(), Event()
@@ -170,9 +173,38 @@ def test_velocity_stream_requires_quiet_period_even_when_zero_and_no_nav2_goal()
     assert not resources.stop_sources_quiet()
     now[0] = 0.6
     assert resources.stop_sources_quiet()
-    resources._receive_velocity(object())
+    resources._receive_velocity(Twist())
     assert not resources.stop_sources_quiet()
     now[0] = 1.2
+    assert resources.stop_sources_quiet()
+
+
+@pytest.mark.parametrize("stop_method", ["begin_shutdown", "request_software_stop"])
+@pytest.mark.parametrize("stream", ["absent", "zero", "expired", "moving", "expired_navigation"])
+def test_lifecycle_stop_only_publishes_velocity_to_stop_a_live_motion_stream(stop_method, stream):
+    now = [0.0]
+    resources = RobotCommandResources(monotonic_clock=lambda: now[0])
+    resources._velocity_publisher = Mock()
+    if stream != "absent":
+        velocity = Twist()
+        velocity.linear.x = 0.0 if stream == "zero" else 0.2
+        resources._receive_velocity(velocity)
+    if stream in {"expired", "expired_navigation"}:
+        now[0] = 1.0
+    if stream == "expired_navigation":
+        resources._waypoint_executor = SimpleNamespace(
+            active=True, request_cancel=Mock(), cancel=Mock(),
+        )
+
+    getattr(resources, stop_method)()
+
+    assert resources.stop_latched
+    assert not resources.stop_sources_quiet()
+    if stream in {"moving", "expired_navigation"}:
+        resources._velocity_publisher.publish.assert_called_once_with(Twist())
+    else:
+        resources._velocity_publisher.publish.assert_not_called()
+    now[0] += 0.6
     assert resources.stop_sources_quiet()
 
 
