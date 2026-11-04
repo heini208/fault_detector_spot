@@ -59,8 +59,16 @@ def estimate_live_surface_normal(
     # Choose the dominant local depth rather than trusting one possibly
     # isolated foreground/outlier pixel as the depth gate for the plane.
     rows, columns = np.nonzero(point_cloud.valid_mask)
-    nearby = ((columns - center.u) ** 2 + (rows - center.v) ** 2
-              <= window_radius_px ** 2)
+    squared_distance = (columns - center.u) ** 2 + (rows - center.v) ** 2
+    seed_search_radius = window_radius_px
+    nearby = squared_distance <= seed_search_radius ** 2
+    if not np.any(nearby):
+        # Registration or gripper occlusion can leave the small seed window
+        # empty while a usable wall sample lies just outside it. Search only
+        # as far as the existing fit radius; the fit quality gates stay fixed.
+        # Never skip an observed near surface or ambiguous original window.
+        seed_search_radius = fit_radius
+        nearby = squared_distance <= seed_search_radius ** 2
     rows, columns = rows[nearby], columns[nearby]
     seed = center
     if len(rows):
@@ -80,7 +88,7 @@ def estimate_live_surface_normal(
             seed,
             depth_image,
             camera_info,
-            search_radius_px=window_radius_px,
+            search_radius_px=seed_search_radius,
             point_cloud=point_cloud,
             rgb_size=(
                 int(depth_image.width),
@@ -92,8 +100,8 @@ def estimate_live_surface_normal(
             raise
         raise ValueError(
             "No valid registered hand depth was found in the lower-middle "
-            f"{window_radius_px} px window. The surface may be too "
-            "close or too far from the gripper depth camera."
+            f"{seed_search_radius} px seed-search window. "
+            "A reliable nearby surface patch is required for observation."
         ) from exception
 
     camera_distance_m = float(projected.depth_m)
@@ -136,4 +144,3 @@ def estimate_live_surface_normal(
             "Unable to fit a reliable front surface plane: "
             f"{exception}"
         ) from exception
-

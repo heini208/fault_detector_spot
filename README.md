@@ -881,7 +881,11 @@ image, a nearby fitted surface can guide one observation translation that
 brings the target just inside the image with room for the full plane-fit patch.
 If near foreground or missing local depth obscures an in-view target, a reliable
 nearby surface patch can guide a translation that projects the target onto
-supported depth. Candidate patches are ordered by lateral displacement across
+supported depth. Its initial lower-middle seed search expands from 16 to 32
+pixels only when the smaller window has no valid depth. The local fit remains
+bounded to 32 pixels and retains its sample-count, spread, planarity and camera
+distance requirements. An observed near surface is never skipped by this search.
+Candidate patches are ordered by lateral displacement across
 the image, with their own local plane fit and a 3 mm positioning margin. Their
 normals must agree with the observed wall within 10 degrees, and the original
 target must lie within 15 mm of their measured plane. The observed target's
