@@ -83,6 +83,7 @@ class ProbeSurfaceSource(RuntimeSource):
         )
         self._surface_distance_cache = {}
         self._sensor_tip_distance_cache = {}
+        self._sensor_tip_distance_last_failed_fit = None
         self._hand_depth_camera_info = None
         self._attachment_state = None
         self._tf_buffer = tf_buffer
@@ -382,12 +383,13 @@ class ProbeSurfaceSource(RuntimeSource):
             maximum_age_sec=maximum_age_sec,
             minimum_samples=minimum_samples,
             maximum_latest_age_sec=maximum_latest_age_sec,
+            maximum_new_fits=1,
         )
 
     def _distance_samples(
         self, *, measurement_context, pose_target_frame, measure, cache,
         receipt_not_before, maximum_age_sec, minimum_samples,
-        maximum_latest_age_sec,
+        maximum_latest_age_sec, maximum_new_fits=None,
     ):
         if not math.isfinite(float(receipt_not_before)):
             raise ValueError("Surface sample receipt threshold must be finite")
@@ -409,12 +411,16 @@ class ProbeSurfaceSource(RuntimeSource):
             camera_info = deepcopy(self._hand_depth_camera_info)
             history = tuple(self._hand_depth_history)
             attachment_state = deepcopy(self._attachment_state)
+            previous_failed_fit = None
+            if maximum_new_fits is not None:
+                previous_failed_fit = self._sensor_tip_distance_last_failed_fit
+                self._sensor_tip_distance_last_failed_fit = None
         if camera_info is None:
             raise ValueError(
                 "No registered hand-depth camera info is available"
             )
 
-        samples = []
+        samples = {}
         valid_receipts = []
         errors = []
         now = time.monotonic()
@@ -433,15 +439,37 @@ class ProbeSurfaceSource(RuntimeSource):
         )
         post_start_count = 0
         eligible_count = 0
-        for receipt_time, depth_image in history:
+        new_fits = 0
+        deferred_count = 0
+        # Target-local fits inspect a full depth image. Fitting a buffered
+        # backlog in one tick can age even the newest frame beyond the live
+        # freshness limit. Acquire one new target fit per poll, newest first,
+        # and retain timestamped, revalidated cached fits for temporal stability.
+        selected_history = list(reversed(history)) if maximum_new_fits else history
+        if previous_failed_fit is not None and previous_failed_fit[1][0] == context:
+            # Resume at the previous rejection so several bad recent frames
+            # cannot alternate forever ahead of an older supported target.
+            failed_index = next((index for index, (_, image) in enumerate(selected_history)
+                                 if id(image) == previous_failed_fit[0]), 0)
+            selected_history = selected_history[failed_index:] + selected_history[:failed_index]
+        for history_index, (receipt_time, depth_image) in enumerate(selected_history):
             if receipt_time + 1e-9 < receipt_not_before:
                 continue
-            post_start_count += 1
+            if history_index < len(history):
+                post_start_count += 1
             age = now - receipt_time
             if age < -1e-9 or age > maximum_age_sec:
                 continue
-            eligible_count += 1
+            if history_index < len(history):
+                eligible_count += 1
             try:
+                with self._lock:
+                    cached = cache.get(id(depth_image))
+                same_context = cached is not None and cached[0][0] == context
+                if (not same_context and maximum_new_fits is not None
+                        and new_fits >= maximum_new_fits):
+                    deferred_count += 1
+                    continue
                 stamp = Time.from_msg(depth_image.header.stamp)
                 if stamp.nanoseconds <= 0:
                     raise ValueError("Registered hand-depth timestamp is empty")
@@ -460,16 +488,32 @@ class ProbeSurfaceSource(RuntimeSource):
                 # depth fit when its image, calibration, attachment and pose
                 # are unchanged. Failed fits/TF lookups must remain retryable.
                 cache_key = (context, camera_pose)
-                with self._lock:
-                    cached = cache.get(id(depth_image))
                 if cached is not None and cached[0] == cache_key:
                     sample = deepcopy(cached[1])
                 else:
-                    sample = measure(
-                        depth_image,
-                        camera_info,
-                        camera_pose,
-                    )
+                    if maximum_new_fits is not None and new_fits >= maximum_new_fits:
+                        deferred_count += 1
+                        continue
+                    if previous_failed_fit == (id(depth_image), cache_key):
+                        # Give another frame one turn after a failed fit. If
+                        # none can be fitted, retry this acquisition at the end
+                        # of the same poll. Context/TF changes bypass the hint.
+                        previous_failed_fit = None
+                        selected_history.append((receipt_time, depth_image))
+                        continue
+                    # A newest image may arrive before its TF. Such a frame
+                    # must not consume the fit slot and starve older fresh,
+                    # transformable input on every subsequent poll.
+                    new_fits += 1
+                    try:
+                        sample = measure(depth_image, camera_info, camera_pose)
+                    except Exception:
+                        if maximum_new_fits is not None:
+                            with self._lock:
+                                self._sensor_tip_distance_last_failed_fit = (
+                                    id(depth_image), deepcopy(cache_key),
+                                )
+                        raise
                     with self._lock:
                         if any(
                             image is depth_image
@@ -478,7 +522,7 @@ class ProbeSurfaceSource(RuntimeSource):
                             cache[id(depth_image)] = (
                                 deepcopy(cache_key), deepcopy(sample),
                             )
-                samples.append(sample)
+                samples[id(depth_image)] = sample
                 valid_receipts.append(receipt_time)
             except Exception as exception:
                 errors.append(str(exception))
@@ -507,6 +551,7 @@ class ProbeSurfaceSource(RuntimeSource):
                 f"within_age={eligible_count}, "
                 f"valid={len(samples)}, "
                 f"rejected={len(errors)}, "
+                f"deferred={deferred_count}, "
                 f"newest_age={newest_detail}, "
                 f"max_age={maximum_age_sec:.3f}s"
             )
@@ -517,7 +562,7 @@ class ProbeSurfaceSource(RuntimeSource):
                 f"{minimum_samples} fresh registered hand-depth sample"
                 f"{'s' if minimum_samples != 1 else ''}: {detail}"
             )
-        return tuple(samples)
+        return tuple(samples[id(image)] for _, image in history if id(image) in samples)
 
     def _lookup_pose(
         self,
@@ -544,6 +589,9 @@ class ProbeSurfaceSource(RuntimeSource):
                 for key in tuple(cache):
                     if key not in buffered_images:
                         del cache[key]
+            if (self._sensor_tip_distance_last_failed_fit is not None
+                    and self._sensor_tip_distance_last_failed_fit[0] not in buffered_images):
+                self._sensor_tip_distance_last_failed_fit = None
 
     def _receive_hand_depth_camera_info(self, message: CameraInfo) -> None:
         with self._lock:
@@ -568,6 +616,7 @@ class ProbeSurfaceSource(RuntimeSource):
             self._hand_depth_history.clear()
             self._surface_distance_cache.clear()
             self._sensor_tip_distance_cache.clear()
+            self._sensor_tip_distance_last_failed_fit = None
             self._hand_depth_camera_info = None
             self._attachment_state = None
 

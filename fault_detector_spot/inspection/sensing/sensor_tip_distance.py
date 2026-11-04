@@ -106,7 +106,12 @@ def measure_sensor_tip_distance(
         ).oriented_toward(Vector3Data.zero())
         distance = plane.signed_distance(Vector3Data.zero())
         if not math.isfinite(distance) or plane.normal.x >= -1e-6:
-            raise ValueError("Measured target plane does not intersect forward probe +X")
+            raise ValueError(
+                "Measured target plane does not intersect forward probe +X: "
+                f"normal_x={plane.normal.x:+.4f}, distance={distance:.3f} m, "
+                f"camera depth={projected.depth_m:.3f} m at "
+                f"pixel ({projected.sampled_pixel.u}, {projected.sampled_pixel.v})"
+            )
         axis_distance = -distance / plane.normal.x
         if not 0.003 <= axis_distance <= 0.50:
             raise ValueError(
@@ -188,7 +193,9 @@ def _nearest_axis_depth_pixel(cloud, reference_probe_pose, camera_pose_odom):
     points = cloud.points_camera[rows, columns]
     origin, direction = probe_axis_in_camera(reference_probe_pose, camera_pose_odom)
     offsets = points - origin
-    axial = offsets @ direction
+    # Avoid launching a BLAS thread pool for an Nx3 vector reduction while
+    # the ROS executor must keep receiving fresh depth and transform data.
+    axial = np.einsum("ij,j->i", offsets, direction)
     radial_squared = np.maximum(0.0, np.einsum("ij,ij->i", offsets, offsets) - axial ** 2)
     candidates = np.flatnonzero(
         (axial >= 0.003) & (axial <= 0.50)

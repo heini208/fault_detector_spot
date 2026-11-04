@@ -895,6 +895,10 @@ After settling, the operation requires five distinct frames spanning one
 second, at most 5 mm distance variation, consistent fitted normals, and a
 newest valid reading no older than 0.5 seconds. Fits are reused only while their
 camera calibration, timestamped TF, target and attachment remain unchanged.
+Sensor-tip sampling fits at most one uncached frame per poll, starting with
+the newest frame, and reuses previously validated fits. This
+avoids making the latest sample stale while processing a depth backlog; the
+0.5-second freshness check still applies after processing.
 The camera depth must be at least 0.230 m (30 mm above the 0.200 m near limit),
 and the measured axis intersection
 must be 3–500 mm ahead. Measurements anchored to a saved tag target additionally
