@@ -335,3 +335,130 @@ def test_cancel_during_final_read_discards_prepared_trajectory(head_rig):
     assert rig.planner.poll().outcome is MoveItPlanOutcome.ERROR
     assert rig.planner.start(rig.target).outcome is MoveItPlanOutcome.RUNNING
     assert rig.planner._completed_plan is None
+
+
+@pytest.mark.parametrize("cartesian", [False, True])
+@pytest.mark.parametrize("enabled,bypass", [(False, False), (True, False), (True, True)])
+def test_unchanged_scene_skips_writes_but_keeps_fresh_checks(head_rig, cartesian, enabled, bypass):
+    rig = head_rig
+    if enabled:
+        rig.toggle()
+    mode = "cartesian" if cartesian else "motion"
+    service = CARTESIAN if cartesian else PLAN
+    rig.advance_to(mode, bypass=bypass, cartesian=cartesian)
+    assert rig.finish_plan().outcome is MoveItPlanOutcome.SUCCESS
+    rig.node.events.clear()
+
+    rig.advance_to("head_verify", bypass=bypass, cartesian=cartesian)
+
+    # The initial fresh scene read replaces verification of a redundant write.
+    assert rig.node.events == [ATTACHMENT, MODEL, READ, ATTACHMENT]
+    rig.attachment()
+    assert rig.planner._planning_mode == mode
+    assert rig.finish_plan().outcome is MoveItPlanOutcome.SUCCESS
+    assert rig.node.events == [ATTACHMENT, MODEL, READ, ATTACHMENT, service, READ, ATTACHMENT]
+
+
+def test_policy_change_updates_rules_without_readding_unchanged_head(head_rig):
+    rig = head_rig
+    rig.advance_to("motion")
+    assert rig.finish_plan().outcome is MoveItPlanOutcome.SUCCESS
+    rig.toggle()
+    rig.advance_to("apply")
+
+    diff = rig.node.clients[APPLY].requests[-1].scene
+    assert not diff.robot_state.attached_collision_objects
+    assert not diff.object_colors
+    matrix = diff.allowed_collision_matrix
+    row = matrix.entry_values[matrix.entry_names.index(SENSOR_HEAD_OBJECT_ID)].enabled
+    assert not row[matrix.entry_names.index(OCTOMAP_OBJECT_ID)]
+    rig.applied()
+    assert rig.planner._planning_mode == "verify_scene"
+    rig.read()
+    rig.attachment()
+    assert rig.finish_plan().outcome is MoveItPlanOutcome.SUCCESS
+
+
+@pytest.mark.parametrize("damage", ["missing", "mesh", "world_copy", "touch"])
+def test_fresh_preflight_repairs_changed_attachment_even_after_previous_success(head_rig, damage):
+    rig = head_rig
+    rig.advance_to("motion")
+    assert rig.finish_plan().outcome is MoveItPlanOutcome.SUCCESS
+    attached = rig.server_scene.robot_state.attached_collision_objects
+    head = next(obj for obj in attached if obj.object.id == SENSOR_HEAD_OBJECT_ID)
+    if damage == "missing":
+        attached.remove(head)
+    elif damage == "mesh":
+        head.object.meshes[0].vertices[0].x += .001
+    elif damage == "world_copy":
+        rig.server_scene.world.collision_objects.append(CollisionObject(id=SENSOR_HEAD_OBJECT_ID))
+    else:
+        head.touch_links.append("body")
+
+    rig.advance_to("apply")
+
+    diff = rig.node.clients[APPLY].requests[-1].scene
+    assert len(diff.robot_state.attached_collision_objects) == 1
+    assert diff.robot_state.attached_collision_objects[0] == rig.head.expected
+    rig.applied()
+    rig.read()
+    rig.attachment()
+    assert rig.finish_plan().outcome is MoveItPlanOutcome.SUCCESS
+
+
+@pytest.mark.parametrize("change", ["attachment", "policy", "post_plan_mesh"])
+def test_unchanged_scene_path_still_rejects_changes_before_dispatch(head_rig, change):
+    rig = head_rig
+    rig.advance_to("motion")
+    assert rig.finish_plan().outcome is MoveItPlanOutcome.SUCCESS
+    rig.node.events.clear()
+    rig.advance_to("head_verify")
+    if change == "attachment":
+        rig.registry.state.attachment_revision += 1
+        update = rig.attachment()
+    elif change == "policy":
+        rig.toggle()
+        update = rig.attachment()
+    else:
+        rig.attachment()
+        rig.planned()
+        head = next(obj for obj in rig.server_scene.robot_state.attached_collision_objects
+                    if obj.object.id == SENSOR_HEAD_OBJECT_ID)
+        head.object.meshes[0].vertices[0].x += .001
+        update = rig.read()
+
+    assert APPLY not in rig.node.events
+    assert update.outcome is MoveItPlanOutcome.FAILURE
+    assert update.trajectory is None
+
+
+def test_cancelled_unchanged_scene_read_cannot_release_a_plan(head_rig):
+    rig = head_rig
+    rig.advance_to("motion")
+    assert rig.finish_plan().outcome is MoveItPlanOutcome.SUCCESS
+    rig.node.events.clear()
+    rig.advance_to("read_scene")
+    previous = rig.planner._future
+
+    rig.planner.cancel()
+    previous.set_result(GetPlanningScene.Response(scene=deepcopy(rig.server_scene)))
+
+    assert rig.planner.poll().outcome is MoveItPlanOutcome.ERROR
+    assert rig.node.events == [ATTACHMENT, MODEL, READ]
+    rig.advance_to("motion")
+    assert APPLY not in rig.node.events
+    assert rig.finish_plan().outcome is MoveItPlanOutcome.SUCCESS
+
+
+def test_scene_diff_cannot_mutate_the_cached_expected_head(head_rig):
+    rig = head_rig
+    rig.advance_to("read_scene")
+    _, _, request = rig.scene.apply_request(GetPlanningScene.Response(scene=rig.server_scene))
+    outgoing = request.scene.robot_state.attached_collision_objects[0]
+    original_x = rig.head.expected.object.meshes[0].vertices[0].x
+
+    outgoing.object.meshes[0].vertices[0].x += .01
+    outgoing.touch_links.append("body")
+
+    assert rig.head.expected.object.meshes[0].vertices[0].x == original_x
+    assert "body" not in rig.head.expected.touch_links

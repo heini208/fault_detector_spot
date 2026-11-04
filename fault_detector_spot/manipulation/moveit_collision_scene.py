@@ -55,7 +55,12 @@ class MoveItCollisionScene:
                 return request
             return self._read_request()
         if phase == "read_scene":
-            return self.apply_request(response)
+            request = self.apply_request(response)
+            if request is not None or self.sensor_head is None:
+                return request
+            # This fresh read already verified the unchanged scene. Keep the
+            # authoritative attachment check immediately before planning.
+            return self.sensor_head.verification_request()
         if phase == "apply":
             if not response.success:
                 raise RuntimeError("MoveIt rejected the collision scene update")
@@ -72,21 +77,31 @@ class MoveItCollisionScene:
 
     def apply_request(self, response):
         self.validate()
-        scene = PlanningScene()
-        scene.is_diff = True
-        scene.robot_state.is_diff = True
-        scene.allowed_collision_matrix = occupancy_collision_matrix(
+        matrix = occupancy_collision_matrix(
             response.scene.allowed_collision_matrix,
             ignore_environment_collisions=self._ignore_environment_collisions,
         )
+        replace_head = False
         if self.sensor_head is not None:
             head = self.sensor_head.expected
             if head is None:
                 raise RuntimeError("Sensor collision geometry has not been prepared")
-            scene.allowed_collision_matrix = sensor_head_collision_matrix(
-                scene.allowed_collision_matrix, head.object.id,
+            matrix = sensor_head_collision_matrix(
+                matrix, head.object.id,
                 ignore_environment_collisions=self._ignore_environment_collisions,
             )
+            try:
+                self._verify_attachment(response.scene)
+            except (ValueError, RuntimeError):
+                replace_head = True
+        if not replace_head and matrix == response.scene.allowed_collision_matrix:
+            return None
+
+        scene = PlanningScene()
+        scene.is_diff = True
+        scene.robot_state.is_diff = True
+        scene.allowed_collision_matrix = matrix
+        if replace_head:
             # Attached ADD replaces this body and consumes any same-ID world
             # object. An additional world REMOVE would make MoveIt reject the diff.
             scene.robot_state.attached_collision_objects = [deepcopy(head)]
@@ -95,7 +110,7 @@ class MoveItCollisionScene:
             )]
         return "apply", self.apply_client, ApplyPlanningScene.Request(scene=scene)
 
-    def _verify_geometry(self, scene):
+    def _verify_attachment(self, scene):
         expected = self.sensor_head.expected
         objects = [obj for obj in scene.robot_state.attached_collision_objects
                    if obj.object.id == expected.object.id]
@@ -104,10 +119,13 @@ class MoveItCollisionScene:
         ):
             raise RuntimeError("MoveIt sensor head is missing, duplicated, or detached")
         validate_attached_geometry(objects[0], expected)
+
+    def _verify_geometry(self, scene):
+        self._verify_attachment(scene)
         # Verify occupancy for the newly attached body too. The default applies
         # when its name was absent from the original matrix.
         matrix = sensor_head_collision_matrix(
-            scene.allowed_collision_matrix, expected.object.id,
+            scene.allowed_collision_matrix, self.sensor_head.expected.object.id,
             ignore_environment_collisions=self._ignore_environment_collisions,
         )
         if matrix != scene.allowed_collision_matrix:

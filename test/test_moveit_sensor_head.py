@@ -3,6 +3,7 @@
 from copy import deepcopy
 from dataclasses import replace
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 from fault_detector_msgs.msg import SensorAttachmentState
@@ -13,6 +14,7 @@ from rclpy.serialization import deserialize_message, serialize_message
 
 from fault_detector_spot.inspection.model.sensor_geometry import MAX_MESH_CHUNK_BYTES
 from fault_detector_spot.inspection.model.sensor_models import DEFAULT_HAND_SENSOR_ID
+from fault_detector_spot.manipulation import moveit_sensor_head
 from fault_detector_spot.manipulation.moveit_sensor_head import MoveItSensorHead
 from fault_detector_spot.manipulation.sensor_head_geometry import SENSOR_HEAD_OBJECT_ID
 from fault_detector_spot.shared.geometry.models import PoseData, QuaternionData, Vector3Data
@@ -219,8 +221,76 @@ def test_confirmed_stock_hand_restores_stock_jaw_without_mesh_download(
     assert head.advance("head_verify", wire(response)) is None
 
 
+def test_unchanged_custom_head_reuses_validated_geometry_without_copying(
+    head, mount, robot_description, monkeypatch,
+):
+    validate_model = Mock(wraps=moveit_sensor_head.validate_sensor_head_model)
+    build_attachment = Mock(wraps=moveit_sensor_head.sensor_head_attachment)
+    monkeypatch.setattr(moveit_sensor_head, "validate_sensor_head_model", validate_model)
+    monkeypatch.setattr(moveit_sensor_head, "sensor_head_attachment", build_attachment)
+    response = attachment_response(mount.geometry)
+    download(head, read_model(head, robot_description, response), mount.data)
+    expected = head.expected
+
+    # The helper still requires a fresh authoritative attachment and model read.
+    assert read_model(head, robot_description, response) is None
+
+    assert head.expected is expected
+    assert validate_model.call_count == 1
+    assert build_attachment.call_count == 1
+
+
+def test_stock_head_reuses_assets_until_robot_description_changes(
+    head, robot_description, monkeypatch,
+):
+    build_attachment = Mock(wraps=moveit_sensor_head.stock_head_attachment)
+    monkeypatch.setattr(moveit_sensor_head, "stock_head_attachment", build_attachment)
+    response = attachment_response(None, "")
+    assert read_model(head, robot_description, response) is None
+    expected = head.expected
+
+    assert read_model(head, robot_description, response) is None
+    assert head.expected is expected
+    assert build_attachment.call_count == 1
+
+    changed_description = robot_description.replace('name="spot"', 'name="updated_spot"')
+    assert read_model(head, changed_description, response) is None
+    assert head.expected is not expected
+    assert build_attachment.call_count == 2
+
+
+def test_custom_head_rebuilds_when_robot_description_changes(
+    head, mount, robot_description, monkeypatch,
+):
+    build_attachment = Mock(wraps=moveit_sensor_head.sensor_head_attachment)
+    monkeypatch.setattr(moveit_sensor_head, "sensor_head_attachment", build_attachment)
+    response = attachment_response(mount.geometry)
+    download(head, read_model(head, robot_description, response), mount.data)
+    expected = head.expected
+
+    changed_description = robot_description.replace('name="spot"', 'name="updated_spot"')
+    assert read_model(head, changed_description, response) is None
+
+    assert head.expected is not expected
+    assert build_attachment.call_count == 2
+
+
+@pytest.mark.parametrize("stock", (False, True))
+def test_cached_attachment_does_not_accept_a_changed_unsupported_model(
+    head, mount, robot_description, stock,
+):
+    response = attachment_response(None, "") if stock else attachment_response(mount.geometry)
+    download(head, read_model(head, robot_description, response), mount.data)
+
+    with pytest.raises(ValueError, match="jaw slot"):
+        read_model(head, "<robot/>", response)
+
+    assert head.expected is None
+
+
 def test_cache_reuses_only_bytes_and_applies_new_placement(head, mount, robot_description):
     download(head, read_model(head, robot_description, attachment_response(mount.geometry)), mount.data)
+    previous = head.expected
     geometry = replace(mount.geometry, hand_to_geometry=PoseData(
         Vector3Data(.04, .02, .1), QuaternionData.identity(),
     ))
@@ -228,6 +298,8 @@ def test_cache_reuses_only_bytes_and_applies_new_placement(head, mount, robot_de
     request = read_model(head, robot_description, attachment_response(geometry, revision=4))
 
     assert request is None
+    assert head.expected is not previous
+    assert previous.object.mesh_poses[0].position.x == -.112
     assert head.expected.object.mesh_poses[0].position.x == .04
     assert head.expected.object.mesh_poses[0].position.z == .1
 

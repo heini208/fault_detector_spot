@@ -548,9 +548,16 @@ imported geometry awaiting save, and green when opening a mount with saved
 geometry. This indicator describes storage, not physical installation or MoveIt
 synchronization. Select and confirm the physically installed mount as usual.
 
-Before every MoveIt arm plan, the backend obtains the confirmed attachment,
-fetches its saved mesh through bounded `GetSensorMesh` reads, and installs one
-owned attached collision object, `fault_detector_sensor_head`. The exported
+Before every MoveIt arm plan, the backend obtains the confirmed attachment and
+current robot model, then checks the live planning scene. Saved meshes are fetched
+through bounded `GetSensorMesh` reads and reused while their geometry and model
+are unchanged. The owned attached collision object, `fault_detector_sensor_head`,
+is installed only when its geometry differs from the live scene; changes to
+collision rules alone do not replace the mesh. An unchanged scene skips the write
+and its readback, while retaining attachment checks before planning and scene and
+attachment verification afterward. Registry reads still check the saved mesh's
+size and checksum every time, reusing geometric validation for identical bytes.
+The exported
 `hand_to_geometry` placement is applied once; the existing sensor-tip TF remains
 independent. Missing geometry, pending confirmation, an incompatible robot model,
 or a failed scene update blocks planning. Legacy mounts need a saved `.sensorhead`

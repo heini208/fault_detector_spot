@@ -21,6 +21,7 @@ class SensorMeshStore:
     def __init__(self, root_dir):
         self.root_dir = Path(root_dir)
         self._lock = Lock()
+        self._validated_asset = None
 
     def store_chunk(
         self, sha256: str, byte_count: int, offset: int, data: bytes,
@@ -70,6 +71,7 @@ class SensorMeshStore:
                         )
                 if complete:
                     os.replace(partial, asset)
+                    self._validated_asset = (sha256, byte_count)
                 return complete
             except Exception:
                 partial.unlink(missing_ok=True)
@@ -99,8 +101,14 @@ class SensorMeshStore:
             return data[offset:offset + MAX_MESH_CHUNK_BYTES]
 
     def _read_verified(self, sha256: str, byte_count: int) -> bytes:
+        # Re-read and hash every time so missing or externally modified assets
+        # still fail. A matching content digest makes repeated topology and
+        # component-volume validation unnecessary for these exact bytes.
         data = self._read_asset(sha256, byte_count)
-        validate_collision_mesh(data)
+        identity = (sha256, byte_count)
+        if self._validated_asset != identity:
+            validate_collision_mesh(data)
+            self._validated_asset = identity
         return data
 
     def _read_asset(self, sha256: str, byte_count: int) -> bytes:

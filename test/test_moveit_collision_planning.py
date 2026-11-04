@@ -192,6 +192,17 @@ def test_explicit_bypass_remains_valid_across_global_policy_revisions(rig):
     assert rig.planner.validate_prepared_scene() is None
 
 
+def test_unchanged_occupancy_rules_need_no_scene_write_without_a_sensor_head(rig):
+    rig.advance_to("dispatch")
+    rig.node.events.clear()
+    rig.planner.start(rig.target)
+
+    rig.read()
+
+    assert rig.node.events == [READ, PLAN]
+    assert rig.planned().outcome is MoveItPlanOutcome.SUCCESS
+
+
 @pytest.mark.parametrize("cancel", [False, True])
 def test_abandoned_scene_read_never_applies_late_response_or_blocks_another_command(rig, cancel):
     rig.advance_to("read")

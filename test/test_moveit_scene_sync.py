@@ -86,14 +86,14 @@ def test_command_takes_over_sync_then_runs_its_own_complete_preflight(head_rig, 
     service = CARTESIAN if cartesian else PLAN
     assert rig.node.clients[service].requests == [expected]
     matrices = [request.scene.allowed_collision_matrix for request in rig.node.clients[APPLY].requests]
-    for matrix, ignored in zip(matrices, (False, bypass), strict=True):
+    for matrix, ignored in zip(matrices, (False, True) if bypass else (False,), strict=True):
         row = matrix.entry_values[matrix.entry_names.index(SENSOR_HEAD_OBJECT_ID)].enabled
         assert row[matrix.entry_names.index(OCTOMAP_OBJECT_ID)] is ignored
     assert rig.finish_plan().outcome is MoveItPlanOutcome.SUCCESS
     assert rig.node.events == [
         ATTACHMENT, MODEL, MESH, MESH, READ, APPLY, READ, ATTACHMENT,
-        ATTACHMENT, MODEL, READ, APPLY, READ, ATTACHMENT, service, READ, ATTACHMENT,
-    ]
+        ATTACHMENT, MODEL, READ,
+    ] + ([APPLY, READ] if bypass else []) + [ATTACHMENT, service, READ, ATTACHMENT]
 
 
 @pytest.mark.parametrize("invalid", ["type", "frame", "bypass"])

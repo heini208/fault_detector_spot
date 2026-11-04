@@ -1,7 +1,5 @@
 """Resolve a confirmed sensor head through the application ROS boundary."""
 
-from copy import deepcopy
-
 from fault_detector_msgs.msg import SensorAttachmentState
 from fault_detector_msgs.srv import GetSensorAttachment, GetSensorMesh
 from rcl_interfaces.msg import ParameterType
@@ -36,6 +34,7 @@ class MoveItSensorHead:
         self._synchronized_state = None
         self._state = None
         self._geometry = None
+        self._model_description = None
         self._mesh_bytes = bytearray()
         self._cached_mesh = None
         self._cached_attachment = None
@@ -63,6 +62,7 @@ class MoveItSensorHead:
 
     def prepare(self):
         self._state = None
+        self._model_description = None
         self.expected = None
         self._mesh_bytes.clear()
         return "head_attachment", self.attachment_client, GetSensorAttachment.Request()
@@ -101,14 +101,18 @@ class MoveItSensorHead:
                     or response.values[0].type != ParameterType.PARAMETER_STRING):
                 raise RuntimeError("MoveIt robot description is unavailable")
             description = response.values[0].string_value
-            validate_sensor_head_model(description)
-            if self._geometry is None:
-                self.expected = stock_head_attachment(description)
-                return None
+            self._model_description = description
+            key = (description, self._geometry)
             if (self._cached_attachment is not None
-                    and self._cached_attachment[0] == self._geometry):
-                self.expected = deepcopy(self._cached_attachment[1])
+                    and self._cached_attachment[0] == key):
+                # Treat the prepared geometry as immutable. The scene writer
+                # copies it when constructing a mutable ApplyPlanningScene diff.
+                self.expected = self._cached_attachment[1]
                 return None
+            if self._geometry is None:
+                self._set_attachment(stock_head_attachment(description))
+                return None
+            validate_sensor_head_model(description)
             if self._cached_mesh is not None:
                 digest, mesh_bytes = self._cached_mesh
                 if digest == self._geometry.collision_sha256:
@@ -136,8 +140,11 @@ class MoveItSensorHead:
         raise ValueError(f"Unknown sensor head read phase: {phase}")
 
     def _set_custom_attachment(self, mesh_bytes):
-        self.expected = sensor_head_attachment(self._geometry, mesh_bytes)
-        self._cached_attachment = (self._geometry, deepcopy(self.expected))
+        self._set_attachment(sensor_head_attachment(self._geometry, mesh_bytes))
+
+    def _set_attachment(self, attachment):
+        self.expected = attachment
+        self._cached_attachment = ((self._model_description, self._geometry), attachment)
 
     def _mesh_request(self):
         return "head_mesh", self.mesh_client, GetSensorMesh.Request(

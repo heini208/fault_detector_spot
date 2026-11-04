@@ -1,6 +1,7 @@
 """Offline tests for bounded uploads and managed collision assets."""
 
 import hashlib
+import os
 import struct
 
 import pytest
@@ -179,6 +180,67 @@ def test_equal_length_asset_tampering_fails_checksum(tmp_path, mesh):
 
     with pytest.raises(ValueError, match="checksum"):
         store.read(geometry)
+
+
+def test_verified_reads_reuse_geometry_validation_but_recheck_file_integrity(
+    tmp_path, mesh, monkeypatch,
+):
+    store = SensorMeshStore(tmp_path)
+    geometry = geometry_for(mesh)
+    digest = geometry.collision_sha256
+    assert store.store_chunk(digest, len(mesh), 0, mesh)
+
+    def fail_validation(*_args):
+        pytest.fail("Identical verified bytes must not repeat geometry validation")
+
+    monkeypatch.setattr(
+        "fault_detector_spot.inspection.repository.sensor_mesh_store.validate_collision_mesh",
+        fail_validation,
+    )
+    assert store.read(geometry) == mesh
+    assert store.read(geometry) == mesh
+    path = tmp_path / f"{digest}.stl"
+    original_stat = path.stat()
+    path.write_bytes(b"x" + mesh[1:])
+    os.utime(path, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
+    with pytest.raises(ValueError, match="checksum"):
+        store.read(geometry)
+    path.unlink()
+    with pytest.raises(FileNotFoundError):
+        store.read(geometry)
+
+
+def test_restart_validates_persisted_geometry_once(tmp_path, mesh, monkeypatch):
+    store = SensorMeshStore(tmp_path)
+    geometry = geometry_for(mesh)
+    assert store.store_chunk(geometry.collision_sha256, len(mesh), 0, mesh)
+    restarted = SensorMeshStore(tmp_path)
+    from fault_detector_spot.inspection.repository import sensor_mesh_store
+
+    validate = sensor_mesh_store.validate_collision_mesh
+    validations = []
+
+    def record_validation(data):
+        validations.append(data)
+        validate(data)
+
+    monkeypatch.setattr(sensor_mesh_store, "validate_collision_mesh", record_validation)
+    assert restarted.read(geometry) == mesh
+    assert restarted.read(geometry) == mesh
+    assert validations == [mesh]
+
+
+def test_invalid_geometry_is_never_remembered_as_verified(tmp_path, mesh):
+    store = SensorMeshStore(tmp_path)
+    valid = geometry_for(mesh)
+    assert store.store_chunk(valid.collision_sha256, len(mesh), 0, mesh)
+    invalid = b"x" * len(mesh)
+    geometry = geometry_for(invalid)
+    (tmp_path / f"{geometry.collision_sha256}.stl").write_bytes(invalid)
+
+    for _ in range(2):
+        with pytest.raises(ValueError, match="triangle count"):
+            store.read(geometry)
 
 
 def test_failed_publish_discards_partial_without_creating_asset(
