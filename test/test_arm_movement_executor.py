@@ -748,6 +748,64 @@ def test_goal_response_timeout_cancels_goal_if_accepted_late(
     assert not executor.execution_idle  # Late action termination is not physical stop proof.
 
 
+@pytest.mark.parametrize("operation", [
+    "probe", "pose", "ready_probe", "prepare", "stow",
+    "close_gripper", "toggle_gripper",
+])
+def test_new_motion_requires_late_goal_termination_and_fresh_stop(
+    monkeypatch, operation,
+):
+    target = PoseStamped()
+    target.header.frame_id = "body"
+    target.pose.orientation.w = 1.0
+    transformer = FakeTransformer({
+        ("body", "hand"): transform("body", "hand"),
+    })
+    capture_builder(monkeypatch)
+    clock = ManualClock()
+    stop_client = FakeArmStopServiceClient()
+    sent = ManualFuture()
+    executor, client = executor_with_client(
+        transformer, action_client=FakeActionClient(send_future=sent),
+        arm_stop_service_client=stop_client, monotonic_clock=clock,
+        goal_response_timeout_sec=2.0,
+    )
+
+    assert executor.probe(target).outcome is ArmMovementOutcome.RUNNING
+    clock.now = 2.0
+    assert executor.poll().outcome is ArmMovementOutcome.GOAL_RESPONSE_TIMEOUT
+    assert not executor.active
+
+    def attempt_new_motion():
+        if operation in {"probe", "pose"}:
+            return getattr(executor, operation)(target)
+        if operation == "ready_probe":
+            return executor.ready_probe(lambda: executor.probe(target))
+        return getattr(executor, operation)()
+
+    assert attempt_new_motion().outcome is ArmMovementOutcome.STOP_UNCONFIRMED
+    assert executor.confirm_stop().outcome is ArmMovementOutcome.STOP_UNCONFIRMED
+    assert stop_client.requests == []
+    handle = FakeGoalHandle()
+    sent.set_result(handle)
+    assert handle.cancel_count == 1
+    assert attempt_new_motion().outcome is ArmMovementOutcome.STOP_UNCONFIRMED
+    handle.result_future.set_result(SimpleNamespace(status=GoalStatus.STATUS_CANCELED))
+    assert executor.goals_settled()
+    assert attempt_new_motion().outcome is ArmMovementOutcome.STOP_UNCONFIRMED
+    assert len(client.sent_goals) == 1
+
+    assert executor.confirm_stop().outcome is ArmMovementOutcome.RUNNING
+    stop_client.future.set_result(SimpleNamespace(success=True))
+    assert executor.poll().outcome is ArmMovementOutcome.RUNNING
+    assert confirm_physical_stop(executor, clock, 2.1).outcome is ArmMovementOutcome.SUCCESS
+    assert executor.execution_idle
+
+    client.send_future = ManualFuture()
+    assert executor.probe(target).outcome is ArmMovementOutcome.RUNNING
+    assert len(client.sent_goals) == 2
+
+
 @pytest.mark.parametrize("duration_sec", [30.0, 50.0])
 @pytest.mark.parametrize("complete", [True, False])
 def test_slow_cartesian_motion_uses_duration_then_completion_margin(
