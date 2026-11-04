@@ -82,6 +82,18 @@ def _idle_command_transaction(method):
     return wrapped
 
 
+def _configuration_transaction(method):
+    """Serialize nonmoving data capture before taking a setup context lock."""
+    @wraps(method)
+    def wrapped(self, *args, **kwargs):
+        return self.setup_coordinator.run_configuration_change(
+            lambda: method(self, *args, **kwargs),
+            "Robot command lane must be idle for probe setup",
+        )
+
+    return wrapped
+
+
 @dataclass(frozen=True)
 class ProbeSetupMotionStatus:
     """Expose one correlated probe setup motion transition."""
@@ -593,7 +605,7 @@ class ProbeSetupCoordinator:
             self.definition_service.set_routine_waypoint(object_id, routine_id, normalized)
         return self._advance(draft)
 
-    @_idle_command_transaction
+    @_configuration_transaction
     @_serialized_transaction()
     def save_base_position(
         self,
@@ -608,7 +620,7 @@ class ProbeSetupCoordinator:
                 "Select an inspection object and routine before saving "
                 "a base position"
             )
-        self.setup_coordinator.require_command_lane_idle(
+        self.setup_coordinator.require_configuration_idle(
             "Robot command lane must be idle before saving a base position"
         )
         if self.motion_state_source is None:
@@ -628,7 +640,7 @@ class ProbeSetupCoordinator:
         )
         return self._advance(draft)
 
-    @_idle_command_transaction
+    @_configuration_transaction
     @_serialized_transaction()
     def save_routine_safe_approach_pose(self, context, position_tolerance_m=.1):
         """Capture the routine's shared, object-referenced probe-tip pose."""
@@ -637,7 +649,9 @@ class ProbeSetupCoordinator:
             raise ValueError(
                 "Select an object and routine before saving an arm pose"
             )
-        self.refinement_controller.require_physical_lane_idle()
+        self.require_configuration_idle(
+            "Robot command lane must be idle before saving an arm pose"
+        )
         if draft.refinement is not None:
             raise RuntimeError(
                 "Close probe refinement before changing the routine arm pose"
@@ -755,7 +769,7 @@ class ProbeSetupCoordinator:
         )
         return self._advance(draft)
 
-    @_idle_command_transaction
+    @_configuration_transaction
     @_serialized_transaction()
     def approve_aligned_pose(
         self,
@@ -781,7 +795,7 @@ class ProbeSetupCoordinator:
         draft.aligned_precision_mode = precision_mode
         return self._advance(draft)
 
-    @_idle_command_transaction
+    @_configuration_transaction
     @_serialized_transaction()
     def approve_probe_pose(
         self,
@@ -890,6 +904,10 @@ class ProbeSetupCoordinator:
             detail,
             queued_detail,
         )
+
+    def require_configuration_idle(self, detail: str, queued_detail: str = "") -> None:
+        """Check nonmoving capture admission through the shared setup owner."""
+        self.setup_coordinator.require_configuration_idle(detail, queued_detail)
 
     def require_current(
         self,
@@ -1019,7 +1037,7 @@ class ProbeSetupCoordinator:
         self._finish_context_close(draft)
         return snapshot
 
-    @_idle_command_transaction
+    @_configuration_transaction
     @_serialized_transaction()
     def add_pathing_point(self, context, name, position_tolerance_m=.01,
                           arm_speed_scale=1.0, path_stage="alignment", precision_mode=False):
@@ -1027,7 +1045,9 @@ class ProbeSetupCoordinator:
         draft = self._selected_draft(context)
         self.refinement_controller.require_refinement(draft)
         path = self._path_for_stage(draft, path_stage)
-        self.refinement_controller.require_physical_lane_idle()
+        self.require_configuration_idle(
+            "Robot command lane must be idle before capturing a pathing point"
+        )
         name = name.strip()
         if not name:
             raise ValueError("Pathing point name must not be empty")

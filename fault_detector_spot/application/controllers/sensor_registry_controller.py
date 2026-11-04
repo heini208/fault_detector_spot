@@ -79,7 +79,7 @@ class SensorRegistryController:
         return self._mutate(delete_definition)
 
     def _mutate(self, mutation):
-        return self.command_controller.run_if_idle(
+        return self.command_controller.run_configuration_change(
             mutation,
             "Cannot change sensor definitions while physical commands "
             "are active or queued",

@@ -126,11 +126,14 @@ class CommandController:
         listener_error_handler: Optional[ListenerErrorHandler] = None,
         heartbeat_timeout_sec: float = 5.0,
         reconciliation_interval_sec: float = 1.0,
+        session_work_changed=None,
     ):
         if dispatch_request is not None and not callable(dispatch_request):
             raise TypeError("Dispatch callback must be callable")
         if dispatch_ready is not None and not callable(dispatch_ready):
             raise TypeError("Dispatch readiness callback must be callable")
+        if session_work_changed is not None and not callable(session_work_changed):
+            raise TypeError("Session ownership callback must be callable")
         if not callable(monotonic_clock):
             raise TypeError("Monotonic clock must be callable")
         limits = CommandLifecycleConfig(
@@ -150,6 +153,10 @@ class CommandController:
         self._emergency_feedback = {}
         self._emergency_request_ids = set()
         self._unresolved_dispatch_ids = set()
+        self._admission_closed = False
+        self._session_work_changed = session_work_changed
+        self._session_work_unresolved = False
+        self._external_session_work = False
         self._stops = {}
         self._active_state = None
         self._reconcile_request = None
@@ -399,6 +406,65 @@ class CommandController:
         """Run one shared-state mutation atomically while the lane is idle."""
         return self._run_idle_action(action, busy_message, configuration_only=False)
 
+    def close_admission(self):
+        """Fence future dispatch and discard never-dispatched work without motion."""
+        with self._emergency_lock:
+            self._admission_closed = True
+        with self._lock:
+            queued = list(self._queue)
+            self._queue.clear()
+            with self._emergency_lock:
+                if self._active is not None and self._active.request_id not in self._unresolved_dispatch_ids:
+                    queued.insert(0, self._active)
+                    self._active = None
+                    self._active_state = None
+                    self._active_acknowledged = False
+                    self._active_dispatched_monotonic = None
+                if any(request.request_id == self._reset_request_id for request in queued):
+                    self._reset_request_id = None
+            for request in queued:
+                self._emit_locked(request, CommandControllerState.CANCELLED,
+                                  "Cancelled before dispatch by application shutdown", execution_idle=True)
+
+    def shutdown_status(self):
+        """Confirm closed local ownership without inventing a global robot stop."""
+        with self._lock:
+            with self._emergency_lock:
+                idle = bool(self._admission_closed and self._active is None and not self._queue
+                            and not self._unresolved_dispatch_ids and not self._stops
+                            and not self._pending_emergencies and not self._software_stop.latched)
+            return idle, ("Command admission closed; no dispatched work remains" if idle
+                          else "Command execution or an existing software stop remains unresolved")
+
+    def set_external_session_work(self, unresolved):
+        """Include an acquisition that may outlive its start command."""
+        with self._emergency_lock:
+            self._external_session_work = bool(unresolved)
+            self._refresh_session_work_locked()
+
+    def _set_session_work_locked(self, unresolved):
+        if unresolved == self._session_work_unresolved:
+            return
+        if self._session_work_changed is not None:
+            try:
+                self._session_work_changed(unresolved)
+            except Exception:
+                # Atomic replacement can succeed before directory fsync fails.
+                # Neither the old nor requested value is then proven durable;
+                # the next dispatch must write dirty ownership again.
+                self._session_work_unresolved = None
+                raise
+        self._session_work_unresolved = unresolved
+
+    def _refresh_session_work_locked(self):
+        unresolved = bool(self._unresolved_dispatch_ids or self._software_stop.latched
+                          or self._external_session_work)
+        try:
+            self._set_session_work_locked(unresolved)
+        except Exception as exception:
+            # Failed cleanup persistence retains the previous dirty evidence.
+            self._handle_listener_error(exception)
+
     def run_configuration_change(
         self,
         action,
@@ -418,6 +484,8 @@ class CommandController:
             raise ValueError("Busy-lane message must not be empty")
         with self._lock:
             with self._emergency_lock:
+                if self._admission_closed:
+                    raise RuntimeError("Application shutdown has closed command admission")
                 unresolved_motion = self._unresolved_dispatch_ids - self._emergency_request_ids
                 stop_pending = bool(self._stops or self._pending_emergencies
                     or (self._software_stop.latched and not self._software_stop.stop_confirmed))
@@ -426,6 +494,16 @@ class CommandController:
             if self._active is not None or self._queue or unresolved_motion:
                 raise RuntimeError(busy_message.strip())
             if stop_pending:
+                if not configuration_only:
+                    raise RuntimeError(
+                        "Software stop is pending or unconfirmed; this operation requires "
+                        f"confirmed stopping. {self._software_stop.detail}"
+                    )
+                if not self._participant_stop_confirmed:
+                    raise RuntimeError(
+                        "Sensor acquisition stop is not confirmed. "
+                        + self._participant_stop_detail
+                    )
                 if configuration_allowed and self._configuration_ready is not None:
                     try:
                         configuration_allowed = bool(self._configuration_ready())
@@ -433,7 +511,10 @@ class CommandController:
                         self._handle_listener_error(exception)
                         configuration_allowed = False
                 if not configuration_allowed:
-                    raise RuntimeError(busy_message.strip())
+                    raise RuntimeError(
+                        "Execution-owner status is unavailable or still reports "
+                        "unresolved commands; configuration must wait"
+                    )
             return action()
 
     def submit(self, request: CommandRequest[SemanticCommand]) -> str:
@@ -442,6 +523,8 @@ class CommandController:
             return self._submit_emergency(normalized)
         resetting = normalized.command.command_id is CommandID.RESET_SOFTWARE_STOP
         with self._emergency_lock:
+            if self._admission_closed:
+                raise RuntimeError("Application shutdown has closed command admission")
             if self._software_stop.latched and not resetting:
                 raise SoftwareStopLatched("Software stop is latched; explicit reset is required before motion")
         with self._lock:
@@ -466,6 +549,8 @@ class CommandController:
             if not resetting:
                 normalized = self._prepare_request_locked(normalized)
             with self._emergency_lock:
+                if self._admission_closed:
+                    raise RuntimeError("Application shutdown interrupted command admission")
                 if self._software_stop.latched and not resetting:
                     raise SoftwareStopLatched("Software stop interrupted command admission")
                 if resetting and self._reset_request_id != normalized.request_id:
@@ -695,6 +780,7 @@ class CommandController:
             self._dispatch_next_locked()
             self._publish_queue_heartbeats_locked()
             with self._emergency_lock:
+                self._refresh_session_work_locked()
                 if self._monotonic_clock() - self._last_stop_publication >= self._reconciliation_interval_sec:
                     self._publish_software_stop_locked()
 
@@ -711,6 +797,7 @@ class CommandController:
     def _forget_dispatch_locked(self, request_id):
         with self._emergency_lock:
             self._unresolved_dispatch_ids.discard(request_id)
+            self._refresh_session_work_locked()
             if self._software_stop.latched and request_id == self._current_cancel_request_id:
                 return
         self._last_reconciled.pop(request_id, None)
@@ -865,7 +952,7 @@ class CommandController:
             return False
 
     def _dispatch_next_locked(self) -> None:
-        if self._active is not None or self._stops or self._pending_emergencies or not self._queue:
+        if self._admission_closed or self._active is not None or self._stops or self._pending_emergencies or not self._queue:
             return
         resetting = self._queue[0].command.command_id is CommandID.RESET_SOFTWARE_STOP
         if self._software_stop.latched and not resetting:
@@ -897,6 +984,8 @@ class CommandController:
             self._participant_stop_detail = "Waiting for acquisition abort confirmation"
             self._publish_software_stop_locked(latched=True, confirmed=False,
                 detail="Software stop latched; cancellation requested, stopping is unconfirmed")
+            # Persistence failure must never prevent a requested safety stop.
+            self._refresh_session_work_locked()
             if self._stop_participant is not None:
                 try:
                     self._stop_participant[0](request.request_id)
@@ -979,9 +1068,11 @@ class CommandController:
             raise RuntimeError("Command dispatch transport is not configured")
         try:
             with self._emergency_lock:
-                if self._pending_emergencies or (self._software_stop.latched
+                if self._admission_closed or self._pending_emergencies or (self._software_stop.latched
                         and request.command.command_id is not CommandID.RESET_SOFTWARE_STOP):
                     return
+                # Durable ownership precedes every possibly physical dispatch.
+                self._set_session_work_locked(True)
                 self._active_dispatched_monotonic = self._monotonic_clock()
                 self._last_reconciled[request.request_id] = self._active_dispatched_monotonic
                 self._unresolved_dispatch_ids.add(request.request_id)

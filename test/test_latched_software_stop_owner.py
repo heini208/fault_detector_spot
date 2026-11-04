@@ -180,7 +180,7 @@ def test_velocity_stream_requires_quiet_period_even_when_zero_and_no_nav2_goal()
 
 
 @pytest.mark.parametrize("stop_method", ["begin_shutdown", "request_software_stop"])
-@pytest.mark.parametrize("stream", ["absent", "zero", "expired", "moving", "expired_navigation"])
+@pytest.mark.parametrize("stream", ["absent", "zero", "expired", "moving", "moving_navigation", "expired_navigation"])
 def test_lifecycle_stop_only_publishes_velocity_to_stop_a_live_motion_stream(stop_method, stream):
     now = [0.0]
     resources = RobotCommandResources(monotonic_clock=lambda: now[0])
@@ -191,7 +191,8 @@ def test_lifecycle_stop_only_publishes_velocity_to_stop_a_live_motion_stream(sto
         resources._receive_velocity(velocity)
     if stream in {"expired", "expired_navigation"}:
         now[0] = 1.0
-    if stream == "expired_navigation":
+    navigation_owned = stream in {"moving_navigation", "expired_navigation"}
+    if navigation_owned:
         resources._waypoint_executor = SimpleNamespace(
             active=True, request_cancel=Mock(), cancel=Mock(),
         )
@@ -199,13 +200,72 @@ def test_lifecycle_stop_only_publishes_velocity_to_stop_a_live_motion_stream(sto
     getattr(resources, stop_method)()
 
     assert resources.stop_latched
-    assert not resources.stop_sources_quiet()
-    if stream in {"moving", "expired_navigation"}:
+    needs_source_stop = stop_method == "request_software_stop" or navigation_owned
+    if needs_source_stop:
+        assert not resources.stop_sources_quiet()
+    else:
+        assert resources.poll_shutdown()[0]
+    if needs_source_stop and stream in {"moving", "moving_navigation", "expired_navigation"}:
         resources._velocity_publisher.publish.assert_called_once_with(Twist())
     else:
         resources._velocity_publisher.publish.assert_not_called()
     now[0] += 0.6
-    assert resources.stop_sources_quiet()
+    assert resources.stop_sources_quiet() if needs_source_stop else resources.poll_shutdown()[0]
+
+
+@pytest.mark.parametrize("moving", [False, True])
+def test_unowned_velocity_traffic_does_not_create_idle_shutdown_obligations(moving):
+    from test_execution_stop_evidence import base_executor
+
+    base, _, clock, source = base_executor()
+    source.sample = Mock(side_effect=AssertionError("Idle shutdown must not read robot feedback"))
+    resources = RobotCommandResources(monotonic_clock=clock)
+    resources._base_movement_executors[""] = base
+    resources._velocity_publisher = Mock()
+    velocity = Twist()
+    velocity.linear.x = 0.2 if moving else 0.0
+    resources._receive_velocity(velocity)
+    resources.begin_shutdown()
+    base.begin_shutdown()
+    for value in (0.1, 0.2, 0.3):
+        clock.now = value
+        resources._receive_velocity(velocity)
+        assert resources.poll_shutdown()[0]
+        assert base.poll_shutdown()[0]
+    assert base.execution_idle
+    resources._velocity_publisher.publish.assert_not_called()
+    source.sample.assert_not_called()
+
+
+@pytest.mark.parametrize("base_starts_first", [False, True])
+def test_owned_navigation_velocity_requires_fresh_base_proof_during_shutdown(base_starts_first):
+    from test_execution_stop_evidence import base_executor
+
+    base, _, clock, source = base_executor()
+    resources = RobotCommandResources(monotonic_clock=clock)
+    resources._base_movement_executors[""] = base
+    resources._waypoint_executor = SimpleNamespace(active=True)
+    resources._velocity_publisher = Mock()
+    velocity = Twist()
+    velocity.linear.x = 0.2
+    resources._receive_velocity(velocity)
+    if base_starts_first:
+        base.begin_shutdown()
+        assert base.poll_shutdown()[0]
+    resources.begin_shutdown()
+    base.begin_shutdown()
+    resources._velocity_publisher.publish.assert_called_once_with(Twist())
+    assert not resources.poll_shutdown()[0]
+    assert not base.poll_shutdown()[0]
+    assert not base.execution_idle
+    resources._waypoint_executor.active = False
+    clock.now = 0.6
+    resources._receive_velocity(Twist())
+    assert not resources.poll_shutdown()[0]
+    assert not base.poll_shutdown()[0]
+    clock.now = 1.2
+    assert resources.poll_shutdown()[0]
+    assert not base.poll_shutdown()[0]  # Missing physical proof remains unresolved.
 
 
 def recovery_node(arm):

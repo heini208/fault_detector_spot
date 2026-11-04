@@ -251,6 +251,7 @@ class BaseMovementExecutor(MovementExecutor):
         self._cancellation_complete = False
         self._shutdown_stop_invalidation = None
         self._shutdown_stop_seen = None
+        self._shutdown_stop_required = False
 
     def absolute(self, command) -> BaseMovementUpdate:
         """Execute a frozen odom target through the same readiness and verifier."""
@@ -394,15 +395,20 @@ class BaseMovementExecutor(MovementExecutor):
         if self._shutdown_started:
             return
         self._shutdown_started = True
+        if self.execution_idle and not self._shutdown_stop_required:
+            return
+        self._shutdown_stop_required = True
         self._stop_unconfirmed = True
         self.request_cancel()
         self.begin_stop_confirmation()
 
-    def invalidate_shutdown_stop(self):
+    def invalidate_shutdown_stop(self, *, owned_source=False):
         """Fence physical proof after velocity traffic without changing workflow."""
-        if self._shutdown_started and not self._closed:
+        if (not self._closed and (self._shutdown_started or owned_source)
+                and (self._shutdown_stop_required or owned_source)):
             # The subscription callback only publishes an immutable boundary.
             # The polling owner alone replaces and advances its verifier.
+            self._shutdown_stop_required = True
             self._shutdown_stop_invalidation = (object(), self._ros_time_sec())
             self._stop_unconfirmed = True
 
@@ -411,6 +417,8 @@ class BaseMovementExecutor(MovementExecutor):
         self.begin_shutdown()
         if self._closed:
             return self.execution_idle, "Base shutdown already finalized"
+        if not self._shutdown_stop_required:
+            return self.execution_idle, "No owned base movement requires stopping"
         invalidation = self._shutdown_stop_invalidation
         if invalidation is not self._shutdown_stop_seen:
             self._stop_confirmation_stamp = invalidation[1]

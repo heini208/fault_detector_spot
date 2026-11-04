@@ -422,7 +422,7 @@ def test_sensor_change_during_idle_stop_preserves_motion_block(tmp_path, stop_ph
     confirmed = controller.confirm_sensor("bmm150_01", pending.attachment_revision)
     assert confirmed.status is SensorAttachmentStatus.ACTIVE
     # Configuration does not grant admission to geometry-dependent workflows.
-    with pytest.raises(RuntimeError, match="active or queued"):
+    with pytest.raises(RuntimeError, match="Software stop is pending or unconfirmed"):
         controller.acquire_motion_attachment()
     controller.clear_sensor()
     assert commands.software_stop_status == stop_before
@@ -463,7 +463,7 @@ def test_sensor_change_waits_for_acquisition_abort_during_idle_stop(tmp_path):
     )
     commands.cancel_all()
     commands.poll()
-    with pytest.raises(RuntimeError, match="active or queued"):
+    with pytest.raises(RuntimeError, match="Sensor acquisition stop is not confirmed"):
         controller.select_sensor("bmm150_01")
     stopped[0] = True
     commands.poll()

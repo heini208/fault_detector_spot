@@ -13,6 +13,10 @@ class CommandStatusLedger:
 
     def __init__(self):
         self._lock = RLock()
+        self._session_lock = RLock()
+        self._session_work = None
+        self._session_unresolved = False
+        self._session_stop_latched = False
         self._statuses = {}
         self._fenced = set()
         self._stopping = False
@@ -24,6 +28,42 @@ class CommandStatusLedger:
         self._restored_shutdown_targets = set()
         self._closing = False
         self._shutdown_result = None
+
+    def configure_session_work(self, callback):
+        """Attach the acquired session's durable execution-ownership writer."""
+        if not callable(callback):
+            raise TypeError("Session work callback must be callable")
+        with self._lock, self._session_lock:
+            self._session_work = callback
+
+    def _write_session_work_locked(self, unresolved):
+        if self._session_work is not None and unresolved != self._session_unresolved:
+            try:
+                self._session_work(unresolved)
+            except Exception:
+                # The write may have replaced the file before fsync failed.
+                # Never let its previous cached value skip the next write.
+                self._session_unresolved = None
+                raise
+            self._session_unresolved = unresolved
+
+    def retain_stop_intent(self):
+        """Persist priority stop intent without waiting for the ledger lock."""
+        with self._session_lock:
+            self._session_stop_latched = True
+            self._write_session_work_locked(True)
+
+    @property
+    def session_stop_latched(self):
+        with self._session_lock:
+            return self._session_stop_latched
+
+    def _persist_idle_locked(self):
+        with self._session_lock:
+            if (not self._closing and not self._stopping and not self._session_stop_latched
+                    and not self._foreign_targets
+                    and all(status.execution_idle for status in self._statuses.values())):
+                self._write_session_work_locked(False)
 
     def activate(self):
         with self._lock:
@@ -111,11 +151,12 @@ class CommandStatusLedger:
     def outgoing_status(self, message):
         """Sequence each actual publication or fresh query reply, not tree ticks."""
         with self._lock:
+            self._persist_idle_locked()
             result = deepcopy(message)
             self._status_sequence += 1
             result.execution_instance_id = self.execution_instance_id
             result.status_sequence = self._status_sequence
-            result.software_stop_latched = self._stopping
+            result.software_stop_latched = self._stopping or self.session_stop_latched
             result.software_stop_confirmed = (
                 not self._foreign_targets and bool(self._fenced)
                 and all(status.execution_idle for status in self._statuses.values())
@@ -149,7 +190,8 @@ class CommandStatusLedger:
             reset = request.command.command_id is CommandID.RESET_SOFTWARE_STOP
             reset_ready = (self._stopping and not self._foreign_targets
                            and all(item.execution_idle for item in self._statuses.values()))
-            blocked = (self._closing or (self._stopping and not emergency and not reset)
+            blocked = (self._closing or ((self._stopping or self.session_stop_latched)
+                                        and not emergency and not reset)
                        or (reset and not reset_ready))
             if blocked:
                 message.state = CommandStatus.STATE_FAILED
@@ -158,6 +200,9 @@ class CommandStatusLedger:
                                   if reset else
                                   "Software stop is latched; this request was not executed")
                 message.execution_idle = True
+            else:
+                with self._session_lock:
+                    self._write_session_work_locked(True)
             self._statuses[request.request_id] = deepcopy(message)
             return not blocked, message
 
@@ -222,6 +267,7 @@ class CommandStatusLedger:
             result = deepcopy(message)
             result.execution_instance_id = self.execution_instance_id
             self._statuses[message.request_id] = result
+            self._persist_idle_locked()
             return deepcopy(result)
 
     def confirm_stop(self, message):
@@ -249,7 +295,7 @@ class CommandStatusLedger:
     @property
     def stop_latched(self):
         with self._lock:
-            return self._stopping
+            return self._stopping or self.session_stop_latched
 
     def reset_stop(self, request_id, reset_resources, *, clear_admission=None):
         """Clear admission only after retained and freshly measured idle proof."""
@@ -261,7 +307,9 @@ class CommandStatusLedger:
             def clear_latch():
                 if clear_admission is not None:
                     clear_admission()
-                self._stopping = False
+                with self._session_lock:
+                    self._stopping = False
+                    self._session_stop_latched = False
             return reset_resources(clear_latch)
 
     def contains(self, request_id):
@@ -289,5 +337,5 @@ class CommandStatusLedger:
                     )
             unresolved = sorted(key for key, value in self._statuses.items()
                                 if not value.execution_idle)
-            accepting = self._activated and not self._stopping and not unresolved
+            accepting = self._activated and not self.stop_latched and not unresolved
             return self.outgoing_status(status), accepting, unresolved

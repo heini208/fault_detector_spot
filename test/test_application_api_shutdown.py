@@ -43,6 +43,7 @@ def make_node(monkeypatch, timeout=0.1):
     node.command_controller.software_stop_status = SimpleNamespace(
         request_id='shutdown-request', latched=True, stop_confirmed=False, detail='Awaiting owner stop',
     )
+    node.command_controller.shutdown_status.return_value = (False, 'Awaiting owner stop')
     node.application_controller.emergency_stop.return_value = 'shutdown-request'
     node.sensor_acquisition_coordinator.shutdown_status.return_value = (True, 'Stopped')
     monkeypatch.setattr(Node, 'get_parameter', lambda _self, name: SimpleNamespace(
@@ -88,6 +89,42 @@ def test_callbacks_remain_available_until_stop_reply_and_terminal_action(monkeyp
     executor.shutdown.assert_called_once_with(timeout_sec=1.0)
     assert node.shutdown(executor) == report
     node.application_controller.emergency_stop.assert_called_once()
+
+
+def test_idle_api_shutdown_closes_command_admission_without_requesting_robot_stop(monkeypatch):
+    from fault_detector_spot.application.controllers.command_controller import CommandController
+    from test_command_controller import make_request
+    from fault_detector_spot.application.commanding.command_ids import CommandID
+    import pytest
+
+    node, executor = make_node(monkeypatch)
+    sent = []
+    node.command_controller = CommandController(dispatch_request=sent.append)
+
+    report = node.shutdown(executor)
+
+    assert report.confirmed
+    assert sent == []
+    assert not node.command_controller.software_stop_status.latched
+    node.application_controller.emergency_stop.assert_not_called()
+    node.sensor_acquisition_coordinator.request_shutdown.assert_called_once()
+    node._shutdown_store.confirm_session.assert_called_once_with()
+    with pytest.raises(RuntimeError, match='closed command admission'):
+        node.command_controller.submit(make_request(CommandID.STAND_UP))
+
+
+def test_acquisition_state_keeps_persistent_work_after_recording_start_finishes(monkeypatch):
+    from fault_detector_spot.application.controllers.command_controller import CommandController
+
+    node, _ = make_node(monkeypatch)
+    persisted = []
+    node.command_controller = CommandController(session_work_changed=persisted.append)
+    node.sensor_acquisition_coordinator.recording_stopped = False
+    node._track_acquisition_ownership(None)
+    assert persisted == [True]
+    node.sensor_acquisition_coordinator.recording_stopped = True
+    node._track_acquisition_ownership(None)
+    assert persisted == [True, False]
 
 
 def test_missing_owner_reply_and_terminal_result_report_individual_resources(monkeypatch):

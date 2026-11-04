@@ -8,6 +8,8 @@ import pytest
 from fault_detector_spot.application.coordinators.probe_refinement_controller import (
     ProbeRefinementController,
 )
+from fault_detector_spot.application.controllers.command_controller import CommandController
+from fault_detector_spot.application.coordinators.setup_coordinator import SetupCoordinator
 from fault_detector_spot.inspection.model.models import (
     ImagePoint,
 )
@@ -288,7 +290,7 @@ def test_explicit_alignment_approval_promotes_failed_pose_to_reached():
     controller._attachment_reservations = {
         id(draft): reservation,
     }
-    controller.require_physical_lane_idle = lambda: None
+    controller.setup_coordinator = SetupCoordinator(CommandController())
     controller._ensure_minimum_camera_clearance_geometry = (
         lambda _draft, _attachment=None: None
     )

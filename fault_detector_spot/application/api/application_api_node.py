@@ -164,6 +164,7 @@ class ApplicationApiNode(Node):
             ack_timeout_sec=lifecycle.ack_timeout_sec,
             heartbeat_timeout_sec=lifecycle.heartbeat_timeout_sec,
             reconciliation_interval_sec=lifecycle.reconciliation_interval_sec,
+            session_work_changed=self._shutdown_store.set_session_work,
             listener_error_handler=(
                 lambda exception: self.get_logger().error(
                     f"Command controller listener failed: {exception}"
@@ -274,6 +275,7 @@ class ApplicationApiNode(Node):
                 )
             ),
         )
+        self.sensor_acquisition_coordinator.add_state_listener(self._track_acquisition_ownership)
         self.sensor_acquisition_api = SensorAcquisitionApi(
             self,
             self.sensor_acquisition_coordinator,
@@ -673,16 +675,24 @@ class ApplicationApiNode(Node):
     def request_shutdown(self):
         """Request the existing owners' stop without removing their transport."""
         with self._shutdown_lock:
-            if not self._shutdown_stop_request:
+            if not self._shutdown_stop_request and not self.command_controller.shutdown_status()[0]:
                 self._shutdown_stop_request = self.application_controller.emergency_stop(
                     "application_shutdown",
                 )
 
+    def _track_acquisition_ownership(self, _state):
+        self.command_controller.set_external_session_work(
+            not self.sensor_acquisition_coordinator.recording_stopped,
+        )
+
     def _close_operation_admission(self):
         self._shutdown.set()
         self._operation_admission.close()
+        self.command_controller.close_admission()
 
     def _command_shutdown_status(self):
+        if not self._shutdown_stop_request:
+            return self.command_controller.shutdown_status()
         status = self.command_controller.software_stop_status
         return (
             bool(self._shutdown_stop_request and status.request_id == self._shutdown_stop_request
@@ -759,6 +769,9 @@ class ApplicationApiNode(Node):
                 cleanup = {
                     "recording": lambda: self.sensor_acquisition_coordinator.close(
                         stop_unconfirmed=bool(self._shutdown_coordinator.unresolved),
+                    ),
+                    "acquisition ownership listener": lambda: self.sensor_acquisition_coordinator.remove_state_listener(
+                        self._track_acquisition_ownership,
                     ),
                 }
                 for name in (

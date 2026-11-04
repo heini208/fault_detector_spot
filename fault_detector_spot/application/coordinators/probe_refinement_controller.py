@@ -150,7 +150,9 @@ class ProbeRefinementController:
     def approve(self, draft, stage: RefinementStage) -> None:
         if stage is RefinementStage.SAFE_APPROACH:
             raise ValueError("Set the shared safe pose in routine setup")
-        self.require_physical_lane_idle()
+        self.setup_coordinator.require_configuration_idle(
+            "Robot command lane must be idle before approving a probe pose"
+        )
         if draft.setup is None:
             raise ValueError("No calculated probe setup is available")
         attachment = self._active_attachment(draft)

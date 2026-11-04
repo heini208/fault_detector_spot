@@ -147,7 +147,10 @@ def test_main_delegates_shutdown_without_tearing_down_ros(monkeypatch):
 
 
 def test_node_requests_stop_idempotently_through_the_command_controller():
-    node = SimpleNamespace(_shutdown_stop_request="", _shutdown_lock=RLock(), application_controller=Mock())
+    node = SimpleNamespace(
+        _shutdown_stop_request="", _shutdown_lock=RLock(), application_controller=Mock(),
+        command_controller=SimpleNamespace(shutdown_status=lambda: (False, "Owned motion remains unresolved")),
+    )
     node.application_controller.emergency_stop.return_value = "shutdown-stop"
     application_api_node.ApplicationApiNode.request_shutdown(node)
     application_api_node.ApplicationApiNode.request_shutdown(node)

@@ -7,6 +7,13 @@ import pytest
 from fault_detector_spot.application.coordinators import (
     probe_reference_capture_coordinator as capture_module,
 )
+from fault_detector_spot.application.commanding.command_ids import CommandID
+from fault_detector_spot.application.commanding.command_request import (
+    CommandOrigin, CommandRequest, RecordingPolicy,
+)
+from fault_detector_spot.application.commanding.semantic_command import SemanticCommand
+from fault_detector_spot.application.controllers.command_controller import CommandController
+from fault_detector_spot.application.coordinators.setup_coordinator import SetupCoordinator
 from test_reference_view_input_synchronizer import make_synchronizer
 
 
@@ -107,6 +114,40 @@ def test_capture_reuses_handles_until_executor_shutdown(coordinator, outcome):
     assert coordinator.detached == [True]
     with pytest.raises(capture_module.ReferenceCaptureCancelled):
         coordinator.run(context, 'late', spec, lambda: False)
+
+
+@pytest.mark.parametrize('active_motion', [False, True])
+def test_reference_capture_allows_stop_observation_but_rejects_owned_motion(coordinator, active_motion):
+    sent = []
+    commands = CommandController(dispatch_request=sent.append)
+    setup = SetupCoordinator(commands)
+    coordinator.probe_setup_coordinator.require_configuration_idle = setup.require_configuration_idle
+    coordinator._require_command_lane_idle = (
+        capture_module.ProbeReferenceCaptureCoordinator._require_command_lane_idle.__get__(coordinator)
+    )
+    coordinator._wait_for_ready_inputs = lambda *_: None
+    if active_motion:
+        commands.submit(CommandRequest.create(
+            SemanticCommand(command_id=CommandID.STAND_UP),
+            client_id='external-ui', origin=CommandOrigin.OPERATIONAL,
+            recording_policy=RecordingPolicy.EXCLUDE,
+        ))
+    commands.cancel_all()
+    context = SimpleNamespace(context_id='context', client_id='client')
+    spec = capture_module.ProbeReferenceCaptureSpec(replace_existing=False)
+
+    if active_motion:
+        with pytest.raises(RuntimeError):
+            coordinator.run(context, 'capture', spec, lambda: False)
+        assert not coordinator.captured_requests
+        assert not coordinator.node.subscriptions
+    else:
+        coordinator.run(context, 'capture', spec, lambda: False)
+        assert len(coordinator.captured_requests) == 1
+        assert [request.command.command_id for request in sent] == [CommandID.EMERGENCY_CANCEL]
+    assert not coordinator._active_request_id
+    assert commands.software_stop_status.latched
+    assert not commands.software_stop_status.stop_confirmed
 
 
 def test_suspended_synchronizer_drops_history_and_requires_fresh_input():

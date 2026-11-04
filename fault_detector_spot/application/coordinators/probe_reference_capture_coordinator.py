@@ -431,7 +431,7 @@ class ProbeReferenceCaptureCoordinator:
             )
 
     def _require_command_lane_idle(self):
-        self.probe_setup_coordinator.require_physical_lane_idle(
+        self.probe_setup_coordinator.require_configuration_idle(
             "Reference capture requires the physical command lane to be idle",
             "Reference capture requires an empty physical command queue",
         )

@@ -59,19 +59,20 @@ def finish(executor, client, success=True):
     return executor.poll()
 
 
-def test_close_and_external_state_changes_are_seen_by_next_toggle(monkeypatch):
+@pytest.mark.parametrize("measured,expected", [(0.0, 1.0), (100.0, 0.0)])
+def test_close_and_external_state_changes_are_seen_by_next_toggle(monkeypatch, measured, expected):
     state = SimpleNamespace(gripper_open_percentage=lambda: 100.0)
     executor, client = executor_with_client(object(), arm_state_source=state)
     build = Mock(return_value=object())
     monkeypatch.setattr(executor_module, "build_gripper_goal", build)
     assert executor.close_gripper().outcome is ArmMovementOutcome.RUNNING
     assert finish(executor, client).outcome is ArmMovementOutcome.SUCCESS
-    for measured, expected in [(0.0, 1.0), (100.0, 0.0)]:
-        state.gripper_open_percentage = lambda: measured
-        client.send_future = ManualFuture()
-        assert executor.toggle_gripper().outcome is ArmMovementOutcome.RUNNING
-        assert build.call_args.args == (expected,)
-        assert finish(executor, client, success=False).outcome is ArmMovementOutcome.MOTION_FAILED
+    state.gripper_open_percentage = lambda: measured
+    client.send_future = ManualFuture()
+    assert executor.toggle_gripper().outcome is ArmMovementOutcome.RUNNING
+    assert build.call_args.args == (expected,)
+    assert finish(executor, client, success=False).outcome is ArmMovementOutcome.MOTION_FAILED
+    assert executor.toggle_gripper().outcome is ArmMovementOutcome.STOP_UNCONFIRMED
 
 
 @pytest.mark.parametrize("source", [None, SimpleNamespace(gripper_open_percentage=lambda: None)])

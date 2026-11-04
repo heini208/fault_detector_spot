@@ -1,10 +1,13 @@
 """Retain unresolved shutdown ownership across execution-process restarts."""
 
+from contextlib import contextmanager
+import fcntl
 import json
 import os
 from pathlib import Path
+import tempfile
 from threading import RLock
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from .file_storage import atomic_write_text, validate_storage_name
 from .runtime_paths import fault_detector_runtime_root
@@ -42,8 +45,7 @@ class StopUnconfirmedStore:
     def _read_session(self, path):
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
-            if (data.get("version") != 1 or not isinstance(data.get("token"), str)
-                    or not data["token"] or not isinstance(data.get("process"), dict)):
+            if not self._valid_session(data):
                 raise ValueError("Invalid active-session schema")
             if path == self.session_path and data["token"] == self._session_token:
                 return {}
@@ -56,38 +58,114 @@ class StopUnconfirmedStore:
                         return {}
                 except (OSError, ValueError, KeyError, TypeError, IndexError):
                     pass
+            if self._idle_session_has_exited(data):
+                return {}
             return {"active_session": "Prior session has no confirmed shutdown; reconciliation is required"}
         except FileNotFoundError:
             return {}
         except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
             return {"active_session": f"Active-session evidence cannot be read: {error}"}
 
+    @staticmethod
+    def _valid_session(data):
+        return (isinstance(data, dict) and data.get("version") in (1, 2)
+                and isinstance(data.get("token"), str) and bool(data["token"])
+                and isinstance(data.get("process"), dict)
+                and (data["version"] == 1
+                     or isinstance(data.get("unresolved_work"), bool)))
+
+    def _idle_session_has_exited(self, data):
+        """A dead process with durable empty ownership left nothing to stop."""
+        if data.get("version") != 2 or data.get("unresolved_work") is not False:
+            return False
+        process = data["process"]
+        try:
+            pid = process["pid"]
+            if (type(pid) is not int or pid <= 0
+                    or set(process) != {"pid", "started", "boot"}
+                    or not isinstance(process["started"], str)
+                    or not process["started"].isascii() or not process["started"].isdecimal()
+                    or not isinstance(process["boot"], str)
+                    or str(UUID(process["boot"])) != process["boot"]):
+                return False
+            return self._process_identity(pid) != process
+        except (FileNotFoundError, ProcessLookupError):
+            return True
+        except (OSError, ValueError, KeyError, TypeError, IndexError):
+            return False
+
+    @contextmanager
+    def _session_guard(self):
+        """Serialize session replacement and ownership updates across processes."""
+        self.root.mkdir(parents=True, exist_ok=True)
+        descriptor = os.open(self.root / f"{self.owner}.lock", os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            yield
+        finally:
+            os.close(descriptor)
+
     def begin_session(self):
-        """Persist a dirty marker before admission; never replace prior work."""
-        with self._lock:
+        """Acquire an idle session; retain any prior uncertain physical work."""
+        with self._lock, self._session_guard():
             if self._session_token is not None:
                 return True
-            self.root.mkdir(parents=True, exist_ok=True)
-            token = str(uuid4())
-            content = json.dumps({"version": 1, "owner": self.owner, "token": token,
-                                  "process": self._process_identity(os.getpid())}) + "\n"
             try:
-                descriptor = os.open(self.session_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-            except FileExistsError:
+                previous = json.loads(self.session_path.read_text(encoding="utf-8"))
+            except FileNotFoundError:
+                previous = None
+            except (OSError, ValueError, TypeError):
                 return False
-            # Leave a partial marker on write failure: unreadable evidence must
-            # fence the next startup too. No motion has been admitted yet.
-            with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-                stream.write(content)
-                stream.flush()
-                os.fsync(stream.fileno())
+            if previous is not None:
+                if not self._valid_session(previous) or not self._idle_session_has_exited(previous):
+                    return False
+                self.session_path.unlink()
+            token = str(uuid4())
+            content = json.dumps({"version": 2, "owner": self.owner, "token": token,
+                                  "process": self._process_identity(os.getpid()),
+                                  "unresolved_work": False}) + "\n"
+            # Publish a complete marker atomically. The other process owner
+            # starts concurrently and must never see a partially written file.
+            descriptor, staged = tempfile.mkstemp(prefix=f".{self.owner}.", suffix=".tmp", dir=self.root)
+            try:
+                with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+                    if stream.write(content) != len(content):
+                        raise OSError("Incomplete shutdown session write")
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                try:
+                    os.link(staged, self.session_path)
+                except FileExistsError:
+                    return False
+            finally:
+                os.unlink(staged)
             self._sync_directory()
             self._session_token = token
             return True
 
+    def set_session_work(self, unresolved):
+        """Persist ownership before dispatch; clear only with terminal evidence."""
+        if not isinstance(unresolved, bool):
+            raise TypeError("Session work state must be a boolean")
+        with self._lock, self._session_guard():
+            if self._session_token is None:
+                raise RuntimeError("No shutdown session ownership was acquired")
+            data = json.loads(self.session_path.read_text(encoding="utf-8"))
+            if not self._valid_session(data) or data["token"] != self._session_token:
+                raise RuntimeError("Active shutdown session ownership changed")
+            if data.get("unresolved_work") is unresolved:
+                # A previous atomic replacement may have succeeded before its
+                # directory sync failed. Retrying must finish that durability.
+                self._sync_directory()
+                return
+            data["version"] = 2
+            data["unresolved_work"] = unresolved
+            atomic_write_text(self.session_path, json.dumps(data) + "\n")
+            self._sync_directory()
+
     def confirm_session(self):
         """Remove this session's marker only after complete confirmed cleanup."""
-        with self._lock:
+        with self._lock, self._session_guard():
             if self._session_token is None:
                 return True
             try:
@@ -153,6 +231,8 @@ class StopUnconfirmedStore:
         if not unresolved:
             return
         with self._lock:
+            if self._session_token is not None:
+                self.set_session_work(True)
             retained = self._read(self.path)
             retained.update(unresolved)
             self._write(retained)

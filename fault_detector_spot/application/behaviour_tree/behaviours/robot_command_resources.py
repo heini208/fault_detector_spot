@@ -153,6 +153,7 @@ class RobotCommandResources:
         self._closing = False
         self._shutdown_unconfirmed = False
         self._shutdown_confirmed = False
+        self._shutdown_sources_required = None
 
     def close_admission(self):
         """Fence late submissions before tree dispatch is paused."""
@@ -173,10 +174,23 @@ class RobotCommandResources:
 
     def begin_shutdown(self):
         self.close_admission()
+        if self._shutdown_sources_required is not None:
+            return
+        navigation = self._waypoint_executor
+        self._shutdown_sources_required = bool(
+            (navigation is not None and navigation.active)
+            or (self._stop_started and not self._stop_confirmed)
+        )
+        if not self._shutdown_sources_required:
+            return
         self._stop_requested_at = self._monotonic_clock()
+        for owner in tuple(self._base_movement_executors.values()):
+            owner.invalidate_shutdown_stop(owned_source=True)
         self._stop_velocity_stream()
 
     def poll_shutdown(self):
+        if self._shutdown_sources_required is False:
+            return True, "No owned velocity command source requires stopping"
         return self.stop_sources_quiet(), "Waiting for base velocity command sources to become quiet"
 
     def report_shutdown_unconfirmed(self):
@@ -215,8 +229,13 @@ class RobotCommandResources:
             message.linear.x, message.linear.y, message.linear.z,
             message.angular.x, message.angular.y, message.angular.z,
         )))
+        navigation = self._waypoint_executor
+        owned_source = self._closing and (
+            self._shutdown_sources_required
+            or (navigation is not None and navigation.active)
+        )
         for owner in tuple(self._base_movement_executors.values()):
-            owner.invalidate_shutdown_stop()
+            owner.invalidate_shutdown_stop(owned_source=bool(owned_source))
 
     def _stop_velocity_stream(self):
         # Spot treats even zero velocity as a mobility command, which can

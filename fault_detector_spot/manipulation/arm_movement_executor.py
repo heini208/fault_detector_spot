@@ -1678,17 +1678,15 @@ class ArmMovementExecutor(MovementExecutor):
         with self._execution_lock:
             if self._shutdown_started:
                 return
-            observe_only = self.execution_idle or self._observing_idle_stop
             self._shutdown_started = True
-            self._shutdown_reconcile = not observe_only
-            if observe_only:
-                # Even an idle owner needs fresh evidence, but a robot command
-                # can power the motors. Observe without changing robot state.
-                self._active = True
-                self._operation = _ArmOperation.CONFIRM_STOP
-                self._begin_stop_confirmation(observe_only=True)
-            else:
-                self.cancel()
+            # An idle owner has no motion to stop. Creating a fresh telemetry
+            # obligation here would make an unused application depend on the
+            # robot's connection state merely to close cleanly.
+            already_idle = self.execution_idle
+            self._shutdown_reconcile = not (already_idle or self._observing_idle_stop)
+            if already_idle:
+                return
+            self.cancel()
 
     def poll_shutdown(self):
         """Confirm action termination and physical stopping without blocking."""
@@ -1713,7 +1711,7 @@ class ArmMovementExecutor(MovementExecutor):
                 return False, self._cancellation_detail
             if not self.execution_idle:
                 return False, self._cancellation_detail or "Arm physical stop is unconfirmed"
-            return True, "Arm action ended and physical stop confirmed"
+            return True, "No owned arm movement remains unresolved"
 
     def shutdown(self, *, stop_unconfirmed=False, stop_confirmed=False) -> None:
         with self._execution_lock:
@@ -2058,6 +2056,13 @@ class ArmMovementExecutor(MovementExecutor):
             self._stop_unconfirmed = True
         elif (outcome is ArmMovementOutcome.RESULT_TIMEOUT
               and self._operation != _ArmOperation.GUARDED_MOVEMENT):
+            self._stop_unconfirmed = True
+        elif (outcome not in {ArmMovementOutcome.SUCCESS, ArmMovementOutcome.GOAL_REJECTED}
+              and self._operation != _ArmOperation.GUARDED_MOVEMENT
+              and self._send_goal_future is not None):
+            # A failed native action result ends transport ownership without
+            # proving the physical arm stopped. Preserve that obligation when
+            # the ordinary operation is reset and shutdown checks for idle.
             self._stop_unconfirmed = True
         elif (outcome is ArmMovementOutcome.SUCCESS
               and self._operation == _ArmOperation.CONFIRM_STOP):

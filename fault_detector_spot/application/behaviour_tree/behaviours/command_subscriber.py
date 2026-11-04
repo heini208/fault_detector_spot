@@ -213,6 +213,8 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
                     f"{self.shutdown_state_store.owner}/active_session",
                     "Active-session ownership was not acquired; reconciliation is required",
                 )
+            else:
+                self.status_ledger.configure_session_work(self.shutdown_state_store.set_session_work)
         except Exception:
             self.close_admission()
             if self.robot_command_resources is not None:
@@ -335,6 +337,7 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
                 self.blackboard.estop_flag = True
                 if self.robot_command_resources is not None:
                     self.robot_command_resources.request_software_stop()
+                self.status_ledger.retain_stop_intent()
 
         accepted, receipt = self.status_ledger.receive(
             request, emergency=emergency,

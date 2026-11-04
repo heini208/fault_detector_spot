@@ -86,6 +86,9 @@ class FakeCommandController:
             raise RuntimeError(busy_message)
         return action()
 
+    def run_configuration_change(self, action, busy_message):
+        return self.run_if_idle(action, busy_message)
+
     def add_status_listener(self, listener):
         self.listeners.append(listener)
 
@@ -295,8 +298,9 @@ def yaw_quaternion(degrees):
     )
 
 
-def coordinator(tmp_path, active_sensor_id="hall_probe"):
-    command_controller = FakeCommandController()
+def coordinator(tmp_path, active_sensor_id="hall_probe", command_controller=None):
+    if command_controller is None:
+        command_controller = FakeCommandController()
     shared = SetupCoordinator(command_controller)
     references = multi_reference_view_repository.MultiReferenceViewRepository(
         tmp_path / "objects"
@@ -844,6 +848,51 @@ def test_routine_base_position_is_persisted_and_overwritten(tmp_path):
     assert routine.base_body_height_m == 0.0
     assert saved.base_body_height_m == 0.0
     assert "base_body_height_m" not in routine.to_dict()
+
+
+@pytest.mark.parametrize("capture", ["base", "safe", "path", "aligned", "probe"])
+@pytest.mark.parametrize("command_state", ["stop_only", "active_motion"])
+def test_pose_capture_distinguishes_pending_stop_from_owned_motion(tmp_path, capture, command_state):
+    sent = []
+    commands = CommandController(dispatch_request=sent.append)
+    probe, _ = coordinator(tmp_path, command_controller=commands)
+    state = create_selected_routine(probe, probe.open_context("probe-ui").context)
+    if capture in {"path", "aligned", "probe"}:
+        state = probe.begin_refinement(state.context, fully_custom=True)
+        draft = probe._draft(state.context)
+        draft.refinement.motion_states[RefinementStage.SAFE_APPROACH] = RefinementMotionState.REACHED
+        if capture == "probe":
+            state = probe.approve_aligned_pose(state.context)
+    if command_state == "active_motion":
+        commands.submit(CommandRequest.create(
+            SemanticCommand(command_id=CommandID.STAND_UP),
+            client_id="external-ui", origin=CommandOrigin.OPERATIONAL,
+            recording_policy=RecordingPolicy.EXCLUDE,
+        ))
+    commands.cancel_all()
+    before = probe.object_repository.get_object_path("motor").read_text()
+    actions = {
+        "base": lambda: probe.save_base_position(state.context),
+        "safe": lambda: probe.save_routine_safe_approach_pose(state.context),
+        "path": lambda: probe.add_pathing_point(state.context, "captured"),
+        "aligned": lambda: probe.approve_aligned_pose(state.context),
+        "probe": lambda: probe.approve_probe_pose(state.context),
+    }
+
+    if command_state == "active_motion":
+        with pytest.raises(RuntimeError):
+            actions[capture]()
+        assert probe.object_repository.get_object_path("motor").read_text() == before
+    else:
+        result = actions[capture]()
+        assert result.context.revision > state.context.revision
+        assert [request.command.command_id for request in sent] == [CommandID.EMERGENCY_CANCEL]
+        # Capturing data cannot reopen setup movement or clear the stop latch.
+        with pytest.raises(RuntimeError):
+            probe.require_physical_lane_idle("Motion remains blocked")
+    assert commands.software_stop_status.latched
+    assert not commands.software_stop_status.stop_confirmed
+    assert commands.queued_request_ids == ()
 
 
 @pytest.mark.parametrize("height", [-0.201, 0.201, float("inf"), float("nan")])

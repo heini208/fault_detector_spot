@@ -43,6 +43,14 @@ class FakeCommandController:
     def remove_status_listener(self, listener):
         self.listeners.remove(listener)
 
+    def run_if_idle(self, action, busy_message):
+        if self.active_request_id or self.queued_request_ids:
+            raise RuntimeError(busy_message)
+        return action()
+
+    def run_configuration_change(self, action, busy_message):
+        return self.run_if_idle(action, busy_message)
+
     def submit(self, request):
         self.submitted.append(request)
         return request.request_id
@@ -160,13 +168,56 @@ def test_uncertain_setup_motion_keeps_ownership_and_blocks_idle_admission():
         assert coordinator.cancel_operation(context, operation.request_id) == operation.request_id
         with pytest.raises(RuntimeError, match="Busy"):
             coordinator.require_command_lane_idle("Busy")
+        with pytest.raises(RuntimeError, match="Busy"):
+            coordinator.require_configuration_idle("Busy")
 
     controller.active_request_id = ""
     controller.emit(operation.request, CommandControllerState.STOP_CONFIRMED)
 
     coordinator.require_command_lane_idle("Busy")
+    coordinator.require_configuration_idle("Busy")
     with pytest.raises(LookupError, match="Unknown setup operation"):
         coordinator.cancel_operation(context, operation.request_id)
+
+
+@pytest.mark.parametrize("reconciled", [False, True])
+def test_configuration_ignores_idle_stop_but_workflow_admission_remains_blocked(reconciled):
+    sent = []
+    controller = CommandController(dispatch_request=sent.append)
+    coordinator = SetupCoordinator(controller)
+    stop_id = controller.cancel_all("startup_reconciliation")
+    if reconciled:
+        controller.poll()
+    assert controller.queued_request_ids == ()
+    assert controller.active_request_id == stop_id
+    stop_before = controller.software_stop_status
+
+    assert coordinator.run_configuration_change(lambda: "saved", "Busy") == "saved"
+    coordinator.require_configuration_idle("Busy", "Queued work")
+    with pytest.raises(RuntimeError, match="Software stop is pending or unconfirmed"):
+        coordinator.run_if_command_lane_idle(lambda: pytest.fail("Started a workflow"), "Busy")
+    with pytest.raises(RuntimeError, match="Software stop is pending or unconfirmed"):
+        coordinator.require_command_lane_idle("Busy")
+
+    assert controller.software_stop_status == stop_before
+    assert [request.command.command_id for request in sent] == [CommandID.EMERGENCY_CANCEL]
+
+
+@pytest.mark.parametrize("submitted", [False, True])
+def test_configuration_keeps_prepared_and_submitted_setup_ownership(submitted):
+    controller = CommandController(dispatch_request=lambda request: None)
+    coordinator = SetupCoordinator(controller)
+    context = coordinator.open_context(CommandOrigin.PROBE_SETUP, "probe-ui")
+    operation = coordinator.prepare_command(context, command())
+    if submitted:
+        coordinator.submit(operation)
+    controller.cancel_all()
+    controller.poll()
+    assert controller.queued_request_ids == ()
+    with pytest.raises(RuntimeError, match="Busy"):
+        coordinator.run_configuration_change(lambda: pytest.fail("Changed owned data"), "Busy")
+    with pytest.raises(RuntimeError, match="Busy"):
+        coordinator.require_configuration_idle("Busy")
 
 
 def test_setup_coordinator_rejects_ros_or_untyped_command_payloads():

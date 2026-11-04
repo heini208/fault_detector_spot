@@ -398,8 +398,10 @@ operation and intent value 6 are retired; callers must request reset and recover
 separately. The former zero-velocity-only stop intent (value 7) is also retired;
 callers must use the confirmed software-stop protocol.
 
-Shutdown closes command admission and pauses tree dispatch before requesting
-arm, base, Nav2, setup and acquisition cancellation. The callback executor,
+Shutdown closes command admission and pauses tree dispatch before cancelling
+owned arm, base, Nav2, setup and acquisition work. Already idle owners close
+without a robot stop command or a new telemetry requirement; opening or closing
+an idle application does not change Spot's posture. The callback executor,
 guard monitors, state subscriptions and stop clients remain available until
 terminal action state and fresh physical-stop evidence are confirmed. The
 confirmation deadline defaults to 10 seconds; independent cleanup has a further
@@ -410,17 +412,23 @@ A deadline reports **stop-unconfirmed** for each unresolved resource before
 recordings, child runtimes and ROS resources are finalized. Failed cleanup
 remains retryable. Unresolved ownership is retained in
 `$ROS_HOME/fault_detector_spot/shutdown/<owner>.json` (default ROS home: `~/.ros`).
-Each process also durably creates `<owner>.active` before admitting work and
-removes its own marker only after confirmed shutdown and successful cleanup.
-This keeps restart admission blocked even if writing the detailed timeout
-record fails. Marker creation failure prevents admission.
-The next startup exposes that uncertainty and blocks motion and software reset.
+Each process creates a version-2 `<owner>.active` session with empty ownership,
+durably marks it unresolved before dispatching work, and clears that flag only
+after authoritative completion with no remaining acquisition or latched stop.
+A dead session whose ownership is empty can be reclaimed without a robot stop.
+Live sessions cannot be replaced. Confirmed shutdown and successful cleanup
+remove the process's own marker. Unresolved ownership keeps restart admission
+blocked even if writing the detailed timeout record fails; failed ownership
+persistence prevents normal dispatch.
+The next startup exposes retained uncertainty and blocks motion and software reset.
 An empty new executor or a later successful shutdown cannot clear it. Recovery
 requires independently verifying termination of the prior actions and fresh
 physical stopping, then reconciling only those resource names through
 `StopUnconfirmedStore.clear_confirmed()` before restarting; there is no automatic
-reconciliation or UI reset bypass. An uncleared session marker is represented by
-the resource name `active_session` and requires the same independent proof.
+reconciliation or UI reset bypass for uncertain ownership. Legacy version-1 or
+unreadable session markers have no reliable empty-ownership evidence. They remain
+represented by the resource name `active_session` and require the same independent
+proof before clearing.
 
 ---
 

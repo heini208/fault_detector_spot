@@ -2073,6 +2073,46 @@ def test_shutdown_arm_preserves_monitor_until_late_action_and_fresh_stop(monkeyp
     assert executor.close_gripper().outcome is ArmMovementOutcome.BUSY
 
 
+def test_failed_native_arm_action_still_requires_physical_shutdown_stop(monkeypatch):
+    executor, client, stop, clock, _, timer = shutdown_arm_rig(monkeypatch)
+    executor.close_gripper()
+    handle = FakeGoalHandle()
+    client.send_future.set_result(handle)
+    assert executor.poll().outcome is ArmMovementOutcome.RUNNING
+    handle.result_future.set_result(SimpleNamespace(
+        status=GoalStatus.STATUS_ABORTED,
+        result=SimpleNamespace(success=False, message="Native arm action failed"),
+    ))
+    assert executor.poll().outcome is ArmMovementOutcome.MOTION_FAILED
+    assert not executor.active
+    assert executor.goals_settled()
+    assert not executor.execution_idle
+
+    executor.begin_shutdown()
+    assert not executor.poll_shutdown()[0]
+    assert stop.requests
+    stop.future.set_result(SimpleNamespace(success=True))
+    timer.callback()
+    assert not executor.poll_shutdown()[0]
+    for value in (0.1, 0.6):
+        clock.now = value
+        executor.arm_state_source.velocity = hand_velocity_sample(value)
+        timer.callback()
+    assert executor.poll_shutdown()[0]
+
+
+def test_rejected_native_arm_goal_remains_idle_at_shutdown(monkeypatch):
+    executor, client, stop, _, _, timer = shutdown_arm_rig(monkeypatch)
+    executor.close_gripper()
+    client.send_future.set_result(FakeGoalHandle(accepted=False))
+    assert executor.poll().outcome is ArmMovementOutcome.GOAL_REJECTED
+    assert executor.execution_idle
+    executor.begin_shutdown()
+    assert executor.poll_shutdown()[0]
+    assert not stop.requests
+    assert not hasattr(timer, "callback")
+
+
 @pytest.mark.parametrize("missing", ["acceptance", "result", "stop_reply", "physical_feedback"])
 def test_shutdown_arm_retains_uncertainty_for_missing_evidence(monkeypatch, missing):
     executor, client, stop, clock, node, timer = shutdown_arm_rig(monkeypatch)
@@ -2099,32 +2139,26 @@ def test_shutdown_arm_retains_uncertainty_for_missing_evidence(monkeypatch, miss
     stop.destroy.assert_called_once()
 
 
-def test_idle_arm_shutdown_requires_new_stop_evidence_and_retryable_cleanup(monkeypatch):
+def test_idle_arm_shutdown_does_not_start_monitor_and_cleanup_is_retryable(monkeypatch):
     executor, _, stop, clock, node, timer = shutdown_arm_rig(monkeypatch)
     executor.begin_shutdown()
-    assert not executor.poll_shutdown()[0]
-    assert stop.requests == []
-    timer.callback()
-    for value in (0.1, 0.6):
-        clock.now = value
-        executor.arm_state_source.velocity = hand_velocity_sample(value)
-        timer.callback()
-        executor.poll_shutdown()
     assert executor.poll_shutdown()[0]
     assert stop.requests == []
-    node.destroy_timer.side_effect = [RuntimeError("guard cleanup failed"), None]
-    with pytest.raises(RuntimeError, match="guard cleanup failed"):
+    assert not hasattr(timer, "callback")
+    stop.destroy.side_effect = [RuntimeError("stop client cleanup failed"), None]
+    with pytest.raises(RuntimeError, match="stop client cleanup failed"):
         executor.shutdown()
-    stop.destroy.assert_called_once()
-    assert executor._guarded_probe_monitor is not None
+    assert executor._guarded_probe_monitor is None
+    assert executor.arm_stop_service_client is stop
     executor.shutdown()
     executor.shutdown()
-    assert node.destroy_timer.call_count == 2
-    stop.destroy.assert_called_once()
+    node.destroy_timer.assert_not_called()
+    assert stop.destroy.call_count == 2
+    assert executor.execution_idle
 
 
 @pytest.mark.parametrize("feedback", ["missing", "old", "moving"])
-def test_idle_arm_shutdown_waits_without_commands_for_fresh_stationary_feedback(monkeypatch, feedback):
+def test_idle_arm_shutdown_does_not_require_robot_feedback(monkeypatch, feedback):
     executor, client, stop, clock, node, timer = shutdown_arm_rig(monkeypatch)
     executor.begin_shutdown()
     for value in (0.1, 0.6, 3.1):
@@ -2134,16 +2168,13 @@ def test_idle_arm_shutdown_waits_without_commands_for_fresh_stationary_feedback(
                 0.0 if feedback == "old" else value,
                 linear=0.1 if feedback == "moving" else 0.0,
             )
-        timer.callback()
-        assert not executor.poll_shutdown()[0]
+        assert executor.poll_shutdown()[0]
     assert client.sent_goals == []
     assert stop.requests == []
     node.destroy_timer.assert_not_called()
-    for value in (3.2, 3.7):
-        clock.now = value
-        executor.arm_state_source.velocity = hand_velocity_sample(value)
-        timer.callback()
-    assert executor.poll_shutdown()[0]
+    assert not hasattr(timer, "callback")
+    executor.shutdown()
+    assert executor.execution_idle
     assert stop.requests == []
 
 
@@ -2163,20 +2194,19 @@ def test_cancelling_idle_stop_observation_does_not_issue_arm_command(monkeypatch
     assert stop.requests == []
 
 
-def test_shutdown_restarts_idle_stop_observation_boundary_without_command(monkeypatch):
+def test_shutdown_retains_explicit_stop_observation_without_restarting_it(monkeypatch):
     executor, _, stop, clock, _, timer = shutdown_arm_rig(monkeypatch)
     assert executor.confirm_stop().outcome is ArmMovementOutcome.RUNNING
     clock.now = 0.1
     executor.arm_state_source.velocity = hand_velocity_sample(clock.now)
     timer.callback()
-    clock.now = 0.5
+    clock.now = 0.2
     executor.begin_shutdown()
-    executor.arm_state_source.velocity = hand_velocity_sample(0.5)
+    executor.arm_state_source.velocity = hand_velocity_sample(clock.now)
     timer.callback()
     assert not executor.poll_shutdown()[0]
-    for value in (0.6, 1.1):
-        clock.now = value
-        executor.arm_state_source.velocity = hand_velocity_sample(value)
-        timer.callback()
+    clock.now = 0.6
+    executor.arm_state_source.velocity = hand_velocity_sample(clock.now)
+    timer.callback()
     assert executor.poll_shutdown()[0]
     assert stop.requests == []

@@ -308,6 +308,24 @@ class SetupCoordinator:
         """
         return self._command_controller.run_if_idle(action, detail)
 
+    def run_configuration_change(self, action, detail: str):
+        """Serialize nonmoving setup work without treating stop checks as motion."""
+        def configure():
+            with self._lock:
+                if self._closed:
+                    raise RuntimeError("Setup coordinator admission is closed")
+                if self._prepared or self._operations or self._completing:
+                    raise RuntimeError(detail)
+            return action()
+
+        return self._command_controller.run_configuration_change(configure, detail)
+
+    def require_configuration_idle(self, detail: str, queued_detail: str = "") -> None:
+        """Check setup ownership and real command occupancy before reading data."""
+        message = (queued_detail.strip() if self._command_controller.queued_request_ids
+                   else "") or detail
+        self.run_configuration_change(lambda: None, message)
+
     def require_command_lane_idle(
         self,
         detail: str,
@@ -323,10 +341,10 @@ class SetupCoordinator:
             if self._prepared or self._operations or self._completing:
                 raise RuntimeError(message)
         queued_message = queued_detail.strip() or message
-        if self._command_controller.active_request_id:
-            raise RuntimeError(message)
-        if self._command_controller.queued_request_ids:
-            raise RuntimeError(queued_message)
+        self._command_controller.run_if_idle(
+            lambda: None,
+            queued_message if self._command_controller.queued_request_ids else message,
+        )
 
     def cancel_operation(
         self,

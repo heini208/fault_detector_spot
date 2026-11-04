@@ -691,25 +691,27 @@ def test_shutdown_base_waits_for_late_action_and_fresh_body_pose():
     assert executor.stand().outcome is BaseMovementOutcome.BUSY
 
 
-def test_idle_base_shutdown_requires_fresh_body_pose():
-    from fault_detector_spot.navigation.base_pose_source import BasePoseSample
-    from fault_detector_spot.shared.geometry.models import PoseData
+def test_idle_base_shutdown_does_not_require_body_pose_or_send_commands():
+    from unittest.mock import Mock
 
     clock = ManualClock()
-    source = SimpleNamespace(sample=lambda: BasePoseSample(
-        0.0, 0.0, 0.0, 0.0, PoseData.identity(),
-    ))
+    source = SimpleNamespace(sample=Mock(side_effect=AssertionError("No robot feedback")))
+    client = FakeActionClient(ManualFuture())
     executor = BaseMovementExecutor(
         height_readiness=ReadyHeight(), tf_listener=object(),
-        base_pose_source=source, monotonic_clock=clock, ros_time_sec=clock,
+        action_client=client, base_pose_source=source,
+        monotonic_clock=clock, ros_time_sec=clock,
     )
     executor.begin_shutdown()
     for value in (0.0, 0.5, 10.0):
         clock.now = value
-        assert not executor.poll_shutdown()[0]
-    executor.shutdown(stop_unconfirmed=True)
-    assert not executor.execution_idle
-    executor.shutdown(stop_unconfirmed=True)
+        executor.invalidate_shutdown_stop()  # Unowned velocity traffic is irrelevant.
+        assert executor.poll_shutdown()[0]
+    executor.shutdown()
+    assert executor.execution_idle
+    executor.shutdown()
+    source.sample.assert_not_called()
+    assert client.send_calls == 0
 
 
 def test_shutdown_revalidates_full_body_motion_after_prior_confirmation():
@@ -727,6 +729,7 @@ def test_shutdown_revalidates_full_body_motion_after_prior_confirmation():
         height_readiness=ReadyHeight(), tf_listener=object(),
         base_pose_source=source, monotonic_clock=clock, ros_time_sec=clock,
     )
+    executor._stop_unconfirmed = True  # Prior owned motion still needs physical proof.
     executor.begin_shutdown()
     clock.now = 0.1
     assert not executor.poll_shutdown()[0]
@@ -760,6 +763,8 @@ def test_shutdown_velocity_invalidation_requires_new_settling_and_fences_infligh
         base_pose_source=source, monotonic_clock=clock, ros_time_sec=clock,
     )
     executor.begin_shutdown()
+    assert executor.poll_shutdown()[0]
+    executor.invalidate_shutdown_stop(owned_source=True)
     clock.now = 0.1
     assert not executor.poll_shutdown()[0]
     clock.now = 0.7
@@ -796,6 +801,7 @@ def test_confirmed_shutdown_authorization_survives_child_state_source_teardown()
         height_readiness=ReadyHeight(), tf_listener=object(),
         base_pose_source=source, monotonic_clock=clock, ros_time_sec=clock,
     )
+    executor._stop_unconfirmed = True  # Prior owned motion still needs physical proof.
     executor.begin_shutdown()
     clock.now = 0.1
     assert not executor.poll_shutdown()[0]

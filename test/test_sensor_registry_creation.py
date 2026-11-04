@@ -21,6 +21,9 @@ from fault_detector_spot.application.commanding.semantic_command import (
 )
 from fault_detector_spot.application.controllers.command_controller import (
     CommandController,
+    CommandControllerState,
+    CommandExecutionStatus,
+    SoftwareStopLatched,
 )
 from fault_detector_spot.application.controllers.sensor_attachment_controller import (
     SensorAttachmentController,
@@ -167,11 +170,14 @@ def test_updated_definition_is_used_by_later_attachment(tmp_path):
     assert snapshot.hand_to_probe_position[0] == pytest.approx(0.35)
 
 
-def test_update_active_sensor_is_rejected_synchronously(tmp_path):
-    registry, attachment, _, repository = controllers(tmp_path)
+@pytest.mark.parametrize("stop_pending", [False, True])
+def test_update_active_sensor_is_rejected_synchronously(tmp_path, stop_pending):
+    registry, attachment, commands, repository = controllers(tmp_path)
     registry.create(definition())
     pending = attachment.select_sensor("test")
     attachment.confirm_sensor("test", pending.attachment_revision)
+    if stop_pending:
+        commands.cancel_all("startup_reconciliation")
 
     with pytest.raises(RuntimeError, match="currently selected"):
         registry.update(definition(x=0.35))
@@ -181,10 +187,13 @@ def test_update_active_sensor_is_rejected_synchronously(tmp_path):
     )
 
 
-def test_delete_pending_sensor_is_rejected_synchronously(tmp_path):
-    registry, attachment, _, repository = controllers(tmp_path)
+@pytest.mark.parametrize("stop_pending", [False, True])
+def test_delete_pending_sensor_is_rejected_synchronously(tmp_path, stop_pending):
+    registry, attachment, commands, repository = controllers(tmp_path)
     registry.create(definition())
     attachment.select_sensor("test")
+    if stop_pending:
+        commands.cancel_all("startup_reconciliation")
 
     with pytest.raises(RuntimeError, match="currently selected"):
         registry.delete("test")
@@ -206,14 +215,17 @@ def test_unrelated_idle_sensor_update_succeeds(tmp_path):
     )
 
 
-def test_sensor_update_is_blocked_during_attachment_reservation(tmp_path):
-    registry, attachment, _, repository = controllers(tmp_path)
+@pytest.mark.parametrize("stop_pending", [False, True])
+def test_sensor_update_is_blocked_during_attachment_reservation(tmp_path, stop_pending):
+    registry, attachment, commands, repository = controllers(tmp_path)
     registry.create(definition("active"))
     registry.create(definition("other"))
     pending = attachment.select_sensor("active")
     attachment.confirm_sensor("active", pending.attachment_revision)
 
     with attachment.reserve_motion_attachment():
+        if stop_pending:
+            commands.cancel_all("startup_reconciliation")
         with pytest.raises(RuntimeError, match="workflow is active"):
             registry.update(definition("other", x=0.42))
 
@@ -239,6 +251,95 @@ def test_queued_physical_command_blocks_registry_mutation(
             registry.update(definition(x=0.35))
         else:
             registry.delete("test")
+
+
+def mutate_definition(registry, operation):
+    if operation == "create":
+        return registry.create(definition(x=0.35))
+    if operation == "update":
+        return registry.update(definition(x=0.35))
+    return registry.delete("test")
+
+
+@pytest.mark.parametrize("operation", ["create", "update", "delete"])
+@pytest.mark.parametrize("stop_phase", ["pending", "dispatched", "unconfirmed"])
+def test_registry_mutation_during_idle_stop_preserves_motion_block(
+    tmp_path, operation, stop_phase,
+):
+    registry, _, commands, repository = controllers(tmp_path)
+    if operation != "create":
+        repository.create(definition())
+    dispatched = []
+    commands.configure_dispatch(dispatched.append)
+    stop_id = commands.cancel_all("startup_reconciliation")
+    if stop_phase != "pending":
+        commands.poll()
+    if stop_phase == "unconfirmed":
+        commands.handle_execution_status(CommandExecutionStatus(
+            request_id=stop_id,
+            state=CommandControllerState.STOP_UNCONFIRMED,
+            detail="Prior shutdown requires reconciliation",
+            execution_instance_id="owner", status_sequence=1,
+        ))
+    stop_before = commands.software_stop_status
+    assert commands.queued_request_ids == ()
+
+    mutate_definition(registry, operation)
+
+    assert repository.exists("test") is (operation != "delete")
+    if operation != "delete":
+        assert repository.load("test").hand_to_probe.position.x == pytest.approx(0.35)
+    assert commands.software_stop_status == stop_before
+    assert commands.active_request_id == stop_id
+    assert [item.command.command_id for item in dispatched] == [CommandID.EMERGENCY_CANCEL]
+    with pytest.raises(SoftwareStopLatched):
+        queued_command(commands)
+
+
+@pytest.mark.parametrize("operation", ["create", "update", "delete"])
+def test_registry_mutation_waits_for_unresolved_motion_with_empty_queue(tmp_path, operation):
+    registry, _, commands, repository = controllers(tmp_path)
+    if operation != "create":
+        repository.create(definition())
+    commands.configure_dispatch(lambda request: None)
+    queued_command(commands)
+    motion_id = commands.active_request_id
+    commands.cancel_all()
+    commands.poll()
+    assert commands.queued_request_ids == ()
+    assert commands.active_request_id == motion_id
+
+    with pytest.raises(RuntimeError, match="active or queued"):
+        mutate_definition(registry, operation)
+
+    assert repository.exists("test") is (operation != "create")
+    if operation != "create":
+        assert repository.load("test").hand_to_probe.position.x == pytest.approx(0.20)
+
+
+@pytest.mark.parametrize("operation", ["create", "update", "delete"])
+def test_registry_mutation_waits_for_acquisition_abort_during_idle_stop(tmp_path, operation):
+    registry, _, commands, repository = controllers(tmp_path)
+    if operation != "create":
+        repository.create(definition())
+    stopped = [False]
+    commands.configure_stop_participant(
+        lambda request_id: None,
+        lambda request_id: (stopped[0], "Acquisition abort pending"),
+    )
+    commands.cancel_all()
+    commands.poll()
+    assert commands.queued_request_ids == ()
+
+    with pytest.raises(RuntimeError, match="Sensor acquisition stop is not confirmed"):
+        mutate_definition(registry, operation)
+
+    stopped[0] = True
+    commands.poll()
+    mutate_definition(registry, operation)
+    assert repository.exists("test") is (operation != "delete")
+    assert commands.software_stop_status.latched
+    assert not commands.software_stop_status.stop_confirmed
 
 
 def test_add_sensor_persists_and_publishes_definition(tmp_path):
