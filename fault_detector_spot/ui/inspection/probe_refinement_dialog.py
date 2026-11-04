@@ -79,7 +79,9 @@ class ProbeRefinementDialog(QDialog):
         )
         self.target_distance_field.setFixedWidth(90)
         self.target_distance_field.setValidator(
-            controls._distance_validator(self.target_distance_field)
+            controls._distance_validator(
+                self.target_distance_field, allow_zero=True,
+            )
         )
         self.aligned_distance_field.editingFinished.connect(
             self._handle_distance_editing_finished
