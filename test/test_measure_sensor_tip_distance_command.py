@@ -114,6 +114,7 @@ def feedback(controls, state=ApplicationCommandState.STATE_SUCCEEDED, **override
         client_id="ui", context_id=controls._sensor_tip_distance_context_id,
         request_id="server-request", state=state,
         detail="Sensor tip distance: 0.261 m; returned to initial pose",
+        continuation_safe=False,
     )
     values.update(overrides)
     return SimpleNamespace(**values)
@@ -162,6 +163,18 @@ def test_measurement_cancellation_blocks_further_approach_until_recovery():
     assert controls._distance_failure_requires_retraction
 
 
+@pytest.mark.parametrize("continuation_safe", [False, True])
+def test_measurement_failure_only_requires_recovery_when_pose_is_unverified(continuation_safe):
+    controls, _ = controls_for_measurement()
+    controls.handle_test_sensor_tip_distance()
+    controls._handle_sensor_tip_distance_status(feedback(
+        controls, state=ApplicationCommandState.STATE_FAILED,
+        continuation_safe=continuation_safe,
+    ))
+    assert not controls._sensor_tip_distance_test_active
+    assert controls._distance_failure_requires_retraction is not continuation_safe
+
+
 def test_success_from_another_request_cannot_complete_running_test():
     controls, _ = controls_for_measurement()
     controls.handle_test_sensor_tip_distance()
@@ -208,13 +221,14 @@ def test_measurement_behaviour_delegates_start_poll_and_cancellation(monkeypatch
     assert events[-1] == "cancel"
 
 
+@pytest.mark.parametrize("continuation_safe", [False, True])
 @pytest.mark.parametrize("state,invalidated", [
     ("DISPATCHED", False), ("RUNNING", False), ("SUCCEEDED", False),
     ("FAILED", True), ("CANCELLED", True),
     ("UNKNOWN", True), ("STOP_REQUESTED", True),
     ("STOP_CONFIRMED", True), ("STOP_UNCONFIRMED", True),
 ])
-def test_scoped_measurement_invalidates_alignment_on_failure_stop_or_uncertainty(state, invalidated):
+def test_scoped_measurement_retains_alignment_only_after_safe_completion(state, invalidated, continuation_safe):
     from threading import RLock
     from fault_detector_spot.application.controllers.command_controller import CommandControllerState
     from fault_detector_spot.application.coordinators.probe_setup_coordinator import ProbeSetupCoordinator
@@ -235,16 +249,21 @@ def test_scoped_measurement_invalidates_alignment_on_failure_stop_or_uncertainty
     )
     status = SimpleNamespace(
         state=getattr(CommandControllerState, state),
+        continuation_safe=continuation_safe,
         request=SimpleNamespace(
             context_id="setup/measure-sensor-tip-distance/unique",
             command=SimpleNamespace(command_id=CommandID.MEASURE_SENSOR_TIP_DISTANCE),
         ),
     )
     coordinator._handle_external_command_status(status)
-    assert bool(calls) is invalidated
+    assert bool(calls) is (invalidated and not (state == "FAILED" and continuation_safe))
 
 
-def test_alignment_button_disables_motion_controls_while_measuring():
+@pytest.mark.parametrize("terminal_state", [
+    ApplicationCommandState.STATE_SUCCEEDED,
+    ApplicationCommandState.STATE_FAILED,
+])
+def test_alignment_controls_resume_after_measurement_preserves_pose(terminal_state):
     from PyQt5.QtWidgets import QApplication
     from test_probe_point_guided_workflow import FakeUI
     from test_probe_safe_approach_navigation import safe_state
@@ -272,8 +291,14 @@ def test_alignment_button_disables_motion_controls_while_measuring():
     assert not dialog.next_button.isEnabled()
     assert not dialog.close_button.isEnabled()
     assert dialog.emergency_stop_button.isEnabled()
-    controls._handle_sensor_tip_distance_status(feedback(controls))
+    assert not any(button.isEnabled() for button in controls.refinement_buttons["alignment"].values())
+    controls._handle_sensor_tip_distance_status(feedback(
+        controls, state=terminal_state, continuation_safe=True,
+    ))
     assert dialog.test_distance_measure_button.isEnabled()
+    assert dialog.orient_sensor_tip_to_surface_button.isEnabled()
+    assert all(button.isEnabled() for button in controls.refinement_buttons["alignment"].values())
+    assert not controls._distance_failure_requires_retraction
     assert "0.261" in dialog.sensor_tip_distance_status_label.text()
     controls._refresh_refinement_dialog()
     assert "0.261" in dialog.sensor_tip_distance_status_label.text()

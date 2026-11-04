@@ -99,6 +99,14 @@ class ProbeSetupGeometry:
                 surface_normal_unavailable_reason=normal_error,
             )
         )
+        surface_point_camera = projected.point_camera
+        if normal is not None and normal.surface_plane_camera is not None:
+            surface_point_camera = depth_projection.refine_reference_surface_point(
+                projected,
+                normal.surface_plane_camera,
+                capture.rgb_camera_info,
+                (capture.rgb_image.width, capture.rgb_image.height),
+            )
         target = self._build_surface_target(
             projected_point=projected,
             outward_direction_camera=outward_camera,
@@ -111,6 +119,7 @@ class ProbeSetupGeometry:
             ),
             hand_to_probe_pose=hand_to_probe_pose,
             direction_source=direction_source,
+            surface_point_camera=surface_point_camera,
         )
         setup = initialize_reference_probe_setup(target)
         approach = approach_geometry.ReferenceApproachDirection(
@@ -150,6 +159,7 @@ class ProbeSetupGeometry:
                 projected,
                 capture.depth_image,
                 capture.depth_camera_info,
+                minimum_sample_count=30,
             )
         except ValueError as exception:
             normal_error = str(exception)
@@ -215,6 +225,7 @@ class ProbeSetupGeometry:
         aligned_preapproach_distance_m: float,
         hand_to_probe_pose: PoseData,
         direction_source: str,
+        surface_point_camera: Optional[Vector3Data] = None,
     ) -> surface_target_geometry.ReferenceSurfaceTarget:
         if projected_point is None:
             raise ValueError("No projected surface point is available")
@@ -235,7 +246,7 @@ class ProbeSetupGeometry:
             "Reference camera position",
         )
         surface_point_camera = ProbeSetupGeometry._vector_array(
-            projected_point.point_camera,
+            surface_point_camera or projected_point.point_camera,
             "Selected surface point",
         )
         outward_camera = ProbeSetupGeometry._vector_array(

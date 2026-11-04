@@ -131,9 +131,13 @@ def test_cropped_selection_preserves_full_pose(application, rotation, mode):
         assert results[0].surface_target == results[1].surface_target
         target = results[1].surface_target
         surface = target.surface_point_object
-        camera = results[1].projected_point.point_camera
+        # Surface fitting retains the selected RGB ray, including the
+        # subpixel offset relative to the lower-resolution depth raster.
+        depth = results[1].projected_point.depth_m
+        camera_x = (original.u - 31.5) / 200.0 * depth
+        camera_y = (original.v - 23.5) / 200.0 * depth
         assert [surface.x, surface.y, surface.z] == pytest.approx(
-            [0.3 - camera.y, -0.2 + camera.x, 0.4 + camera.z]
+            [0.3 - camera_y, -0.2 + camera_x, 0.4 + depth]
         )
         position = target.target_pose_object.position
         assert np.linalg.norm(np.array([position.x - surface.x,

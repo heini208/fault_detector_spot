@@ -114,7 +114,10 @@ class OrientSensorTipToSurfaceBehaviour(ArmMovementBehaviour):
             self._started = False
             if update.outcome is ArmMovementOutcome.SUCCESS:
                 return Status.SUCCESS
-            return self._fail_workflow(self.feedback_message)
+            return self._fail_workflow(
+                self.feedback_message,
+                continuation_safe=self._execution.continuation_safe,
+            )
         except Exception as exception:
             return self._fail_workflow(str(exception))
 
@@ -144,11 +147,15 @@ class OrientSensorTipToSurfaceBehaviour(ArmMovementBehaviour):
             logger=self.node.get_logger() if self.node is not None else None,
         )
 
-    def _fail_workflow(self, detail: str) -> Status:
+    def _fail_workflow(self, detail: str, *, continuation_safe=False) -> Status:
         if self._execution is not None and self._execution.active:
             self._execution.cancel()
+            continuation_safe = False
         self._started = False
-        return super()._fail(detail)
+        status = super()._fail(detail)
+        if self._command is not None:
+            self._command.continuation_safe = continuation_safe
+        return status
 
 
 __all__ = [

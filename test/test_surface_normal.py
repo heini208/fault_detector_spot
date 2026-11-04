@@ -2,7 +2,9 @@
 
 import math
 import struct
+from types import SimpleNamespace
 
+import numpy as np
 import pytest
 from sensor_msgs.msg import CameraInfo, Image
 
@@ -12,6 +14,9 @@ from fault_detector_spot.inspection.setup.reference_view_depth_projection import
 )
 from fault_detector_spot.inspection.geometry.surface_normal import (
     estimate_surface_normal,
+)
+from fault_detector_spot.inspection.setup.probe_setup_geometry import (
+    ProbeSetupGeometry,
 )
 
 
@@ -88,6 +93,53 @@ def test_front_facing_plane_normal_points_toward_camera():
     assert result.normal_camera.y == pytest.approx(0.0, abs=1e-6)
     assert result.normal_camera.z == pytest.approx(-1.0, abs=1e-6)
     assert result.sample_count >= 40
+    assert result.plane_rmse_m == pytest.approx(0.0, abs=1e-7)
+
+
+@pytest.mark.parametrize("seed", [0, 1, 2, 3])
+def test_reference_normal_uses_enough_sparse_depth_to_resist_noise(seed):
+    info = make_camera_info(41, 41, focal_length=552.0)
+    desired = np.array([0.0, -0.2, -math.sqrt(0.96)])
+    values = np.array(plane_depth_values(41, 41, info, desired, 0.5)).reshape(41, 41)
+    values += np.random.default_rng(seed).normal(0.0, 0.0015, values.shape)
+    v, u = np.indices(values.shape)
+    values[(u % 3 != 2) | (v % 3 != 2)] = 0.0
+    depth = make_32fc1(values.ravel(), 41, 41)
+    capture = SimpleNamespace(
+        rgb_image=depth, depth_image=depth,
+        rgb_camera_info=info, depth_camera_info=info,
+    )
+
+    _, result, error = ProbeSetupGeometry._surface_geometry(capture, ImagePoint(20, 20))
+
+    assert error == ""
+    normal = result.normal_camera
+    angle = math.acos(np.clip(np.dot([normal.x, normal.y, normal.z], desired), -1, 1))
+    assert angle < math.radians(5.0)
+    assert result.sample_count >= 30
+
+
+def test_reference_normal_keeps_dense_selected_face_local_at_a_crease():
+    info = make_camera_info(41, 41, focal_length=552.0)
+    u = np.indices((41, 41))[1]
+    # The selected flat face meets a 45-degree face five pixels to its right.
+    # Fitting the entire available 12-pixel radius would tilt the estimate.
+    values = np.ones((41, 41))
+    crease = u > 25
+    values[crease] = (1.0 + 5.0 / 552.0) / (1.0 + (u[crease] - 20.0) / 552.0)
+    depth = make_32fc1(values.ravel(), 41, 41)
+    capture = SimpleNamespace(
+        rgb_image=depth, depth_image=depth,
+        rgb_camera_info=info, depth_camera_info=info,
+    )
+
+    _, result, error = ProbeSetupGeometry._surface_geometry(capture, ImagePoint(20, 20))
+
+    assert error == ""
+    assert result.neighborhood_radius_px == 4
+    assert result.normal_camera.x == pytest.approx(0.0, abs=1e-6)
+    assert result.normal_camera.y == pytest.approx(0.0, abs=1e-6)
+    assert result.normal_camera.z == pytest.approx(-1.0, abs=1e-6)
     assert result.plane_rmse_m == pytest.approx(0.0, abs=1e-7)
 
 

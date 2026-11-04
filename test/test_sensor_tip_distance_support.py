@@ -102,11 +102,26 @@ def test_discovery_cannot_skip_missing_occluded_or_different_actual_surface(dept
         )
 
 
-def test_discovery_keeps_camera_minimum_and_probe_maximum_distance_limits():
+@pytest.mark.parametrize("optical_depth, reason", [
+    (0.200, "too close.*minimum 0.230 m"),
+    (0.229, "too close.*minimum 0.230 m"),
+    (0.610, "0.003–0.500 m range"),
+])
+def test_discovery_keeps_camera_minimum_and_probe_maximum_distance_limits(
+    optical_depth, reason,
+):
     image, info, camera = edge_target_scene()
-    for optical_depth, reason in [(0.28, "too close"), (0.61, "0.003–0.500 m range")]:
-        image.data = np.full((480, 640), optical_depth, dtype="<f4").tobytes()
-        with pytest.raises(ValueError, match=reason):
-            measure_sensor_tip_distance(
-                image, info, PoseData.identity(), camera,
-            )
+    image.data = np.full((480, 640), optical_depth, dtype="<f4").tobytes()
+    with pytest.raises(ValueError, match=reason):
+        measure_sensor_tip_distance(
+            image, info, PoseData.identity(), camera,
+        )
+
+
+@pytest.mark.parametrize("optical_depth", [0.230, 0.250])
+def test_measurement_accepts_camera_clearance_from_23_cm(optical_depth):
+    image, info = planar_depth(width=128, height=96, depth_m=optical_depth)
+    sample = measure_sensor_tip_distance(
+        image, info, PoseData.identity(), camera_pose(),
+    )
+    assert sample.distance_m == pytest.approx(optical_depth - 0.10, abs=1e-6)

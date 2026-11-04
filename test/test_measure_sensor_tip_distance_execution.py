@@ -285,6 +285,30 @@ def test_failed_measurement_returns_before_reporting_failure():
     assert case.executor.probe_motion_planner.hand == pose()
     assert "target patch has no depth" in case.execution.feedback_message
     assert case.execution.result is None
+    assert case.execution.continuation_safe
+
+
+def test_depth_clearance_rejection_before_motion_preserves_continuation(monkeypatch):
+    case = harness()
+
+    def reject_view(*args, **kwargs):
+        raise ValueError("Hand camera is closer than the minimum depth distance")
+
+    monkeypatch.setattr(case.source, "observation_view", reject_view)
+    assert finish(case) is MeasureSensorTipDistanceOutcome.FAILURE
+    assert case.executor.calls == []
+    assert case.execution.continuation_safe
+
+
+def test_new_attempt_and_cancellation_clear_previous_measurement_evidence():
+    case = harness()
+    assert finish(case) is MeasureSensorTipDistanceOutcome.SUCCESS
+    assert case.execution.continuation_safe
+
+    assert case.execution.start(case.command) is MeasureSensorTipDistanceOutcome.RUNNING
+    assert not case.execution.continuation_safe
+    case.execution.cancel()
+    assert not case.execution.continuation_safe
 
 
 def test_excessive_return_error_invalidates_result_and_prevents_further_motion():
@@ -295,6 +319,7 @@ def test_excessive_return_error_invalidates_result_and_prevents_further_motion()
     assert len(case.executor.calls) == 2
     assert case.execution.result is None
     assert case.execution.failure_outcome is ArmMovementOutcome.RECOVERY_FAILED
+    assert not case.execution.continuation_safe
 
 
 def test_failed_return_prohibits_outer_workflow_recovery():
@@ -305,6 +330,7 @@ def test_failed_return_prohibits_outer_workflow_recovery():
     assert len(case.executor.calls) == 2
     assert case.execution.result is None
     assert case.execution.failure_outcome is ArmMovementOutcome.RECOVERY_FAILED
+    assert not case.execution.continuation_safe
 
 
 @pytest.mark.parametrize("outcome", [
@@ -320,6 +346,7 @@ def test_unsafe_observation_failure_never_commands_return(outcome):
     assert len(case.executor.calls) == 1
     assert case.execution.failure_outcome is outcome
     assert case.execution.result is None
+    assert not case.execution.continuation_safe
 
 
 def test_user_cancel_stops_without_automatic_return():
@@ -332,6 +359,7 @@ def test_user_cancel_stops_without_automatic_return():
     assert len(case.executor.calls) == 1
     assert not case.execution.active
     assert case.execution.result is None
+    assert not case.execution.continuation_safe
 
 
 def test_missing_collision_planner_rejects_excursion():
@@ -341,6 +369,7 @@ def test_missing_collision_planner_rejects_excursion():
     assert finish(case) is MeasureSensorTipDistanceOutcome.FAILURE
     assert case.executor.calls == []
     assert "MoveIt" in case.execution.feedback_message
+    assert case.execution.continuation_safe
 
 
 def test_excessive_observation_translation_is_rejected_before_motion():
@@ -349,6 +378,7 @@ def test_excessive_observation_translation_is_rejected_before_motion():
 
     assert finish(case) is MeasureSensorTipDistanceOutcome.FAILURE
     assert case.executor.calls == []
+    assert case.execution.continuation_safe
 
 
 @pytest.mark.parametrize("change", ["attachment", "body_position", "body_orientation"])
@@ -367,6 +397,7 @@ def test_changed_reference_during_excursion_invalidates_measurement_without_retu
     assert finish(case, outcome) is MeasureSensorTipDistanceOutcome.FAILURE
     assert len(case.executor.calls) == 1
     assert case.execution.result is None
+    assert not case.execution.continuation_safe
     assert case.execution.failure_outcome in {
         ArmMovementOutcome.RECOVERY_FAILED, ArmMovementOutcome.UNSTABLE_ARM,
     }

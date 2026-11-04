@@ -401,10 +401,14 @@ class ProbeRefinementSession:
         self.motion_states[motion.stage] = RefinementMotionState.REACHED
         self.pending_motion = None
 
-    def fail_motion(self, request_id: str) -> None:
+    def fail_motion(self, request_id: str, *, pose_preserved: bool = False) -> None:
         """Fail the current movement without changing its candidate."""
         motion = self._matching_motion(request_id)
-        self.motion_states[motion.stage] = RefinementMotionState.FAILED
+        self.motion_states[motion.stage] = (
+            motion.previous_motion_state
+            if pose_preserved and motion.previous_motion_state is not None
+            else RefinementMotionState.FAILED
+        )
         self.pending_motion = None
 
     def _matching_motion(

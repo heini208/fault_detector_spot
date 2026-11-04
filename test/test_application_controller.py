@@ -109,6 +109,21 @@ def test_status_is_exposed_with_application_operation_identity():
     assert statuses[-1].status_sequence == 7
 
 
+@pytest.mark.parametrize("continuation_safe", [False, True])
+def test_execution_continuation_evidence_reaches_application_status(continuation_safe):
+    commands = FakeCommandController()
+    controller = ApplicationController(commands)
+    statuses = []
+    controller.add_status_listener(statuses.append)
+    operation = controller.prepare_operation(stand_intent(), "operator-ui")
+    controller.submit(operation)
+
+    commands.emit(operation.request, CommandControllerState.FAILED,
+                  continuation_safe=continuation_safe)
+
+    assert statuses[-1].continuation_safe is continuation_safe
+
+
 def test_uncertain_operation_retains_cancellation_ownership_until_confirmed_stop():
     commands = FakeCommandController()
     controller = ApplicationController(commands)

@@ -248,16 +248,9 @@ class ProbeRefinementController:
         refinement = self.require_refinement(draft)
         previous_alignment_motion_state = None
         if motion.kind in _ORIENTATION_MOTION_KINDS:
-            current_alignment_motion_state = refinement.motion_states[
+            previous_alignment_motion_state = refinement.motion_states[
                 RefinementStage.ALIGNMENT
             ]
-            if current_alignment_motion_state in (
-                RefinementMotionState.REACHED,
-                RefinementMotionState.FAILED,
-            ):
-                previous_alignment_motion_state = (
-                    current_alignment_motion_state
-                )
         preserve_reached_state = (
             previous_alignment_motion_state
             is RefinementMotionState.REACHED
@@ -589,7 +582,14 @@ class ProbeRefinementController:
                     detail=str(exception),
                 )
         else:
-            refinement.fail_motion(status.operation.request_id)
+            refinement.fail_motion(
+                status.operation.request_id,
+                pose_preserved=(
+                    status.state is CommandControllerState.FAILED
+                    and motion.kind is ProbeMotionKind.ORIENT_SENSOR_TIP_TO_SURFACE
+                    and status.continuation_safe
+                ),
+            )
         self._operations.pop(status.operation.request_id)
         return motion, status
 

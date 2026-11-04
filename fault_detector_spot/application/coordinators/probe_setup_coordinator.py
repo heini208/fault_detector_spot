@@ -193,8 +193,12 @@ class ProbeSetupCoordinator:
             )
             if status.request.context_id == context.context_id or scoped_surface_move:
                 continue
-            # A completed observation excursion verifies its own return pose.
-            # Failed, stopped, or uncertain excursions cannot preserve that evidence.
+            # The measurement owner can also fail without moving, or after a
+            # verified return. Preserve the reached candidate in those cases.
+            if (scoped_measurement
+                    and status.state is CommandControllerState.FAILED
+                    and status.continuation_safe):
+                continue
             if scoped_measurement and status.state not in {
                 CommandControllerState.FAILED,
                 CommandControllerState.CANCELLED,

@@ -113,6 +113,20 @@ def test_surface_source_preserves_known_normal():
     assert result.sample_count >= 797
 
 
+@pytest.mark.parametrize("camera_distance_m", [0.200, 0.229, 0.230, 0.250])
+def test_surface_orientation_requires_23_cm_camera_clearance(camera_distance_m):
+    camera = make_camera_info(65, 65, 300.0)
+    depth = make_32fc1([camera_distance_m] * (65 * 65), 65, 65)
+    if camera_distance_m < 0.230:
+        with pytest.raises(ValueError, match="too close.*minimum 0.230 m"):
+            estimate_live_surface_normal(depth, camera)
+    else:
+        result = estimate_live_surface_normal(depth, camera)
+        assert result.surface_plane_camera.point.z == pytest.approx(
+            camera_distance_m, abs=1e-6,
+        )
+
+
 def test_surface_source_accepts_noisy_planar_depth():
     camera = make_camera_info(65, 65, 100.0)
     expected = (0.2, -0.1, -math.sqrt(0.95))

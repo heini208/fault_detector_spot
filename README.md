@@ -814,6 +814,16 @@ An omitted/zero tolerance falls back to `close_surface.tolerance_m`; the separat
 Positive target distances still use tolerance as the allowed distance error.
 The standalone distance test remains available.
 
+Reference-image candidates use the selected RGB ray's intersection with the
+fitted local surface, preserving the clicked location when registered depth
+comes from a neighboring pixel or a lower-resolution image. Reference fits
+require at least 30 samples and expand their neighborhood only as needed.
+The sampled depth must agree with the fitted surface within 15 mm; ambiguous
+features, unsupported depth, and unstable intersections are rejected. Explicit
+tag-axis selection retains raw depth when no local plane is available. These
+poses describe the sensor tip; motion planning applies the full configured
+hand-to-tip transform to derive the hand target.
+
 During aligned pre-approach setup, **Orient sensor tip to surface** is available
 after reaching the safe approach, before saving or reaching the final aligned
 candidate. It runs the same
@@ -827,7 +837,10 @@ within 10 mm and axis alignment within 5 degrees before the achieved pose become
 the candidate. **Save Final Aligned Pre-approach Pose** then becomes available;
 orientation does not approve the pose automatically. Measurement failure, contact, changed attachment or
 body reference prevents success; cancellation stops without starting another
-movement. The separate check for tip movement between measurement and the start
+movement. A failed distance test or tip orientation preserves the reached
+candidate and fine adjustments when execution confirms no movement or a verified
+return. An interrupted movement or unverified return still requires recovery.
+The separate check for tip movement between measurement and the start
 of alignment remains 5 mm. The 10 mm final tolerance accepts positioning error;
 it does not improve positioning accuracy or trigger a correction movement.
 The existing action is now labeled **Orient camera to surface** and
@@ -882,7 +895,8 @@ After settling, the operation requires five distinct frames spanning one
 second, at most 5 mm distance variation, consistent fitted normals, and a
 newest valid reading no older than 0.5 seconds. Fits are reused only while their
 camera calibration, timestamped TF, target and attachment remain unchanged.
-The camera depth must be at least 0.290 m, and the measured axis intersection
+The camera depth must be at least 0.230 m (30 mm above the 0.200 m near limit),
+and the measured axis intersection
 must be 3–500 mm ahead. Measurements anchored to a saved tag target additionally
 require agreement within 0.10 m of its expected wall distance. These are
 correspondence/visibility limits, not promised measurement accuracy.

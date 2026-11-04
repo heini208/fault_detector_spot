@@ -13,6 +13,10 @@ from fault_detector_spot.inspection.geometry.depth_point_cloud import (
     camera_intrinsics,
     create_organized_depth_point_cloud,
 )
+from fault_detector_spot.inspection.geometry.surface_plane import (
+    DEFAULT_DEPTH_PLANE_TOLERANCE_M,
+    SurfacePlane,
+)
 from fault_detector_spot.inspection.model.models import (
     ImagePoint,
 )
@@ -176,6 +180,70 @@ def map_rgb_pixel_to_depth(
             "Reference pixel is outside the registered-depth field of view"
         )
     return mapped
+
+
+def refine_reference_surface_point(
+    projected_point: ProjectedReferencePoint,
+    surface_plane: SurfacePlane,
+    rgb_camera_info: CameraInfo,
+    rgb_size: Tuple[int, int],
+) -> Vector3Data:
+    """Intersect the selected RGB ray with its locally measured surface.
+
+    Keep the raw sampled depth separate: it must belong to the fitted plane
+    rather than an intentionally selected feature or a separate surface.
+    """
+    surface_plane.validate()
+    projected_point.point_camera.validate()
+    if surface_plane.frame_id != projected_point.frame_id:
+        raise ValueError("Surface plane and selected depth frames do not match")
+    if surface_plane.rmse_m > DEFAULT_DEPTH_PLANE_TOLERANCE_M:
+        raise ValueError("Selected surface plane is too noisy for position refinement")
+    surface_plane = surface_plane.oriented_toward(Vector3Data.zero())
+
+    size = _validate_image_size(rgb_size, "RGB image size")
+    projected_point.requested_pixel.validate()
+    _validate_pixel_bounds(projected_point.requested_pixel, size, "RGB reference image")
+    model = _pinhole_camera_model(rgb_camera_info, size, "RGB CameraInfo")
+    ray = np.asarray(model.projectPixelTo3dRay((
+        float(projected_point.requested_pixel.u),
+        float(projected_point.requested_pixel.v),
+    )), dtype=float)
+    normal = surface_plane.normal_array()
+    denominator = float(np.dot(ray, normal))
+    if (not np.all(np.isfinite(ray)) or ray[2] <= 0.0
+            or abs(denominator) <= 0.1 * float(np.linalg.norm(ray))):
+        raise ValueError("Selected camera ray is nearly parallel to the fitted surface")
+    distance = float(np.dot(surface_plane.point_array(), normal)) / denominator
+    point = ray * distance
+    if not np.all(np.isfinite(point)) or point[2] <= 0.0:
+        raise ValueError("Selected surface-plane intersection is behind the camera")
+    raw = np.array([
+        projected_point.point_camera.x,
+        projected_point.point_camera.y,
+        projected_point.point_camera.z,
+    ])
+    correction_m = float(np.linalg.norm(point - raw))
+    if correction_m > 0.05:
+        raise ValueError(
+            "Selected surface plane is too far from measured depth: "
+            f"correction {correction_m:.3f} m exceeds 0.050 m"
+        )
+    sample_denominator = float(np.dot(raw, normal))
+    if raw[2] <= 0.0 or abs(sample_denominator) <= 1e-12:
+        raise ValueError("Selected depth does not intersect the fitted surface")
+    predicted_sample_depth = (
+        float(np.dot(surface_plane.point_array(), normal))
+        / sample_denominator * raw[2]
+    )
+    depth_difference_m = abs(predicted_sample_depth - projected_point.depth_m)
+    if (not math.isfinite(predicted_sample_depth) or predicted_sample_depth <= 0.0
+            or depth_difference_m > DEFAULT_DEPTH_PLANE_TOLERANCE_M):
+        raise ValueError(
+            "Selected depth disagrees with the fitted surface by "
+            f"{depth_difference_m:.3f} m; select a point within one flat surface patch"
+        )
+    return Vector3Data(*(float(value) for value in point))
 
 
 def rgb_depth_overlap_region(

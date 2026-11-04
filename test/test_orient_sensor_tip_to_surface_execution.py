@@ -71,6 +71,7 @@ class Measurement:
         self.cancel_count = 0
         self.feedback_message = "Measuring the intended surface"
         self.failure_outcome = ArmMovementOutcome.EXECUTION_ERROR
+        self.continuation_safe = False
         self.outcome = MeasureSensorTipDistanceOutcome.SUCCESS
         self.wait = False
 
@@ -205,6 +206,30 @@ def test_failed_measurement_never_starts_alignment(outcome):
     assert "failed" in update.detail.lower()
     assert case.executor.calls == []
     assert not case.execution.active
+    assert not case.execution.continuation_safe
+
+
+def test_failed_measurement_with_verified_return_preserves_continuation():
+    case = harness()
+    case.measurement.outcome = MeasureSensorTipDistanceOutcome.FAILURE
+    case.measurement.continuation_safe = True
+    update = finish(case)
+    assert update.outcome is ArmMovementOutcome.EXECUTION_ERROR
+    assert case.execution.continuation_safe
+    assert case.executor.calls == []
+
+
+def test_failure_after_verified_measurement_before_alignment_preserves_continuation(monkeypatch):
+    case = harness()
+
+    def missing_transform(_):
+        raise ValueError("Hand-to-tip transform unavailable")
+
+    monkeypatch.setattr(case.executor.probe_motion_planner, "hand_to_probe_pose", missing_transform)
+    update = finish(case)
+    assert update.outcome is ArmMovementOutcome.EXECUTION_ERROR
+    assert case.execution.continuation_safe
+    assert case.executor.calls == []
 
 
 def test_missing_collision_planner_rejects_alignment():
@@ -214,6 +239,7 @@ def test_missing_collision_planner_rejects_alignment():
     assert update.outcome is not ArmMovementOutcome.SUCCESS
     assert "MoveIt" in update.detail
     assert case.executor.calls == []
+    assert case.execution.continuation_safe
 
 
 def test_already_aligned_probe_finishes_without_an_alignment_movement():
@@ -249,6 +275,7 @@ def test_changed_reference_during_alignment_stops_without_recovery_motion(change
     assert len(case.executor.calls) == 1
     assert case.executor.cancel_count == 1
     assert not case.execution.active
+    assert not case.execution.continuation_safe
 
 
 def test_cancel_during_measurement_propagates_without_alignment():
@@ -259,6 +286,7 @@ def test_cancel_during_measurement_propagates_without_alignment():
     assert case.measurement.cancel_count == 1
     assert case.executor.calls == []
     assert not case.execution.active
+    assert not case.execution.continuation_safe
 
 
 def test_cancel_during_alignment_stops_without_return_or_another_motion():
@@ -268,6 +296,7 @@ def test_cancel_during_alignment_stops_without_return_or_another_motion():
     assert case.executor.cancel_count == 1
     assert len(case.executor.calls) == 1
     assert not case.execution.active
+    assert not case.execution.continuation_safe
 
 
 @pytest.mark.parametrize("outcome", [
@@ -281,6 +310,7 @@ def test_failed_or_contact_alignment_never_reports_success_or_retries(outcome):
     assert update.outcome is not ArmMovementOutcome.SUCCESS
     assert len(case.executor.calls) == 1
     assert not case.execution.active
+    assert not case.execution.continuation_safe
 
 
 @pytest.mark.parametrize("error", ["tip_position", "axis_alignment"])
@@ -294,6 +324,7 @@ def test_inaccurate_achieved_alignment_fails_without_blind_retry(error):
     assert update.outcome is not ArmMovementOutcome.SUCCESS
     assert len(case.executor.calls) == 1
     assert not case.execution.active
+    assert not case.execution.continuation_safe
     assert "limit 10.00 mm" in update.detail
     assert "limit 5.00 deg" in update.detail
 

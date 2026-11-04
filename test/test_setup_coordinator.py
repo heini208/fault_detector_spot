@@ -302,6 +302,26 @@ def test_advancing_context_cannot_discard_pending_ownership():
     assert coordinator.advance_context(context).revision == 1
 
 
+@pytest.mark.parametrize("continuation_safe", [False, True])
+def test_setup_status_preserves_execution_continuation_evidence(continuation_safe):
+    coordinator = SetupCoordinator(FakeCommandController())
+    context = coordinator.open_context(CommandOrigin.PROBE_SETUP, "probe-ui")
+    statuses = []
+    coordinator.add_operation_listener(context, statuses.append)
+    operation = coordinator.prepare_command(
+        context, command(CommandID.ORIENT_SENSOR_TIP_TO_SURFACE),
+    )
+    coordinator.submit(operation)
+
+    coordinator._handle_command_status(CommandControllerStatus(
+        request=operation.request,
+        state=CommandControllerState.FAILED,
+        continuation_safe=continuation_safe,
+    ))
+
+    assert statuses[-1].continuation_safe is continuation_safe
+
+
 def test_closing_context_preserves_terminal_callback_and_cancels_once():
     controller = FakeCommandController()
     coordinator = SetupCoordinator(controller)

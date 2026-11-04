@@ -55,6 +55,7 @@ class SetupOperationStatus:
     buffered_command_count: int
     execution_instance_id: str = ""
     status_sequence: int = 0
+    continuation_safe: bool = False
 
 
 ContextListener = Callable[[SetupContextEvent], None]
@@ -501,6 +502,7 @@ class SetupCoordinator:
             ),
             execution_instance_id=status.execution_instance_id,
             status_sequence=status.status_sequence,
+            continuation_safe=status.continuation_safe,
         )
         try:
             self._emit_operation_status(setup_status)

@@ -634,6 +634,7 @@ class ApplicationApiNode(Node):
         message.buffered_command_count = status.buffered_command_count
         message.execution_instance_id = status.execution_instance_id
         message.status_sequence = status.status_sequence
+        message.continuation_safe = status.continuation_safe
         return message
 
     def _failure_state(self, execution, detail, *, public_state=ApplicationCommandState.STATE_FAILED):

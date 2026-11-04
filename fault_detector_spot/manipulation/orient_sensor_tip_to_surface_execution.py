@@ -47,6 +47,7 @@ class OrientSensorTipToSurfaceExecution:
         self._active = False
         self._owns_motion = False
         self.failure_outcome = None
+        self.continuation_safe = False
         self.feedback_message = ""
 
     @property
@@ -57,6 +58,7 @@ class OrientSensorTipToSurfaceExecution:
         if self.active:
             raise RuntimeError("Sensor tip orientation is already active")
         self.failure_outcome = None
+        self.continuation_safe = False
         self._owns_motion = False
         if self.executor.active:
             return self._fail("Arm executor is busy; sensor tip orientation was not started", ArmMovementOutcome.BUSY)
@@ -67,12 +69,16 @@ class OrientSensorTipToSurfaceExecution:
             if self._attachment[0] != command.motion_sensor_id:
                 raise ValueError("Sensor attachment does not match the requested tip")
             if self.executor.moveit_arm_planner is None:
-                raise ValueError("Sensor tip orientation requires collision-checked MoveIt planning")
+                return self._fail(
+                    "Sensor tip orientation requires collision-checked MoveIt planning",
+                    continuation_safe=True,
+                )
             return self._measurement_update(self._measurement.start(command))
         except Exception as error:
             return self._fail(str(error))
 
     def cancel(self):
+        self.continuation_safe = False
         if self._measurement.active:
             self._measurement.cancel()
         elif self._owns_motion and self.executor.active:
@@ -104,6 +110,7 @@ class OrientSensorTipToSurfaceExecution:
             return self._fail(
                 self._measurement.feedback_message,
                 self._measurement.failure_outcome or ArmMovementOutcome.EXECUTION_ERROR,
+                continuation_safe=self._measurement.continuation_safe,
             )
         self._measured = self._measurement.result
         if self._measured is None:
@@ -122,6 +129,7 @@ class OrientSensorTipToSurfaceExecution:
                 or rotation_distance_rad(current.orientation, self._origin.orientation)
                 > self.config.return_orientation_tolerance_rad):
             raise ValueError("Sensor tip moved after distance measurement; measure again before aligning")
+        self.continuation_safe = True
         if self._axis_error(self._origin) <= 1e-6:
             return self._success(self._origin)
         planner = self.executor.probe_motion_planner
@@ -138,6 +146,7 @@ class OrientSensorTipToSurfaceExecution:
             return self._fail("Arm executor is busy before sensor tip alignment", ArmMovementOutcome.BUSY)
         if self.executor.moveit_arm_planner is None:
             raise RuntimeError("Sensor tip orientation requires collision-checked MoveIt planning")
+        self.continuation_safe = False
         self._phase = "aligning"
         self._owns_motion = True
         self.feedback_message = "Aligning sensor tip to the measured target surface"
@@ -215,6 +224,7 @@ class OrientSensorTipToSurfaceExecution:
 
     def _success(self, probe):
         self._active = False
+        self.continuation_safe = True
         distance = self._measured.surface_plane_odom.signed_distance(probe.position)
         self.feedback_message = (
             f"Sensor tip aligned to surface: axis error {math.degrees(self._axis_error(probe)):.2f} deg; "
@@ -222,8 +232,13 @@ class OrientSensorTipToSurfaceExecution:
             f"distance {distance*1000:.2f} mm perpendicular")
         return ArmMovementUpdate(ArmMovementOutcome.SUCCESS, self.feedback_message)
 
-    def _fail(self, detail, outcome=ArmMovementOutcome.EXECUTION_ERROR):
+    def _fail(self, detail, outcome=ArmMovementOutcome.EXECUTION_ERROR, *, continuation_safe=None):
+        if continuation_safe is None:
+            continuation_safe = self.continuation_safe
+        preserved = (continuation_safe and outcome is ArmMovementOutcome.EXECUTION_ERROR
+                     and not self.executor.active)
         self.cancel()
+        self.continuation_safe = preserved
         self.failure_outcome = outcome
         self.feedback_message = str(detail)
         return ArmMovementUpdate(outcome, self.feedback_message)

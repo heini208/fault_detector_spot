@@ -152,6 +152,7 @@ class MeasureSensorTipDistanceExecution:
         self._started = False
         self.result = None
         self.failure_outcome = None
+        self.continuation_safe = False
         self.feedback_message = ""
 
     @property
@@ -177,6 +178,8 @@ class MeasureSensorTipDistanceExecution:
         self._return_orientation_tolerance_rad = self.config.return_orientation_tolerance_rad
         self.result = None
         self.failure_outcome = None
+        self.continuation_safe = False
+        self._return_verified = False
         self._samples = {}
         self._aggregate = None
         self._failure_detail = ""
@@ -209,6 +212,7 @@ class MeasureSensorTipDistanceExecution:
         return self.poll()
 
     def cancel(self):
+        self.continuation_safe = False
         if self.executor.active:
             self.executor.cancel()
         self._started = False
@@ -543,6 +547,7 @@ class MeasureSensorTipDistanceExecution:
                                       self._return_label.capitalize())
         if self._return_started:
             self._log_return(self._return_label.capitalize() + " verified; " + self._return_diagnostics(hand, probe, body))
+        self._return_verified = True
         if self._failure_detail:
             return self._fail(f"{self._failure_detail}; returned to {self._return_label}")
         plane = transform_surface_plane(self._plane_odom, inverse_pose(probe), "probe")
@@ -563,6 +568,7 @@ class MeasureSensorTipDistanceExecution:
             f"{self._return_label} verified"
             + (f" after {self._return_budget.corrections} slow return correction(s)" if self._return_budget.corrections else ""))
         self._started = False
+        self.continuation_safe = True
         return MeasureSensorTipDistanceOutcome.SUCCESS
 
     def _wait_or_fail(self, error):
@@ -619,6 +625,13 @@ class MeasureSensorTipDistanceExecution:
             raise RuntimeError("Body/odom reference changed; measurement and automatic return invalidated")
 
     def _fail(self, detail, outcome=ArmMovementOutcome.EXECUTION_ERROR, *, cancel_motion=True):
+        # Only this execution can prove an unchanged pose or verified return.
+        # Unknown stopping/recovery, attachment changes and cancellation cannot.
+        self.continuation_safe = (
+            outcome is ArmMovementOutcome.EXECUTION_ERROR
+            and not self.executor.active
+            and (self._return_verified or (not self._moved and not self._return_started))
+        )
         if cancel_motion and self.executor.active:
             self.executor.cancel()
         self.result = None

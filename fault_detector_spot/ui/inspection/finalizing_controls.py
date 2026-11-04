@@ -960,7 +960,11 @@ class FinalizingInspectionControls(InspectionControls):
             ApplicationCommandState.STATE_STOP_CONFIRMED,
         }:
             self._sensor_tip_distance_test_active = False
-            if status.state != ApplicationCommandState.STATE_SUCCEEDED:
+            if (status.state != ApplicationCommandState.STATE_SUCCEEDED
+                    and not (
+                        status.state == ApplicationCommandState.STATE_FAILED
+                        and status.continuation_safe
+                    )):
                 self._surface_move_succeeded = False
                 self._distance_failure_requires_retraction = True
         self._refresh_refinement_dialog()
