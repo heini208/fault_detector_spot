@@ -62,6 +62,8 @@ class RosCommandTransport:
         self._remote_last_receipt = None
         self._remote_status_sequence = 0
         self._remote_query_sequence = 0
+        self._remote_configuration_sequence = 0
+        self._remote_configuration_snapshot = None
         self._remote_accepting_commands = False
         self._remote_stop_latched = False
         self._remote_stop_confirmed = False
@@ -120,6 +122,7 @@ class RosCommandTransport:
             self._dispatch_consumer_ready,
             emergency_ready=self._emergency_consumer_ready,
             reset_ready=self._reset_consumer_ready,
+            configuration_ready=self._configuration_consumer_ready,
         )
         self.controller.configure_reconciliation(self._query_status)
         self._discover_owner()
@@ -152,6 +155,12 @@ class RosCommandTransport:
                 or message.status_sequence <= self._remote_status_sequence):
             return False
         self._remote_status_sequence = message.status_sequence
+        if not self._configuration_only_request(message.request_id):
+            # A topic status describes one request, not full owner occupancy.
+            # Stop-observation heartbeats cannot introduce motion, but any other
+            # request requires a newer query before configuration can change.
+            self._remote_configuration_sequence = message.status_sequence
+            self._remote_configuration_snapshot = None
         return self._apply_execution_status(message, received_at)
 
     def _apply_execution_status(self, message, received_at):
@@ -309,6 +318,8 @@ class RosCommandTransport:
             self._remote_instance_id = instance
             self._remote_status_sequence = 0
             self._remote_query_sequence = 0
+            self._remote_configuration_sequence = 0
+            self._remote_configuration_snapshot = None
             self._remote_accepting_commands = False
             self._remote_stop_latched = False
             self._remote_stop_confirmed = False
@@ -316,6 +327,11 @@ class RosCommandTransport:
         if status.status_sequence > self._remote_query_sequence:
             self._remote_query_sequence = status.status_sequence
             self._remote_last_receipt = received_at
+        if status.status_sequence > self._remote_configuration_sequence:
+            self._remote_configuration_sequence = status.status_sequence
+            self._remote_configuration_snapshot = (
+                received_at, tuple(response.unresolved_request_ids),
+            )
         if status.status_sequence > self._remote_status_sequence:
             self._remote_status_sequence = status.status_sequence
             self._remote_accepting_commands = bool(
@@ -419,6 +435,26 @@ class RosCommandTransport:
             and self._remote_last_receipt is not None
             and self._monotonic_clock() - self._remote_last_receipt < self._heartbeat_timeout_sec
             and self._emergency_consumer_ready()
+        )
+
+    def _configuration_consumer_ready(self) -> bool:
+        """Allow configuration under a stop only without real owner work."""
+        snapshot = self._remote_configuration_snapshot
+        if self._closed or not self._remote_instance_id or snapshot is None:
+            return False
+        received_at, unresolved = snapshot
+        if self._monotonic_clock() - received_at >= self._heartbeat_timeout_sec:
+            return False
+        return all(self._configuration_only_request(request_id) for request_id in unresolved)
+
+    def _configuration_only_request(self, request_id) -> bool:
+        # Restored shutdown markers preserve uncertainty and motion fences, but
+        # own no current command whose geometry can change. The current stop is
+        # likewise cancellation/observation rather than geometry-dependent work.
+        stop_request_id = self.controller.software_stop_status.request_id
+        return bool(
+            request_id.startswith("shutdown:")
+            or (bool(stop_request_id) and request_id == stop_request_id)
         )
 
     def _emergency_consumer_ready(self) -> bool:

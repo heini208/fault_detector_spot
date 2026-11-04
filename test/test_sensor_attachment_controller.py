@@ -15,6 +15,9 @@ from fault_detector_spot.application.commanding.semantic_command import (
 )
 from fault_detector_spot.application.controllers.command_controller import (
     CommandController,
+    CommandControllerState,
+    CommandExecutionStatus,
+    SoftwareStopLatched,
 )
 from fault_detector_spot.application.controllers.sensor_attachment_controller import (
     MotionAttachmentReservation,
@@ -394,6 +397,92 @@ def test_sensor_change_is_rejected_while_command_lane_has_work(tmp_path):
         controller.select_sensor("bmm150_01")
     with pytest.raises(RuntimeError, match="active or queued"):
         controller.clear_sensor()
+
+
+@pytest.mark.parametrize("stop_phase", ["pending", "dispatched", "unconfirmed"])
+def test_sensor_change_during_idle_stop_preserves_motion_block(tmp_path, stop_phase):
+    controller, repository, _, commands = build_controller(tmp_path)
+    repository.create(sensor_definition())
+    dispatched = []
+    commands.configure_dispatch(dispatched.append)
+    stop_id = commands.cancel_all("startup_reconciliation")
+    if stop_phase != "pending":
+        commands.poll()
+    if stop_phase == "unconfirmed":
+        commands.handle_execution_status(CommandExecutionStatus(
+            request_id=stop_id,
+            state=CommandControllerState.STOP_UNCONFIRMED,
+            detail="Prior shutdown requires reconciliation",
+            execution_instance_id="owner", status_sequence=1,
+        ))
+    stop_before = commands.software_stop_status
+    assert commands.queued_request_ids == ()
+
+    pending = controller.select_sensor("bmm150_01")
+    confirmed = controller.confirm_sensor("bmm150_01", pending.attachment_revision)
+    assert confirmed.status is SensorAttachmentStatus.ACTIVE
+    # Configuration does not grant admission to geometry-dependent workflows.
+    with pytest.raises(RuntimeError, match="active or queued"):
+        controller.acquire_motion_attachment()
+    controller.clear_sensor()
+    assert commands.software_stop_status == stop_before
+    assert commands.active_request_id == stop_id
+    assert [item.command.command_id for item in dispatched] == [CommandID.EMERGENCY_CANCEL]
+    with pytest.raises(SoftwareStopLatched):
+        commands.submit(CommandRequest.create(
+            command=SemanticCommand(command_id=CommandID.STAND_UP),
+            client_id="test", origin=CommandOrigin.SYSTEM,
+            recording_policy=RecordingPolicy.EXCLUDE,
+        ))
+
+
+def test_sensor_change_stays_blocked_for_unresolved_motion_with_empty_queue(tmp_path):
+    controller, repository, _, commands = build_controller(tmp_path)
+    repository.create(sensor_definition())
+    commands.configure_dispatch(lambda request: None)
+    motion = CommandRequest.create(
+        command=SemanticCommand(command_id=CommandID.READY_ARM),
+        client_id="test", origin=CommandOrigin.SYSTEM,
+        recording_policy=RecordingPolicy.EXCLUDE,
+    )
+    commands.submit(motion)
+    commands.cancel_all()
+    commands.poll()
+    assert commands.queued_request_ids == ()
+    assert commands.active_request_id == motion.request_id
+    with pytest.raises(RuntimeError, match="active or queued"):
+        controller.select_sensor("bmm150_01")
+
+
+def test_sensor_change_waits_for_acquisition_abort_during_idle_stop(tmp_path):
+    controller, repository, _, commands = build_controller(tmp_path)
+    repository.create(sensor_definition())
+    stopped = [False]
+    commands.configure_stop_participant(
+        lambda request_id: None, lambda request_id: (stopped[0], "Acquisition abort pending"),
+    )
+    commands.cancel_all()
+    commands.poll()
+    with pytest.raises(RuntimeError, match="active or queued"):
+        controller.select_sensor("bmm150_01")
+    stopped[0] = True
+    commands.poll()
+    assert controller.select_sensor("bmm150_01").pending_sensor_id == "bmm150_01"
+    assert commands.software_stop_status.latched
+    assert not commands.software_stop_status.stop_confirmed
+
+
+def test_idle_stop_does_not_release_attachment_reservation(tmp_path):
+    controller, repository, _, commands = build_controller(tmp_path)
+    repository.create(sensor_definition())
+    controller.confirm_sensor("", controller.snapshot().attachment_revision)
+    reservation = controller.acquire_motion_attachment()
+    commands.cancel_all()
+    commands.poll()
+    with pytest.raises(RuntimeError, match="workflow is active"):
+        controller.select_sensor("bmm150_01")
+    reservation.release()
+    assert controller.select_sensor("bmm150_01").pending_sensor_id == "bmm150_01"
 
 
 def test_confirmed_geometry_snapshot_is_independent(tmp_path):

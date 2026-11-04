@@ -186,6 +186,7 @@ class CommandController:
         self._dispatch_ready = dispatch_ready
         self._dispatch_emergency_ready = dispatch_ready
         self._dispatch_reset_ready = dispatch_ready
+        self._configuration_ready = None
         self._listener_error_handler = listener_error_handler
 
     @property
@@ -313,6 +314,7 @@ class CommandController:
         dispatch_ready: Optional[DispatchReady] = None,
         emergency_ready: Optional[DispatchReady] = None,
         reset_ready: Optional[DispatchReady] = None,
+        configuration_ready: Optional[DispatchReady] = None,
     ) -> None:
         """Attach the execution transport used for future dispatches."""
         if not callable(dispatch_request):
@@ -323,11 +325,14 @@ class CommandController:
             raise TypeError("Emergency readiness callback must be callable")
         if reset_ready is not None and not callable(reset_ready):
             raise TypeError("Reset readiness callback must be callable")
+        if configuration_ready is not None and not callable(configuration_ready):
+            raise TypeError("Configuration readiness callback must be callable")
         with self._lock:
             self._dispatch_request = dispatch_request
             self._dispatch_ready = dispatch_ready
             self._dispatch_emergency_ready = emergency_ready if emergency_ready is not None else dispatch_ready
             self._dispatch_reset_ready = reset_ready if reset_ready is not None else dispatch_ready
+            self._configuration_ready = configuration_ready
             self._dispatch_next_locked()
 
     def configure_reconciliation(self, query_status) -> None:
@@ -344,6 +349,8 @@ class CommandController:
             self._dispatch_ready = None
             self._dispatch_emergency_ready = None
             self._dispatch_reset_ready = None
+            if self._configuration_ready is not None:
+                self._configuration_ready = lambda: False
             self._reconcile_request = None
 
     def add_status_listener(self, listener: StatusListener) -> None:
@@ -390,14 +397,43 @@ class CommandController:
         busy_message: str = "Physical commands are active or queued",
     ):
         """Run one shared-state mutation atomically while the lane is idle."""
+        return self._run_idle_action(action, busy_message, configuration_only=False)
+
+    def run_configuration_change(
+        self,
+        action,
+        busy_message: str = "Physical commands are active or queued",
+    ):
+        """Permit nonmoving configuration during a stop with no owned motion.
+
+        Stop bookkeeping is not a geometry-dependent command. Configuration
+        must not clear that bookkeeping, reopen motion, or start a workflow.
+        """
+        return self._run_idle_action(action, busy_message, configuration_only=True)
+
+    def _run_idle_action(self, action, busy_message, *, configuration_only):
         if not callable(action):
             raise TypeError("Idle-lane action must be callable")
         if not isinstance(busy_message, str) or not busy_message.strip():
             raise ValueError("Busy-lane message must not be empty")
         with self._lock:
-            if (self._active is not None or self._queue or self._stops or self._pending_emergencies
-                    or (self._software_stop.latched and not self._software_stop.stop_confirmed)):
+            with self._emergency_lock:
+                unresolved_motion = self._unresolved_dispatch_ids - self._emergency_request_ids
+                stop_pending = bool(self._stops or self._pending_emergencies
+                    or (self._software_stop.latched and not self._software_stop.stop_confirmed))
+                configuration_allowed = bool(configuration_only and self._software_stop.latched
+                                             and self._participant_stop_confirmed)
+            if self._active is not None or self._queue or unresolved_motion:
                 raise RuntimeError(busy_message.strip())
+            if stop_pending:
+                if configuration_allowed and self._configuration_ready is not None:
+                    try:
+                        configuration_allowed = bool(self._configuration_ready())
+                    except Exception as exception:
+                        self._handle_listener_error(exception)
+                        configuration_allowed = False
+                if not configuration_allowed:
+                    raise RuntimeError(busy_message.strip())
             return action()
 
     def submit(self, request: CommandRequest[SemanticCommand]) -> str:

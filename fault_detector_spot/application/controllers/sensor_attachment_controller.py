@@ -396,7 +396,7 @@ class SensorAttachmentController:
         )
 
     def _change_while_idle(self, action):
-        return self.command_controller.run_if_idle(
+        return self.command_controller.run_configuration_change(
             action,
             "Cannot change sensor attachment while physical commands "
             "are active or queued",
