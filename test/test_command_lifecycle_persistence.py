@@ -79,6 +79,58 @@ def test_persistence_failure_cannot_suppress_a_requested_safety_stop():
     assert len(errors) == 1
 
 
+def test_unacquired_session_reports_once_during_polling_and_still_blocks_reset(tmp_path):
+    from fault_detector_spot.shared.persistence.shutdown_state import StopUnconfirmedStore
+
+    store = StopUnconfirmedStore(root=tmp_path)
+    sent, errors = [], []
+    controller = CommandController(
+        dispatch_request=sent.append, session_work_changed=store.set_session_work,
+        listener_error_handler=errors.append,
+    )
+    stop_id = controller.cancel_all("startup_reconciliation")
+    for _ in range(20):
+        controller.poll()
+
+    assert [str(error) for error in errors] == ["No shutdown session ownership was acquired"]
+    confirm_stop(controller, stop_id)
+    controller.reset_software_stop("internal-client")
+    assert [request.command.command_id for request in sent] == [CommandID.EMERGENCY_CANCEL]
+    assert controller.software_stop_status.latched
+    assert not store.session_path.exists()
+
+
+def test_persistence_error_reports_changes_and_recurrence_after_recovery():
+    failure = ["disk unavailable"]
+    attempts, errors = [], []
+
+    def persist(dirty):
+        attempts.append(dirty)
+        if failure[0]:
+            raise OSError(failure[0])
+
+    controller = CommandController(
+        dispatch_request=lambda _: None, session_work_changed=persist,
+        listener_error_handler=errors.append,
+    )
+    controller.set_external_session_work(True)
+    controller.poll()
+    assert len(attempts) == 2  # Persistence is retried despite duplicate-log suppression.
+    assert [str(error) for error in errors] == ["disk unavailable"]
+    failure[0] = "permission denied"
+    controller.poll()
+    controller.poll()
+    assert [str(error) for error in errors] == ["disk unavailable", "permission denied"]
+    failure[0] = None
+    controller.poll()
+    failure[0] = "permission denied"
+    controller.set_external_session_work(False)
+    controller.poll()
+    assert [str(error) for error in errors] == [
+        "disk unavailable", "permission denied", "permission denied",
+    ]
+
+
 def test_acquisition_ownership_outlives_its_completed_start_command():
     persisted = []
     controller = CommandController(dispatch_request=lambda _: None, session_work_changed=persisted.append)

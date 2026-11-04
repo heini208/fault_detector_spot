@@ -156,6 +156,7 @@ class CommandController:
         self._admission_closed = False
         self._session_work_changed = session_work_changed
         self._session_work_unresolved = False
+        self._session_work_error = None
         self._external_session_work = False
         self._stops = {}
         self._active_state = None
@@ -455,6 +456,7 @@ class CommandController:
                 self._session_work_unresolved = None
                 raise
         self._session_work_unresolved = unresolved
+        self._session_work_error = None
 
     def _refresh_session_work_locked(self):
         unresolved = bool(self._unresolved_dispatch_ids or self._software_stop.latched
@@ -463,7 +465,11 @@ class CommandController:
             self._set_session_work_locked(unresolved)
         except Exception as exception:
             # Failed cleanup persistence retains the previous dirty evidence.
-            self._handle_listener_error(exception)
+            # Retry on later polls, but report an unchanged failure only once.
+            error = (type(exception), str(exception))
+            if error != self._session_work_error:
+                self._session_work_error = error
+                self._handle_listener_error(exception)
 
     def run_configuration_change(
         self,
