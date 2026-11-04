@@ -214,6 +214,7 @@ class Fault_Detector_UI(QWidget):
         main_layout = QVBoxLayout(self)
         main_layout.setSpacing(6)
 
+        software_stop_controls = self._make_software_stop_controls()
         self.status_overview_panel = StatusOverviewPanel(
             self.status_label,
             self.command_status_label,
@@ -234,9 +235,9 @@ class Fault_Detector_UI(QWidget):
             self._make_estop_button(),
             self,
             landmark_feedback_label=self.landmark_feedback_label,
+            software_stop_controls=software_stop_controls,
         )
         main_layout.addWidget(self.status_overview_panel)
-        main_layout.addLayout(self._make_software_stop_controls())
 
         self.tabs = QTabWidget()
         self.tabs.currentChanged.connect(self._on_tab_changed)
@@ -259,6 +260,7 @@ class Fault_Detector_UI(QWidget):
     def set_navigation_mode(self, active: bool):
         text = "ON" if active else "OFF"
         self.navigation_mode_label.setText(f"Navigation: {text}")
+        self.status_overview_panel.set_navigation_active(active)
 
     def set_sensor_status(
         self,
@@ -748,11 +750,11 @@ class Fault_Detector_UI(QWidget):
 
     def _make_software_stop_controls(self) -> QHBoxLayout:
         row = QHBoxLayout()
-        self.software_stop_label = QLabel("Software stop: awaiting state")
-        row.addWidget(self.software_stop_label)
-        row.addStretch()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(4)
         self.reset_software_stop_button = QPushButton("Reset software stop")
         self.reset_software_stop_button.setToolTip(
+            "Software stop: awaiting state\n"
             "Clear the latch only after every owner confirms stopping. "
             "Reset does not move the robot or replay cancelled work."
         )
@@ -1215,8 +1217,11 @@ class Fault_Detector_UI(QWidget):
             status = "latched — stop confirmed" if state.stop_confirmed else "latched — stop unconfirmed"
         else:
             status = "clear"
-        self.software_stop_label.setText(f"Software stop: {status}")
-        self.software_stop_label.setToolTip(state.detail)
+        self.reset_software_stop_button.setToolTip(
+            f"Software stop: {status}\n{state.detail}\n"
+            "Clear the latch only after every owner confirms stopping. "
+            "Reset does not move the robot or replay cancelled work."
+        )
         self.reset_software_stop_button.setEnabled(bool(state.latched and state.stop_confirmed))
         self.recover_arm_button.setEnabled(not state.latched)
 

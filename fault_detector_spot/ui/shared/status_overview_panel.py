@@ -58,6 +58,7 @@ class StatusOverviewPanel(QFrame):
         parent=None,
         *,
         landmark_feedback_label=None,
+        software_stop_controls=None,
     ):
         super().__init__(parent)
         self.setFrameShape(QFrame.StyledPanel)
@@ -112,14 +113,29 @@ class StatusOverviewPanel(QFrame):
         robot_layout.addWidget(status_label, 0, 0)
         robot_layout.addWidget(command_status_label, 0, 1)
         robot_layout.addWidget(self.battery_label, 0, 2)
-        robot_layout.addWidget(estop_button, 0, 4, 2, 1)
+
+        self.stop_widget = QWidget()
+        stop_layout = QVBoxLayout(self.stop_widget)
+        stop_layout.setContentsMargins(0, 0, 0, 0)
+        stop_layout.setSpacing(4)
+        stop_layout.addWidget(estop_button)
+        if software_stop_controls is not None:
+            stop_layout.addLayout(software_stop_controls)
+        robot_layout.addWidget(self.stop_widget, 0, 4, 2, 1)
 
         robot_layout.addWidget(buffer_label, 1, 0)
         robot_layout.addWidget(visible_label, 1, 1)
-        robot_layout.addWidget(navigation_mode_label, 1, 2)
+        self.navigation_widget = QWidget()
+        navigation_layout = QHBoxLayout(self.navigation_widget)
+        navigation_layout.setContentsMargins(0, 0, 0, 0)
+        navigation_layout.setSpacing(2)
+        navigation_layout.addWidget(navigation_mode_label)
+        self._landmark_feedback_label = landmark_feedback_label
         if landmark_feedback_label is not None:
-            self._configure_status_label(landmark_feedback_label)
-            robot_layout.addWidget(landmark_feedback_label, 2, 0, 1, 5)
+            navigation_layout.addWidget(landmark_feedback_label)
+            landmark_feedback_label.hide()
+        navigation_layout.addStretch()
+        robot_layout.addWidget(self.navigation_widget, 1, 2)
 
         robot_layout.setColumnStretch(0, 2)
         robot_layout.setColumnStretch(1, 2)
@@ -196,6 +212,10 @@ class StatusOverviewPanel(QFrame):
         self._recording_style_timer.start(100)
         self._refresh_recording_button_style()
         self._init_battery_subscription(parent)
+
+    def set_navigation_active(self, active: bool) -> None:
+        if self._landmark_feedback_label is not None:
+            self._landmark_feedback_label.setVisible(active)
 
     def _refresh_recording_button_style(self) -> None:
         active = self._recording_button.text().strip().lower() == "stop"

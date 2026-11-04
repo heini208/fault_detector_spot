@@ -151,7 +151,7 @@ def test_reset_api_preserves_missing_stop_confirmation_failure():
 def test_ui_reset_and_recovery_are_distinct_explicit_actions():
     harness = SimpleNamespace(
         application_client=Mock(), status_label=QLabel(),
-        handle_simple_operation=Mock(), software_stop_label=QLabel(),
+        handle_simple_operation=Mock(),
         reset_software_stop_button=QPushButton(), recover_arm_button=QPushButton(),
     )
     Fault_Detector_UI._process_software_stop_state(harness, stop_state(1))

@@ -183,7 +183,7 @@ def test_landmark_feedback_survives_general_setup_status_updates(application):
     label.close()
 
 
-def test_feedback_line_is_global_and_long_details_do_not_grow_layout(application):
+def test_feedback_disclosure_is_available_during_navigation_without_growing_layout(application):
     label = LandmarkFeedbackLabel()
     labels = [QLabel() for _ in range(11)]
     buttons = [QPushButton() for _ in range(6)]
@@ -192,7 +192,15 @@ def test_feedback_line_is_global_and_long_details_do_not_grow_layout(application
         labels[7], buttons[1], buttons[2], labels[8], labels[9], labels[10], buttons[3], buttons[4],
         buttons[5], landmark_feedback_label=label,
     )
-    assert panel.grid_layout.getItemPosition(panel.grid_layout.indexOf(label)) == (2, 0, 1, 5)
+    panel.show()
+    application.processEvents()
+    assert label.isHidden()
+    assert panel.navigation_widget.layout().indexOf(label) == 1
+    panel.set_navigation_active(True)
+    application.processEvents()
+    assert label.isVisible()
+    assert label.width() == 20
+    panel_height = panel.sizeHint().height()
     before = label.sizeHint().height()
     detail = "A long recovery failure reason <with diagnostic data>. " * 150
     label.show_event(event("failed", detail=detail))
@@ -200,4 +208,13 @@ def test_feedback_line_is_global_and_long_details_do_not_grow_layout(application
     assert label.sizeHint().height() == before
     assert detail in label._message()
     assert "&lt;with diagnostic data&gt;" in label.toolTip()
+    label._toggle_details()
+    application.processEvents()
+    assert label._popup.isVisible()
+    assert detail in label._message_view.toPlainText()
+    assert panel.sizeHint().height() == panel_height
+    panel.set_navigation_active(False)
+    application.processEvents()
+    assert label.isHidden()
+    assert not label._popup.isVisible()
     panel.close()

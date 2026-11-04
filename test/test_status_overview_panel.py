@@ -61,13 +61,15 @@ def test_primary_statuses_use_first_row_and_context_uses_second_row(
 
     assert layout.getItemPosition(layout.indexOf(status)) == (0, 0, 1, 1)
     assert layout.getItemPosition(layout.indexOf(command)) == (0, 1, 1, 1)
-    assert layout.getItemPosition(layout.indexOf(navigation)) == (
+    assert layout.getItemPosition(layout.indexOf(panel.navigation_widget)) == (
         1,
         2,
         1,
         1,
     )
-    assert layout.getItemPosition(layout.indexOf(estop)) == (0, 4, 2, 1)
+    assert panel.navigation_widget.layout().indexOf(navigation) == 0
+    assert layout.getItemPosition(layout.indexOf(panel.stop_widget)) == (0, 4, 2, 1)
+    assert panel.stop_widget.layout().indexOf(estop) == 0
 
     assert layout.getItemPosition(layout.indexOf(buffer_label)) == (
         1,
