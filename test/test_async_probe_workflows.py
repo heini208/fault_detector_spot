@@ -174,7 +174,6 @@ def _capture_goal():
     goal = CaptureProbeReferenceViews.Goal()
     goal.client_id = "client"
     goal.context_id = "0939a2c7-8040-4507-bdbd-6b68b7a7d957"
-    goal.reference_camera_ids = ["hand", "", ""]
     return goal
 
 

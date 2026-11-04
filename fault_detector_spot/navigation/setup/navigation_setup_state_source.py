@@ -86,7 +86,6 @@ class NavigationSetupStateSource:
         node,
         localization_topic="/localization_pose",
         visible_tag_topic="fault_detector/state/visible_tags",
-        active_map_changed=None,
         maximum_pose_age_sec=1.5,
         monotonic_clock=time.monotonic,
     ):
@@ -147,7 +146,6 @@ class NavigationSetupStateSource:
             self._receive_visible_tags,
             10,
         )
-        self._active_map_changed = active_map_changed
         self._active_map_subscription = node.create_subscription(
             String,
             "/active_map",
@@ -657,8 +655,6 @@ class NavigationSetupStateSource:
                     "Map changed; wait for a new localization estimate",
                     minimum_stamp_ns=self.node.get_clock().now().nanoseconds,
                 )
-        if self._active_map_changed is not None:
-            self._active_map_changed(message.data)
 
 
 __all__ = ["LandmarkObservationPending", "LandmarkSaveConfig", "NavigationSetupStateSource"]

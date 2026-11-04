@@ -1,0 +1,7 @@
+# Keep numerical packages aligned with Ubuntu 22.04 / Humble.
+numpy==1.21.5
+scipy==1.8.0
+PyYAML==6.0.2
+# Also required by the runtime Open3D/matplotlib dependency closure.
+packaging==21.3
+pyparsing==2.4.7

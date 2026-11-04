@@ -3,7 +3,7 @@
 import math
 from fault_detector_spot.manipulation.arm_motion_parameters import ArmMotionParameters
 
-from PyQt5.QtCore import QLocale, Qt, QTimer
+from PyQt5.QtCore import QLocale, Qt
 from PyQt5.QtGui import QDoubleValidator, QIntValidator
 from PyQt5.QtWidgets import (
     QCheckBox,
@@ -82,12 +82,6 @@ class InspectionControls(UIControlHelper):
         self._reference_slot_view_ids = ["", "", ""]
         self._preview_signature = None
         self._active_reference_slot = None
-        self._selected_surface_point = None
-        self._selected_surface_normal = None
-        self._surface_normal_error = ""
-        self._selected_approach_direction = None
-        self._selected_surface_target = None
-        self._calculated_probe_setup = None
         self._probe_setup = None
         self._refinement_presentation = None
         self._distance_failure_requires_retraction = False
@@ -1383,28 +1377,7 @@ class InspectionControls(UIControlHelper):
         self._refresh_refinement_dialog()
         return True
 
-    @property
-    def selected_surface_point(self):
-        return self._selected_surface_point
-
-    @property
-    def selected_surface_normal(self):
-        return self._selected_surface_normal
-
-    @property
-    def selected_approach_direction(self):
-        return self._selected_approach_direction
-
-    @property
-    def selected_surface_target(self):
-        return self._selected_surface_target
-
-    @property
-    def selected_probe_setup(self):
-        return self._probe_setup
-
     def _clear_selected_surface_point(self):
-        self._selected_surface_point = None
         self._clear_selected_surface_normal()
         self.reference_surface_frame_value_label.setText("—")
         self.reference_surface_frame_value_label.setToolTip("")
@@ -1416,8 +1389,6 @@ class InspectionControls(UIControlHelper):
         self._set_projection_status("No point")
 
     def _clear_selected_surface_normal(self):
-        self._selected_surface_normal = None
-        self._surface_normal_error = ""
         self._clear_selected_approach_direction()
         self.reference_normal_x_value_label.setText("—")
         self.reference_normal_y_value_label.setText("—")
@@ -1427,15 +1398,12 @@ class InspectionControls(UIControlHelper):
         self._set_normal_status("No point")
 
     def _clear_selected_approach_direction(self):
-        self._selected_approach_direction = None
         self._clear_selected_surface_target()
         self.reference_approach_source_value_label.setText("—")
         self.reference_approach_source_value_label.setToolTip("")
         self._set_approach_status("No point")
 
     def _clear_selected_surface_target(self):
-        self._selected_surface_target = None
-        self._calculated_probe_setup = None
         self._probe_setup = None
         self.reference_target_x_value_label.setText("—")
         self.reference_target_y_value_label.setText("—")
@@ -1477,7 +1445,6 @@ class InspectionControls(UIControlHelper):
         self.reference_projection_status_label.setToolTip(detail)
 
     def _set_projection_unavailable(self, status, detail):
-        self._selected_surface_point = None
         self._clear_selected_surface_normal()
         self.reference_surface_frame_value_label.setText("—")
         self.reference_surface_frame_value_label.setToolTip("")
@@ -1968,16 +1935,6 @@ class InspectionControls(UIControlHelper):
         self._write_motion_tolerances(intent)
         return self._submit_probe_motion(intent, label)
 
-    def handle_move_to_probe_pose(self):
-        self._show_setup_error(
-            "Move to Probe Pose",
-            ValueError(
-                "Direct probe-pose movement is disabled. Use Move Close "
-                "to Surface from the reached aligned pre-approach pose."
-            ),
-        )
-        return False
-
     def _custom_probe_mode(self):
         state = self._probe_setup_state
         return bool(state is not None and state.fully_custom)
@@ -2146,16 +2103,6 @@ class InspectionControls(UIControlHelper):
         pitch, yaw = rotations[action]
         return Vector3Data.zero(), pitch, yaw
 
-    def handle_use_current_as_probe(self):
-        self._show_setup_error(
-            "Capture Probe Pose",
-            ValueError(
-                "Probe approval requires a successful Move Close to "
-                "Surface followed by Approve and Retract"
-            ),
-        )
-        return False
-
     def handle_path_motion(self, operation, index=0):
         intent = ProbeSetupMotionIntent()
         intent.operation = operation
@@ -2278,13 +2225,6 @@ class InspectionControls(UIControlHelper):
 
     def handle_refinement_emergency_stop(self):
         self.ui.handle_emergency_stop()
-
-    def _require_probe_setup(self):
-        if self._probe_setup is None:
-            raise ValueError(
-                "No calculated probe setup is available"
-            )
-        return self._probe_setup
 
     def _show_setup_error(self, title, exception):
         self._set_setup_status("Unavailable", str(exception))
@@ -2447,12 +2387,6 @@ class InspectionControls(UIControlHelper):
 
     def _apply_probe_setup_view(self, view):
         state = view.message
-        self._selected_surface_point = view.projected_point
-        self._selected_surface_normal = view.surface_normal
-        self._surface_normal_error = state.surface_normal_error
-        self._selected_approach_direction = view.approach_direction
-        self._selected_surface_target = view.surface_target
-        self._calculated_probe_setup = view.calculated_setup
         self._probe_setup = view.setup
         self._synchronize_refinement_presentation(view.refinement)
 
@@ -2706,37 +2640,6 @@ class InspectionControls(UIControlHelper):
         )
         self.routine_parent_object_dropdown.blockSignals(False)
         self._update_create_routine_button()
-
-    def _populate_routine_dropdown(
-        self,
-        routines,
-        desired_routine_id="",
-    ):
-        self.saved_routine_dropdown.blockSignals(True)
-        self.saved_routine_dropdown.clear()
-        self.saved_routine_dropdown.addItem(
-            "Select saved routine",
-            None,
-        )
-        for routine_id in routines:
-            self.saved_routine_dropdown.addItem(
-                routine_id,
-                routine_id,
-            )
-        index = self.saved_routine_dropdown.findData(
-            desired_routine_id
-        )
-        self.saved_routine_dropdown.setCurrentIndex(
-            index if index >= 0 else 0
-        )
-        self.saved_routine_dropdown.blockSignals(False)
-
-    def _schedule_repository_refresh(self):
-        for delay_ms in (250, 1000, 3500):
-            QTimer.singleShot(
-                delay_ms,
-                self.refresh_setup_state,
-            )
 
     def handle_create_object(self):
         object_id = self._required_text(

@@ -42,17 +42,10 @@ class ReferenceViewInputSynchronizer:
         depth_topic: str,
         rgb_camera_info_topic: str,
         depth_camera_info_topic: str,
-        queue_size: int = 10,
         maximum_timestamp_skew_sec: float = 0.05,
         collection_duration_sec: float = 1.0,
     ):
         """Subscribe to one selected camera's raw input streams."""
-        if (
-            isinstance(queue_size, bool)
-            or not isinstance(queue_size, int)
-            or queue_size < 1
-        ):
-            raise ValueError("Synchronization queue size must be positive")
         self._validate_duration(
             maximum_timestamp_skew_sec,
             "Maximum timestamp skew",
@@ -342,11 +335,6 @@ class ReferenceViewInputSynchronizer:
             return self._input_sequence
 
     @property
-    def image_sequence(self) -> int:
-        """Return the raw input sequence retained for older callers."""
-        return self.input_sequence
-
-    @property
     def collection_active(self) -> bool:
         """Return whether a camera collection is active."""
         with self._lock:
@@ -408,14 +396,6 @@ class ReferenceViewInputSynchronizer:
                 else collection.depth_images
             )
             target.append(sample)
-
-    def _synchronized_images_callback(
-        self,
-        rgb_image: Image,
-        depth_image: Image,
-    ) -> None:
-        self._rgb_callback(rgb_image)
-        self._depth_callback(depth_image)
 
     def _select_best_pair(
         self,

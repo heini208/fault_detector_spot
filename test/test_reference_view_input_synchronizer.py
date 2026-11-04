@@ -34,7 +34,6 @@ class FakeNode:
 
 
 def make_synchronizer(
-    queue_size=7,
     image_skew=0.03,
     collection_duration=1.0,
 ):
@@ -47,7 +46,6 @@ def make_synchronizer(
         depth_camera_info_topic=(
             "/depth_registered/hand/camera_info"
         ),
-        queue_size=queue_size,
         maximum_timestamp_skew_sec=image_skew,
         collection_duration_sec=collection_duration,
     )
@@ -92,23 +90,20 @@ def test_cancel_collection_releases_transaction():
 
 
 @pytest.mark.parametrize(
-    "queue_size,image_skew,duration,message",
+    "image_skew,duration,message",
     [
-        (0, 0.05, 1.0, "queue size"),
-        (10, -0.01, 1.0, "timestamp skew"),
-        (10, 0.05, 0.0, "Collection duration"),
-        (10, math.inf, 1.0, "timestamp skew"),
+        (-0.01, 1.0, "timestamp skew"),
+        (0.05, 0.0, "Collection duration"),
+        (math.inf, 1.0, "timestamp skew"),
     ],
 )
 def test_invalid_configuration_is_rejected(
-    queue_size,
     image_skew,
     duration,
     message,
 ):
     with pytest.raises(ValueError, match=message):
         make_synchronizer(
-            queue_size=queue_size,
             image_skew=image_skew,
             collection_duration=duration,
         )

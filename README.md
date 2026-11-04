@@ -253,7 +253,10 @@ The [baseline workflow](.github/workflows/baseline.yml) has two independent jobs
 
 Source commits are pinned in [humble.repos](ci/humble.repos), vendor release
 assets are checksum-verified, and Python dependencies are pinned in
-`ci/requirements-*.txt`. The existing Spot wrapper posture fix is captured in
+`requirements-*.txt` and `ci/requirements-*.txt`. CI and the workspace installer
+share the numerical and SDK runtime pins; pytest, Ruff and their test-only
+dependencies are included only by the CI requirements. The existing Spot
+wrapper posture fix is captured in
 [spot-wrapper-posture.patch](ci/patches/spot-wrapper-posture.patch) against its
 pinned upstream revision. The driver-contract tests require that patch; a local
 uncommitted driver checkout is not a CI prerequisite. ROS/Ubuntu apt packages
@@ -264,8 +267,9 @@ these records make that drift visible rather than claiming a frozen apt image.
 
 The jobs upload logs, JUnit results, build/import evidence and environment
 manifests even on failure. The initial [baseline record](ci/baseline.json)
-identifies the exact clean application commit and explicitly accounts for the
-existing copyright-header skip and node-start integration exclusion. It was
+identifies the exact clean application commit and records its historical
+copyright-header skip and node-start integration exclusion. The copyright
+template test and its dependency have since been removed. The baseline was
 measured on the developer's supported Humble environment. A first successful
 hosted run is still required to validate fresh dependency provisioning; a local
 build using existing dependencies does not establish that result.

@@ -9,7 +9,10 @@ MAIN_UI = ROOT / "fault_detector_spot" / "ui" / "fault_detector_ui.py"
 
 
 def test_inspection_ui_does_not_own_robot_sensing_runtime():
-    source = (INSPECTION_UI / "controls.py").read_text(encoding="utf-8")
+    source = "\n".join(
+        (INSPECTION_UI / name).read_text(encoding="utf-8")
+        for name in ("controls.py", "finalizing_controls.py")
+    )
     forbidden = (
         "tf2_ros",
         "qos_profile_sensor_data",
@@ -35,7 +38,8 @@ def test_inspection_ui_does_not_own_robot_sensing_runtime():
     for value in forbidden:
         assert value not in source
 
-    assert "execute_move_close_to_surface" in source
+    assert "INTENT_MOVE_CLOSE_TO_SURFACE" in source
+    assert "self.ui.execute_operation(" in source
     assert "execute_probe_surface_verification" not in source
     assert "ProbeSetupMotionIntent" in source
 

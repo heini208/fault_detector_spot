@@ -142,7 +142,8 @@ def provision(tmp_path):
     app = workspace / 'src/fault_detector_spot'
     for directory in ('ci', 'patches', 'scripts'):
         shutil.copytree(ROOT / directory, app / directory)
-    for name in ('requirements-humble-sdk.txt', 'requirements-humble-runtime.txt'):
+    for name in ('requirements-base.txt', 'requirements-humble-common.txt',
+                 'requirements-humble-sdk.txt', 'requirements-humble-runtime.txt'):
         shutil.copy(ROOT / name, app / name)
     ros_setup = tmp_path / 'ros_setup.bash'
     ros_setup.write_text('export ROS_DISTRO=humble\n')

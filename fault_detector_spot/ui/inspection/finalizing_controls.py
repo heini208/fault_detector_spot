@@ -22,7 +22,6 @@ from fault_detector_spot.inspection.setup.probe_refinement_session import (
     RefinementStage,
 )
 from fault_detector_spot.inspection.setup.reference_camera_registry import (
-    REFERENCE_CAMERAS,
     REFERENCE_CAMERA_BY_ID,
 )
 from fault_detector_spot.inspection.setup.reference_view_depth_projection import (
@@ -478,11 +477,7 @@ class FinalizingInspectionControls(InspectionControls):
             return False
         self._clear_reference_preview_cache()
         self._reference_capture_in_progress = True
-        legacy_camera_ids = tuple(
-            camera.camera_id for camera in REFERENCE_CAMERAS[:3]
-        )
         request_id = self.ui.execute_probe_reference_capture(
-            legacy_camera_ids,
             replace_existing=(
                 self.replace_reference_view_checkbox.isChecked()
             ),

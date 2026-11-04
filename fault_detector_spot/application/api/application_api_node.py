@@ -215,12 +215,7 @@ class ApplicationApiNode(Node):
                 lambda capture: self.navigation_setup_state.finish_waypoint_capture(capture)
             ),
         )
-        self.navigation_setup_state = NavigationSetupStateSource(
-            self,
-            active_map_changed=(
-                self.navigation_setup_coordinator.observe_active_map
-            ),
-        )
+        self.navigation_setup_state = NavigationSetupStateSource(self)
         self.application_controller.attach_navigation_setup(
             self.navigation_setup_coordinator
         )

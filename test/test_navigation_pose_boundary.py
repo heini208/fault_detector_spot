@@ -48,9 +48,8 @@ def rig(monkeypatch):
     buffer.lookup_transform.return_value = robot_transform()
     monkeypatch.setattr(pose_source.tf2_ros, "Buffer", lambda: buffer)
     monkeypatch.setattr(pose_source.tf2_ros, "TransformListener", Mock())
-    active_map_changed = Mock()
     source = pose_source.NavigationSetupStateSource(
-        node, active_map_changed=active_map_changed,
+        node,
         monotonic_clock=lambda: steady[0],
     )
 
@@ -62,7 +61,7 @@ def rig(monkeypatch):
 
     yield SimpleNamespace(
         source=source, buffer=buffer, clock=clock, steady=steady,
-        advance=advance, active_map_changed=active_map_changed,
+        advance=advance,
     )
     source.close()
 
@@ -189,7 +188,6 @@ def test_unusable_tf_is_rejected(rig, fault, detail):
 def test_map_change_rejects_buffered_old_map_pose_and_retains_static_tf(rig):
     rig.source._receive_localization_pose(localization(stamp=9.5))
     rig.source._receive_active_map(String(data="new_map"))
-    rig.active_map_changed.assert_called_once_with("new_map")
     with pytest.raises(ValueError, match="Map changed"):
         rig.source.current_pose()
     rig.advance(0.2)

@@ -103,7 +103,7 @@ def test_repository_transactions_stay_outside_command_lane(tmp_path):
         state.context,
         "plant",
     )
-    navigation.observe_active_map("plant")
+    state = navigation.select_map(state.context, "plant")
     context = activate_mapping(
         navigation,
         boundary,
@@ -139,7 +139,7 @@ def test_runtime_operation_uses_semantic_nonrecordable_command(tmp_path):
         context,
         "plant",
     ).context
-    navigation.observe_active_map("plant")
+    context = navigation.select_map(context, "plant").context
     statuses = []
     navigation.add_status_listener(statuses.append)
 
@@ -175,7 +175,7 @@ def test_pose_authoring_requires_active_runtime_mode(tmp_path):
         context,
         "plant",
     ).context
-    navigation.observe_active_map("plant")
+    context = navigation.select_map(context, "plant").context
 
     with pytest.raises(RuntimeError, match="Mapping or localization"):
         navigation.add_current_waypoint(
@@ -192,7 +192,7 @@ def test_duplicate_waypoint_and_missing_tag_fail(tmp_path):
         context,
         "plant",
     ).context
-    navigation.observe_active_map("plant")
+    context = navigation.select_map(context, "plant").context
     context = activate_mapping(
         navigation,
         boundary,
@@ -226,7 +226,7 @@ def test_active_map_cannot_be_deleted(tmp_path):
         context,
         "plant",
     ).context
-    navigation.observe_active_map("plant")
+    context = navigation.select_map(context, "plant").context
 
     with pytest.raises(ValueError, match="active map"):
         navigation.delete_map(context, "plant")
@@ -255,7 +255,7 @@ def test_context_allows_only_one_runtime_operation(tmp_path):
         context,
         "plant",
     ).context
-    navigation.observe_active_map("plant")
+    context = navigation.select_map(context, "plant").context
     navigation.submit_runtime_operation(
         context,
         operation_code=5,
@@ -279,7 +279,7 @@ def test_closing_context_cancels_inflight_operation(tmp_path):
         context,
         "plant",
     ).context
-    navigation.observe_active_map("plant")
+    context = navigation.select_map(context, "plant").context
     operation = navigation.submit_runtime_operation(
         context,
         operation_code=5,
@@ -307,7 +307,7 @@ def test_close_survives_synchronous_queued_cancellation_status(tmp_path):
         context,
         "plant",
     ).context
-    navigation.observe_active_map("plant")
+    context = navigation.select_map(context, "plant").context
     operation = navigation.submit_runtime_operation(
         context,
         operation_code=5,

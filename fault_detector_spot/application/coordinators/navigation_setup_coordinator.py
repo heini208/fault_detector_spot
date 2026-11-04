@@ -215,12 +215,6 @@ class NavigationSetupCoordinator:
             return
         self.setup_coordinator.close_context(current)
 
-    def observe_active_map(self, map_name: str) -> None:
-        """Accept the legacy map observation until runtime status is available."""
-        with self._lock:
-            if self._runtime_observation is None:
-                self._active_map = map_name.strip()
-
     def observe_runtime(self, mode, map_name: str, error: str = "") -> None:
         """Reconcile process observations without treating commands as state."""
         if mode not in {None, MODE_NONE, MODE_MAPPING, MODE_LOCALIZATION}:

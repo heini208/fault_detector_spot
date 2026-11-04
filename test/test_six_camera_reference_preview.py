@@ -35,10 +35,9 @@ class FakeUI:
 
     def execute_probe_reference_capture(
         self,
-        camera_ids,
         replace_existing=False,
     ):
-        self.capture_calls.append((tuple(camera_ids), replace_existing))
+        self.capture_calls.append(replace_existing)
         return "capture-request"
 
     def execute_probe_setup(self, intent):
@@ -100,20 +99,19 @@ def make_preview(view_id, camera_id, slot_index):
     )
 
 
-def test_capture_request_is_independent_of_display_dropdowns(application):
+@pytest.mark.parametrize("replace_existing", [False, True])
+def test_capture_request_is_independent_of_display_dropdowns(application, replace_existing):
     ui = FakeUI()
     controls = FinalizingInspectionControls(ui)
     controls._probe_setup_state = make_state()
+    controls.replace_reference_view_checkbox.setChecked(replace_existing)
 
     for index, camera_id in enumerate(("hand", "back", "right")):
         dropdown = controls.reference_camera_dropdowns[index]
         dropdown.setCurrentIndex(dropdown.findData(camera_id))
 
     assert controls.handle_capture_reference_view() is True
-    assert ui.capture_calls == [(
-        ("frontleft", "frontright", "left"),
-        False,
-    )]
+    assert ui.capture_calls == [replace_existing]
 
 
 def test_dropdown_fetches_saved_camera_from_any_capture_slot(application):

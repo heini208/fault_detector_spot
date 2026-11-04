@@ -35,10 +35,9 @@ class FakeUI:
 
     def execute_probe_reference_capture(
         self,
-        camera_ids,
         replace_existing=False,
     ):
-        self.capture_calls.append((tuple(camera_ids), replace_existing))
+        self.capture_calls.append(replace_existing)
         return "capture-request"
 
     def execute_probe_setup(self, intent):

@@ -1,11 +1,8 @@
-"""Tests for selectable and complete reference-camera slots."""
-
-import pytest
+"""Tests for the complete reference-camera registry."""
 
 from fault_detector_spot.inspection.setup.reference_camera_registry import (
     REFERENCE_CAMERA_BY_ID,
     all_reference_camera_slots,
-    validate_reference_camera_slots,
 )
 
 
@@ -29,19 +26,6 @@ def test_registry_matches_spot_camera_topic_families():
         assert camera.depth_camera_info_topic == (
             f"/depth_registered/{camera_id}/camera_info"
         )
-
-
-def test_slots_preserve_empty_positions():
-    assert validate_reference_camera_slots(
-        ["", "hand", "back"]
-    ) == ((1, "hand"), (2, "back"))
-
-
-def test_slots_reject_duplicates_and_empty_selection():
-    with pytest.raises(ValueError, match="more than once"):
-        validate_reference_camera_slots(["hand", "hand", ""])
-    with pytest.raises(ValueError, match="at least one"):
-        validate_reference_camera_slots(["", "", ""])
 
 
 def test_complete_capture_uses_all_six_cameras_in_registry_order():

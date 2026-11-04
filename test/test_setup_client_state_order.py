@@ -145,7 +145,7 @@ def pending_action(request, monkeypatch):
         elif kind == "finalization":
             local_id = adapter.finalize_refinement(False)
         else:
-            local_id = adapter.capture_reference_views(["hand", "frontleft", "frontright"])
+            local_id = adapter.capture_reference_views()
         methods = tuple(f"_receive_{kind}_{phase}" for phase in ("goal", "result", "feedback"))
         handles = getattr(adapter, f"_{kind}_goal_handles")
         message_type = ProbeSetupState

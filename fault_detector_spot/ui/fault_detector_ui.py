@@ -746,14 +746,6 @@ class Fault_Detector_UI(QWidget):
         )
         return self.estop_button
 
-    def _make_estop_row(self) -> QHBoxLayout:
-        row = QHBoxLayout()
-        row.addWidget(
-            self._make_estop_button(),
-            alignment=Qt.AlignRight,
-        )
-        return row
-
     def _make_software_stop_controls(self) -> QHBoxLayout:
         row = QHBoxLayout()
         self.software_stop_label = QLabel("Software stop: awaiting state")
@@ -1177,45 +1169,18 @@ class Fault_Detector_UI(QWidget):
 
     def execute_probe_reference_capture(
         self,
-        reference_camera_ids,
         replace_existing=False,
     ):
         if self.probe_setup_client is None:
             self._process_application_error("ROS is unavailable")
             return None
         request_id = self.probe_setup_client.capture_reference_views(
-            reference_camera_ids,
             replace_existing=replace_existing,
         )
         if request_id is not None:
             self.status_label.setText(
                 "Reference dataset capture submitted"
             )
-        return request_id
-
-    def execute_move_close_to_surface(self):
-        if self.application_client is None:
-            self._process_application_error("ROS is unavailable")
-            return None
-        controls = getattr(self, "inspection_controls", None)
-        presentation = getattr(
-            controls,
-            "_refinement_presentation",
-            None,
-        )
-        if presentation is None:
-            self._process_application_error(
-                "Probe refinement target distance is unavailable"
-            )
-            return None
-        intent = OperationalIntent()
-        intent.intent = OperationalIntent.INTENT_MOVE_CLOSE_TO_SURFACE
-        intent.target_surface_distance_m = float(
-            presentation.target_surface_distance_m
-        )
-        request_id = self.execute_operation(intent)
-        if request_id is not None:
-            self.status_label.setText("Move close to surface submitted")
         return request_id
 
     def execute_probe_refinement_finalization(self, **kwargs):

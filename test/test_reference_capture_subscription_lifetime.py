@@ -50,7 +50,11 @@ def coordinator(monkeypatch):
     value._wait_for_collections = lambda *_: None
     value._historical_reference_tags = lambda *_: (object(),)
     monkeypatch.setattr(capture_module, 'validate_multi_reference_view_capture_target', lambda *_: 7)
-    monkeypatch.setattr(capture_module, 'capture_reference_views', lambda *_, **__: None)
+    value.captured_requests = []
+    monkeypatch.setattr(
+        capture_module, 'capture_reference_views',
+        lambda repository, requests, *_, **__: value.captured_requests.append(requests),
+    )
     value.detached = detached
     return value
 
@@ -65,10 +69,17 @@ def test_capture_reuses_handles_until_executor_shutdown(coordinator, outcome):
 
     coordinator._wait_for_ready_inputs = ready
     context = SimpleNamespace(context_id='context', client_id='client')
-    spec = capture_module.ProbeReferenceCaptureSpec((), False)
+    spec = capture_module.ProbeReferenceCaptureSpec(replace_existing=False)
     for request_id in ('first', 'second'):
         if outcome == 'success':
             coordinator.run(context, request_id, spec, lambda: False)
+            assert [
+                (request.slot_index, request.camera_id)
+                for request in coordinator.captured_requests[-1]
+            ] == [
+                (0, 'frontleft'), (1, 'frontright'), (2, 'left'),
+                (3, 'right'), (4, 'back'), (5, 'hand'),
+            ]
         else:
             with pytest.raises((capture_module.ReferenceCaptureCancelled, ValueError)):
                 coordinator.run(context, request_id, spec, lambda: False)

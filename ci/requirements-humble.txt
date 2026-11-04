@@ -1,17 +1,2 @@
-# Keep numerical packages aligned with Ubuntu 22.04 / Humble.
--r requirements-pure.txt
--r ../requirements-humble-sdk.txt
-bosdyn-mission==5.0.1
-inflection==0.5.1
-# SDK runtime closure captured from the supported baseline.
-protobuf==4.22.1
-grpcio==1.59.3
-PyJWT==2.11.0
-pynmea2==1.19.0
-Deprecated==1.2.13
-wrapt==1.13.3
-requests==2.32.5
-urllib3==2.6.3
-charset-normalizer==3.4.1
-idna==3.19
-certifi==2020.6.20
+-r ../requirements-humble-common.txt
+-r requirements-test.txt

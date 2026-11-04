@@ -76,44 +76,6 @@ REFERENCE_CAMERA_BY_ID: Dict[str, ReferenceCameraConfig] = {
 }
 
 
-def get_reference_camera(camera_id: str) -> ReferenceCameraConfig:
-    """Return one supported camera or raise a clear validation error."""
-    try:
-        return REFERENCE_CAMERA_BY_ID[camera_id]
-    except KeyError as exception:
-        supported = ", ".join(REFERENCE_CAMERA_BY_ID)
-        raise ValueError(
-            f"Unsupported reference camera '{camera_id}'. "
-            f"Supported cameras: {supported}"
-        ) from exception
-
-
-def validate_reference_camera_slots(
-    camera_ids,
-) -> Tuple[Tuple[int, str], ...]:
-    """Validate three legacy command slots and return selected pairs."""
-    if len(camera_ids) != 3:
-        raise ValueError("Exactly three reference camera slots are required")
-
-    selected = []
-    seen = set()
-    for slot_index, raw_camera_id in enumerate(camera_ids):
-        camera_id = str(raw_camera_id).strip()
-        if not camera_id:
-            continue
-        get_reference_camera(camera_id)
-        if camera_id in seen:
-            raise ValueError(
-                f"Reference camera '{camera_id}' is selected more than once"
-            )
-        seen.add(camera_id)
-        selected.append((slot_index, camera_id))
-
-    if not selected:
-        raise ValueError("Select at least one reference camera")
-    return tuple(selected)
-
-
 def all_reference_camera_slots() -> Tuple[Tuple[int, str], ...]:
     """Return every reference camera in canonical persisted slot order."""
     return tuple(

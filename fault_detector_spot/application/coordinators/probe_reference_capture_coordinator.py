@@ -44,7 +44,6 @@ class ReferenceCapturePhase(str, Enum):
 class ProbeReferenceCaptureSpec:
     """Describe replacement policy for a complete reference capture."""
 
-    reference_camera_ids: tuple
     replace_existing: bool
 
 
@@ -57,7 +56,6 @@ class ProbeReferenceCaptureCoordinator:
         probe_setup_coordinator,
         reference_repository,
         motion_state_source,
-        queue_size=10,
         maximum_input_age_sec=1.5,
         maximum_timestamp_skew_sec=0.05,
         collection_duration_sec=1.0,
@@ -72,7 +70,6 @@ class ProbeReferenceCaptureCoordinator:
         self.probe_setup_coordinator = probe_setup_coordinator
         self.reference_repository = reference_repository
         self.motion_state_source = motion_state_source
-        self.queue_size = int(queue_size)
         self.maximum_input_age_sec = float(maximum_input_age_sec)
         self.maximum_timestamp_skew_sec = float(
             maximum_timestamp_skew_sec
@@ -267,7 +264,6 @@ class ProbeReferenceCaptureCoordinator:
                 depth_topic=camera.depth_topic,
                 rgb_camera_info_topic=camera.rgb_camera_info_topic,
                 depth_camera_info_topic=camera.depth_camera_info_topic,
-                queue_size=self.queue_size,
                 maximum_timestamp_skew_sec=(
                     self.maximum_timestamp_skew_sec
                 ),
@@ -501,8 +497,6 @@ class ProbeReferenceCaptureCoordinator:
             raise RuntimeError("; ".join(errors))
 
     def _validate_configuration(self):
-        if self.queue_size < 1:
-            raise ValueError("Capture queue size must be positive")
         if self.capture_max_attempts < 1:
             raise ValueError(
                 "Capture maximum attempts must be positive"

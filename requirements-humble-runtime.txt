@@ -1,5 +1,5 @@
 # Shared tested SDK/numerical versions, plus imports required by the full driver.
--r ci/requirements-humble.txt
+-r requirements-humble-common.txt
 # spot_driver imports the Spot CAM wrapper even with Spot CAM disabled.
 aiortc==1.14.0
 # Calibrated hand-camera depth publisher.

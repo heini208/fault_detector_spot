@@ -31,18 +31,18 @@ def test_probe_setup_motion_excludes_close_surface_execution():
 
 
 def test_close_surface_operation_stays_outside_probe_setup_transport():
-    ui = source("ui/fault_detector_ui.py")
-    controls = source("ui/inspection/controls.py")
+    controls = "\n".join(
+        source(f"ui/inspection/{name}")
+        for name in ("controls.py", "finalizing_controls.py")
+    )
     setup_client = source("ui/ros/probe_setup_client.py")
     state_adapter = source("ui/ros/probe_setup_state_adapter.py")
     application_api = source("application/api/application_api_node.py")
     motion_api = source("application/api/probe_setup_motion_api.py")
 
-    assert "def execute_move_close_to_surface(" in ui
-    assert "INTENT_MOVE_CLOSE_TO_SURFACE" in ui
-    assert "target_surface_distance_m" in ui
-    assert "execute_operation(intent)" in ui
-    assert "execute_move_close_to_surface" in controls
+    assert "INTENT_MOVE_CLOSE_TO_SURFACE" in controls
+    assert "target_surface_distance_m" in controls
+    assert "self.ui.execute_operation(" in controls
     assert "surface_verification" not in controls
     assert "surface_verification" not in setup_client
     assert "surface_distance_verified" not in state_adapter

@@ -217,16 +217,12 @@ class ProbeSetupClient(QObject):
 
     def capture_reference_views(
         self,
-        reference_camera_ids,
         replace_existing=False,
     ):
         """Request server-owned synchronized reference capture."""
         if self._closing or self._destroyed:
             self.request_rejected.emit("Probe setup is closing")
             return None
-        camera_ids = tuple(str(value).strip() for value in reference_camera_ids)
-        if len(camera_ids) != 3:
-            raise ValueError("Exactly three reference camera slots are required")
         if not isinstance(replace_existing, bool):
             raise TypeError("Replace existing flag must be a boolean")
         if not self.context_id:
@@ -247,7 +243,6 @@ class ProbeSetupClient(QObject):
         goal = CaptureProbeReferenceViews.Goal()
         goal.client_id = self.client_id
         goal.context_id = self.context_id
-        goal.reference_camera_ids = list(camera_ids)
         goal.replace_existing = replace_existing
         local_id = uuid4().hex
         self._capture_goal_handles[local_id] = None

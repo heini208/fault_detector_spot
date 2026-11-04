@@ -82,6 +82,8 @@ sha256sum "$repository_root/ci/humble.repos" \
     "$repository_root/ci/requirements-humble.txt" \
     "$repository_root/ci/requirements-pure.txt" \
     "$repository_root/ci/requirements-test.txt" \
+    "$repository_root/requirements-base.txt" \
+    "$repository_root/requirements-humble-common.txt" \
     "$repository_root/requirements-humble-sdk.txt" \
     > "$dependency_workspace/evidence/provisioning-inputs.sha256"
 /usr/bin/python3 - "$repository_root/ci/humble.repos" "$dependency_workspace/src" \

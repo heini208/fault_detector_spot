@@ -25,9 +25,6 @@ from fault_detector_spot.application.coordinators.probe_reference_capture_coordi
 from fault_detector_spot.application.setup.setup_context import (
     validate_context_id,
 )
-from fault_detector_spot.inspection.setup.reference_camera_registry import (
-    validate_reference_camera_slots,
-)
 
 
 class ProbeReferenceCaptureApi:
@@ -68,9 +65,6 @@ class ProbeReferenceCaptureApi:
         try:
             required_client_id(goal_request.client_id)
             validate_context_id(goal_request.context_id)
-            validate_reference_camera_slots(
-                tuple(goal_request.reference_camera_ids)
-            )
         except (TypeError, ValueError):
             return GoalResponse.REJECT
         return (GoalResponse.ACCEPT if self._admission.reserve(
@@ -96,7 +90,6 @@ class ProbeReferenceCaptureApi:
                 goal.context_id, goal.client_id,
             )
             spec = ProbeReferenceCaptureSpec(
-                reference_camera_ids=tuple(goal.reference_camera_ids),
                 replace_existing=bool(goal.replace_existing),
             )
             def cancelled():

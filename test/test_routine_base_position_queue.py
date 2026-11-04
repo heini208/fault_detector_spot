@@ -148,7 +148,7 @@ def test_saving_base_position_still_requires_idle_lane(queue_rig):
     state = rig.probe.select_routine(state.context, "motor", "scan")
     first = submit(rig, OperationalIntent.INTENT_STOW_ARM)
 
-    with pytest.raises(RuntimeError, match="idle before saving a base position"):
+    with pytest.raises(RuntimeError, match="command lane must be idle"):
         rig.probe.save_base_position(state.context, -0.13)
 
     rig.repository.set_routine_base_position.assert_not_called()
