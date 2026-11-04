@@ -15,7 +15,7 @@ DEFAULT_TAG_STATE_STALE_AFTER_SEC = 1.5
 
 
 class TagStateSource(RuntimeSource):
-    """Cache authoritative base, visible, and usable tag snapshots."""
+    """Cache authoritative visible and usable tag snapshots."""
 
     def __init__(
         self,
@@ -36,20 +36,12 @@ class TagStateSource(RuntimeSource):
         self._monotonic_clock = monotonic_clock
         self._lock = RLock()
 
-        self._base_tags = {}
         self._visible_tags = {}
         self._usable_tags = {}
-        self._base_received_at = None
         self._visible_received_at = None
         self._usable_received_at = None
 
         self._subscriptions = [
-            node.create_subscription(
-                TagElementArray,
-                "fault_detector/state/base_tags",
-                self._receive_base_tags,
-                TAG_STATE_QOS,
-            ),
             node.create_subscription(
                 TagElementArray,
                 "fault_detector/state/visible_tags",
@@ -63,13 +55,6 @@ class TagStateSource(RuntimeSource):
                 TAG_STATE_QOS,
             ),
         ]
-
-    def base_snapshot(self, now: float = None):
-        return self._snapshot(
-            "_base_tags",
-            "_base_received_at",
-            now,
-        )
 
     def visible_snapshot(self, now: float = None):
         return self._snapshot(
@@ -141,9 +126,6 @@ class TagStateSource(RuntimeSource):
             return None
         value = float(stamp.sec) + float(stamp.nanosec) * 1e-9
         return value if math.isfinite(value) else None
-
-    def _receive_base_tags(self, message: TagElementArray) -> None:
-        self._store("_base_tags", "_base_received_at", message)
 
     def _receive_visible_tags(self, message: TagElementArray) -> None:
         self._store("_visible_tags", "_visible_received_at", message)

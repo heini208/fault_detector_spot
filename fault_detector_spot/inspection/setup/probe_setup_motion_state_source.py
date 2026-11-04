@@ -15,7 +15,6 @@ from fault_detector_msgs.msg import TagElementArray
 from rclpy.duration import Duration
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.time import Time
-from geometry_msgs.msg import Vector3Stamped
 from sensor_msgs.msg import CameraInfo, Image
 import tf2_ros
 
@@ -34,9 +33,6 @@ from fault_detector_spot.shared.geometry.models import (
 )
 from fault_detector_spot.inspection.model.sensor_models import (
     sensor_probe_frame,
-)
-from fault_detector_spot.inspection.sensing.end_effector_force import (
-    EndEffectorForceSample,
 )
 from fault_detector_spot.inspection.setup.reference_probe_setup import (
     compose_poses,
@@ -60,9 +56,6 @@ HAND_DEPTH_HISTORY_MAX_SAMPLES = 32
 MAX_HAND_DEPTH_AGE_SEC = 0.5
 HAND_DEPTH_SEARCH_RADIUS_PX = 16
 MINIMUM_HAND_CAMERA_SURFACE_CLEARANCE_M = 0.290
-END_EFFECTOR_FORCE_TOPIC = "/status/end_effector_force"
-END_EFFECTOR_FORCE_HISTORY_MAX_SAMPLES = 128
-MAX_END_EFFECTOR_FORCE_AGE_SEC = 0.25
 
 
 class ProbeSetupMotionStateSource:
@@ -76,9 +69,6 @@ class ProbeSetupMotionStateSource:
             maxlen=HAND_DEPTH_HISTORY_MAX_SAMPLES
         )
         self._hand_depth_camera_info = None
-        self._end_effector_force_history = deque(
-            maxlen=END_EFFECTOR_FORCE_HISTORY_MAX_SAMPLES
-        )
         self._tf_buffer = tf2_ros.Buffer()
         self._tf_listener = tf2_ros.TransformListener(
             self._tf_buffer,
@@ -100,12 +90,6 @@ class ProbeSetupMotionStateSource:
             CameraInfo,
             "/depth_registered/hand/camera_info",
             self._receive_hand_depth_camera_info,
-            qos_profile_sensor_data,
-        )
-        self._end_effector_force_subscription = node.create_subscription(
-            Vector3Stamped,
-            END_EFFECTOR_FORCE_TOPIC,
-            self._receive_end_effector_force,
             qos_profile_sensor_data,
         )
 
@@ -392,69 +376,6 @@ class ProbeSetupMotionStateSource:
             )
         return clearance_m
 
-    def end_effector_force_samples(
-        self,
-        receipt_not_before: float = 0.0,
-        maximum_age_sec: float = MAX_END_EFFECTOR_FORCE_AGE_SEC,
-    ):
-        """Return fresh hand-frame end-effector force samples."""
-        if not math.isfinite(float(receipt_not_before)):
-            raise ValueError(
-                "End-effector force receipt threshold must be finite"
-            )
-        if (
-            not math.isfinite(float(maximum_age_sec))
-            or maximum_age_sec <= 0.0
-        ):
-            raise ValueError(
-                "Maximum end-effector force age must be positive"
-            )
-        with self._lock:
-            history = tuple(self._end_effector_force_history)
-        now_receipt_time = time.monotonic()
-        samples = []
-        for receipt_time, message in history:
-            if receipt_time + 1e-9 < receipt_not_before:
-                continue
-            age_seconds = now_receipt_time - receipt_time
-            if age_seconds < -1e-9 or age_seconds > maximum_age_sec:
-                continue
-            stamp = message.header.stamp
-            stamp_seconds = float(stamp.sec) + float(stamp.nanosec) * 1e-9
-            if stamp_seconds <= 0.0:
-                continue
-            frame_id = message.header.frame_id.strip()
-            if not frame_id:
-                continue
-            force = Vector3Data(
-                x=float(message.vector.x),
-                y=float(message.vector.y),
-                z=float(message.vector.z),
-            )
-            force.validate()
-            sample = EndEffectorForceSample(
-                force_hand=force,
-                stamp_seconds=stamp_seconds,
-                receipt_time=receipt_time,
-                frame_id=frame_id,
-            )
-            sample.validate()
-            samples.append(sample)
-        if not samples:
-            raise ValueError(
-                "No fresh end-effector force samples are available"
-            )
-        return tuple(samples)
-
-    def latest_end_effector_force(
-        self,
-        maximum_age_sec: float = MAX_END_EFFECTOR_FORCE_AGE_SEC,
-    ) -> EndEffectorForceSample:
-        """Return the newest fresh end-effector force sample."""
-        return self.end_effector_force_samples(
-            maximum_age_sec=maximum_age_sec
-        )[-1]
-
     @staticmethod
     def _recent_hand_depth_samples(
         history,
@@ -527,12 +448,6 @@ class ProbeSetupMotionStateSource:
         with self._lock:
             self._hand_depth_camera_info = deepcopy(message)
 
-    def _receive_end_effector_force(self, message: Vector3Stamped) -> None:
-        with self._lock:
-            self._end_effector_force_history.append(
-                (time.monotonic(), deepcopy(message))
-            )
-
     def close(self) -> None:
         """Destroy ROS resources owned by this state source."""
         self.node.destroy_subscription(self._base_tag_subscription)
@@ -540,13 +455,9 @@ class ProbeSetupMotionStateSource:
         self.node.destroy_subscription(
             self._hand_depth_camera_info_subscription
         )
-        self.node.destroy_subscription(
-            self._end_effector_force_subscription
-        )
         with self._lock:
             self._base_tag_histories.clear()
             self._hand_depth_history.clear()
-            self._end_effector_force_history.clear()
             self._hand_depth_camera_info = None
 
 

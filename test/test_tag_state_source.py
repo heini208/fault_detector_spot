@@ -67,14 +67,13 @@ def test_source_subscribes_once_to_each_authoritative_topic():
     ]
 
     assert topics == [
-        "fault_detector/state/base_tags",
         "fault_detector/state/visible_tags",
         "fault_detector/state/usable_tags",
     ]
 
     source.destroy()
 
-    assert len(node.destroyed) == 3
+    assert len(node.destroyed) == 2
 
 
 
