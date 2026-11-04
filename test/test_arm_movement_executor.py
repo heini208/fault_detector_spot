@@ -771,16 +771,22 @@ def test_new_motion_requires_late_goal_termination_and_fresh_stop(
         goal_response_timeout_sec=2.0,
     )
 
-    assert executor.probe(target).outcome is ArmMovementOutcome.RUNNING
+    assert executor.probe(
+        target, executor_module.BARE_HAND_MOTION_ID,
+    ).outcome is ArmMovementOutcome.RUNNING
     clock.now = 2.0
     assert executor.poll().outcome is ArmMovementOutcome.GOAL_RESPONSE_TIMEOUT
     assert not executor.active
 
     def attempt_new_motion():
-        if operation in {"probe", "pose"}:
-            return getattr(executor, operation)(target)
+        if operation == "probe":
+            return executor.probe(target, executor_module.BARE_HAND_MOTION_ID)
+        if operation == "pose":
+            return executor.pose(target)
         if operation == "ready_probe":
-            return executor.ready_probe(lambda: executor.probe(target))
+            return executor.ready_probe(
+                lambda: executor.probe(target, executor_module.BARE_HAND_MOTION_ID),
+            )
         return getattr(executor, operation)()
 
     assert attempt_new_motion().outcome is ArmMovementOutcome.STOP_UNCONFIRMED
@@ -802,7 +808,9 @@ def test_new_motion_requires_late_goal_termination_and_fresh_stop(
     assert executor.execution_idle
 
     client.send_future = ManualFuture()
-    assert executor.probe(target).outcome is ArmMovementOutcome.RUNNING
+    assert executor.probe(
+        target, executor_module.BARE_HAND_MOTION_ID,
+    ).outcome is ArmMovementOutcome.RUNNING
     assert len(client.sent_goals) == 2
 
 
@@ -1958,7 +1966,7 @@ def test_relative_failure_freezes_odom_target_across_partial_motion_and_absolute
         ("odom", "hand"): transform("odom", "hand", x=6.0),
     })
     captured = capture_builder(monkeypatch)
-    executor, _ = executor_with_client(transformer)
+    executor, client = executor_with_client(transformer)
     assert executor.relative(FakeRelativeCommand(relative)).outcome is ArmMovementOutcome.RUNNING
     assert captured["args"][0] == pytest.approx(6.1)
     # The base and hand have moved since the first goal was resolved.
@@ -1972,6 +1980,12 @@ def test_relative_failure_freezes_odom_target_across_partial_motion_and_absolute
     assert update.retry_target.pose.position.x == pytest.approx(6.1)
     assert executor._retry_target is None
     command = SimpleNamespace(offset=deepcopy(update.retry_target), ignore_environment_collisions=False)
+    assert executor.absolute(command).outcome is ArmMovementOutcome.STOP_UNCONFIRMED
+    handle = FakeGoalHandle()
+    handle.result_future.set_result(SimpleNamespace(status=GoalStatus.STATUS_ABORTED))
+    client.send_future.set_result(handle)
+    assert executor.execution_idle
+    client.send_future = ManualFuture()
     transformer.calls.clear()
     assert executor.absolute(command).outcome is ArmMovementOutcome.RUNNING
     assert captured["args"][0] == pytest.approx(6.1)

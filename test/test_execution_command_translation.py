@@ -20,6 +20,7 @@ from fault_detector_spot.application.commanding.command_request import (
     RecordingPolicy,
 )
 from fault_detector_spot.application.commanding.semantic_command import (
+    CommandQuaternion,
     CommandVector3,
     SemanticCommand,
     SemanticTag,
@@ -86,8 +87,12 @@ def test_move_and_wait_preserves_motion_and_request_contract(wait_time, bypass):
         command_id=CommandID.MOVE_ARM_TO_TAG_AND_WAIT,
         tag=SemanticTag(7, StampedPose(
             frame_id="body", position=CommandVector3(0.7, 0.2, 0.4),
+            orientation=CommandQuaternion(w=1.0),
         )),
-        offset=StampedPose(frame_id="Tag_7", position=CommandVector3(z=0.15)),
+        offset=StampedPose(
+            frame_id="Tag_7", position=CommandVector3(z=0.15),
+            orientation=CommandQuaternion(w=1.0),
+        ),
         orientation_mode="custom_orientation",
         motion_sensor_id="hall_probe",
         arm_speed_scale=0.3,

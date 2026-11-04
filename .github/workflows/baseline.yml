@@ -57,7 +57,9 @@ jobs:
   humble-qt:
     name: Humble / Qt / copied install
     runs-on: ubuntu-22.04
-    container: ubuntu:22.04
+    container:
+      image: ubuntu:22.04
+      options: --init
     timeout-minutes: 60
     defaults:
       run:
