@@ -2,6 +2,8 @@ name: Automated baseline
 
 # Run this environment-heavy baseline explicitly from GitHub Actions.
 on:
+  push:
+    branches: [codex/fix-humble-ci-20261104]
   workflow_dispatch:
 
 permissions:
