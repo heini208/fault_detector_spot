@@ -238,7 +238,9 @@ style are deferred to a separate cleanup; the template PEP 257 gate is removed.
 
 ### 3.3 Automated baseline
 
-The [baseline workflow](.github/workflows/baseline.yml) has two independent jobs:
+Run the [baseline workflow](.github/workflows/baseline.yml) from GitHub Actions
+using **Run workflow**. It is manual because each run provisions a fresh Humble
+environment. It has two independent jobs:
 
 - **Pure domain:** Python 3.10.12 in an isolated virtual environment, Ruff F,
   and the explicit [pure test list](ci/pure-tests.txt). The runner rejects ROS
@@ -270,9 +272,12 @@ manifests even on failure. The initial [baseline record](ci/baseline.json)
 identifies the exact clean application commit and records its historical
 copyright-header skip and node-start integration exclusion. The copyright
 template test and its dependency have since been removed. The baseline was
-measured on the developer's supported Humble environment. A first successful
-hosted run is still required to validate fresh dependency provisioning; a local
-build using existing dependencies does not establish that result.
+measured on the developer's supported Humble environment. A subsequent
+[hosted validation run](https://github.com/heini208/fault_detector_spot/actions/runs/41815415365)
+passed fresh dependency provisioning, copied-install checks, 583 pure tests and
+4,756 Humble/Qt tests. The container uses an init process to reap child processes,
+and both test steps and artifact uploads use the same container-local results
+directory.
 
 Run the pure job locally without sourcing ROS:
 
