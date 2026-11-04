@@ -82,7 +82,9 @@ def test_custom_geometry_keeps_vertices_in_source_frame_and_places_once(metadata
     assert attached.link_name == "sensor_head_slot"
     assert attached.object.id == "fault_detector_sensor_head"
     assert attached.object.header.frame_id == "hand"
-    assert set(attached.touch_links) == {"hand", "arm_link_wr1", "sensor_head_slot"}
+    assert set(attached.touch_links) == {
+        "hand", "arm_link_wr1", "sensor_head_slot", "arm_link_fngr",
+    }
     assert np.allclose(pose_to_matrix(attached.object.pose), np.eye(4))
     assert attached.object.mesh_poses[0].position.x == -.11
     assert len(attached.object.meshes[0].vertices) == 4
@@ -148,7 +150,10 @@ def test_stock_profile_uses_original_files_and_inverse_hand_joint(model, tmp_pat
 
     assert len(attached.object.meshes) == 3
     assert [pose.position.x for pose in attached.object.mesh_poses] == [-.19557] * 3
-    assert {"arm_link_wr0", "arm_link_fngr"}.issubset(attached.touch_links)
+    assert set(attached.touch_links) == {
+        "hand", "arm_link_wr1", "sensor_head_slot", "arm_link_wr0", "arm_link_fngr",
+    }
+    assert len(attached.touch_links) == len(set(attached.touch_links))
     assert attached.object.meshes[0].vertices[1].x == 1
     (directory / "front_jaw.obj").write_bytes(b"changed")
     with pytest.raises(ValueError, match="Unsupported stock jaw mesh"):
@@ -178,7 +183,8 @@ def test_readback_accepts_equivalent_object_pose_split(metadata, mesh_bytes):
 
 
 @pytest.mark.parametrize("damage", (
-    "link", "id", "frame", "touch", "vertices", "faces", "pose", "primitive", "missing_pose",
+    "link", "id", "frame", "touch", "missing_finger_touch", "vertices", "faces", "pose",
+    "primitive", "missing_pose",
 ))
 def test_readback_rejects_changed_collision_attachment(metadata, mesh_bytes, damage):
     expected = geometry.sensor_head_attachment(metadata, mesh_bytes)
@@ -191,6 +197,8 @@ def test_readback_rejects_changed_collision_attachment(metadata, mesh_bytes, dam
         actual.object.header.frame_id = "body"
     elif damage == "touch":
         actual.touch_links.append("body")
+    elif damage == "missing_finger_touch":
+        actual.touch_links.remove("arm_link_fngr")
     elif damage == "vertices":
         actual.object.meshes[0].vertices[0].x += .001
     elif damage == "faces":

@@ -27,9 +27,10 @@ from fault_detector_spot.shared.geometry.transforms import (
 
 SENSOR_HEAD_OBJECT_ID = "fault_detector_sensor_head"
 SENSOR_HEAD_SLOT_LINK = "sensor_head_slot"
-CUSTOM_TOUCH_LINKS = ("hand", "arm_link_wr1", SENSOR_HEAD_SLOT_LINK)
-# Preserve the original wrist link's SRDF adjacency rules for the stock jaw only.
-STOCK_TOUCH_LINKS = (*CUSTOM_TOUCH_LINKS, "arm_link_wr0", "arm_link_fngr")
+# The closed finger rests on the mounted head as an intended contact.
+CUSTOM_TOUCH_LINKS = ("hand", "arm_link_wr1", SENSOR_HEAD_SLOT_LINK, "arm_link_fngr")
+# Preserve the stock jaw's contact permission with the wrist parent too.
+STOCK_TOUCH_LINKS = (*CUSTOM_TOUCH_LINKS, "arm_link_wr0")
 _COLLISION_PREFIX = "package://spot_description/meshes/arm/collision/"
 _STOCK_MESH_SHA256 = {
     "front_jaw.obj": "29218801fefb0be66ae82c010000485d0ad03f5239b249961ddd6404357d6521",

@@ -765,8 +765,9 @@ robot description, then applies the head geometry and occupancy policy in one
 scene diff. Disabled or explicitly bypassed movements ignore the `<octomap>`
 object; enabled movements check it, including the installed sensor head. The
 OctoMap itself is neither cleared nor replaced. Explicit world objects and
-self-collision checking remain in force. Custom heads may touch only the hand
-and its mounting wrist link; stock jaws retain the original adjacency allowances.
+self-collision checking remain in force. Custom heads may touch the hand, its
+mounting wrist link, and the gripper finger resting on the mount; stock jaws
+retain the original adjacency allowances.
 Cartesian requests retain `avoid_collisions=True`.
 
 The planner verifies the applied mesh, placement, contact links, and collision
