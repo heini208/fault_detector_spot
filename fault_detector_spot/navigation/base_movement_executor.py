@@ -29,6 +29,7 @@ from fault_detector_spot.navigation.base_correction_policy import (
     BaseCorrectionPolicy,
 )
 from fault_detector_spot.navigation.base_goal_verifier import (
+    BaseBodyGoalVerifier,
     BaseGoalVerifier,
     BaseGoalVerificationConfig,
     BaseStopVerifier,
@@ -704,7 +705,7 @@ class BaseMovementExecutor(MovementExecutor):
                 BaseMovementOutcome.EXECUTION_ERROR,
                 "Base movement has no plan for endpoint verification",
             )
-        self._goal_verifier = BaseGoalVerifier(
+        self._goal_verifier = BaseBodyGoalVerifier(
             target,
             self.goal_verification_config,
             self._monotonic_clock(),
@@ -728,7 +729,7 @@ class BaseMovementExecutor(MovementExecutor):
             )
 
         sample = self.base_pose_source.sample()
-        pose = sample.planar_pose if sample is not None else None
+        pose = sample.body_pose if sample is not None else None
         stamp = sample.stamp_sec if sample is not None else None
         if (self._stationary_stand_stamp is not None
                 and (stamp is None or stamp <= self._stationary_stand_stamp)):

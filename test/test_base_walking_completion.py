@@ -143,6 +143,40 @@ def test_stand_displacement_is_checked_against_original_goal_before_success():
     assert correction.se2_trajectory_request.trajectory.points[-1].pose.position.x == 1.0
 
 
+@pytest.mark.parametrize("axis", ["z", "roll", "pitch"])
+def test_walk_waits_for_full_body_settling_before_holding_pose(axis):
+    rig = WalkingRig()
+    rig.executor.relative(object())
+    rig.accept()
+    rig.complete()
+    setattr(rig, axis, getattr(rig, axis) + 0.05)
+    assert rig.poll(0.6).outcome is Outcome.RUNNING
+    assert len(rig.goals) == 1
+    assert rig.poll(1.2).outcome is Outcome.RUNNING
+    assert len(rig.goals) == 2
+
+
+@pytest.mark.parametrize("navigation", [False, True])
+@pytest.mark.parametrize("axis", ["z", "roll", "pitch"])
+def test_walk_completion_waits_for_full_body_settling_after_stand(navigation, axis):
+    rig = WalkingRig()
+    if navigation:
+        rig.executor.finish_walking()
+    else:
+        rig.executor.relative(object())
+        rig.accept()
+        rig.complete()
+        rig.poll(0.6)
+    rig.accept()
+    rig.complete()
+    start = rig.clock.now
+    assert rig.poll(start + 0.1).outcome is Outcome.RUNNING
+    setattr(rig, axis, getattr(rig, axis) + 0.05)
+    assert rig.poll(start + 0.7).outcome is Outcome.RUNNING
+    assert rig.executor.active
+    assert rig.poll(start + 1.3).outcome is Outcome.SUCCESS
+
+
 def test_small_turn_holds_achieved_lean_and_yaw_without_recentring_or_retry():
     rig = WalkingRig()
     rig.yaw = math.radians(10.0)
@@ -209,7 +243,7 @@ def test_finish_navigation_confirms_settling_at_any_world_position():
     assert len(rig.goals) == 1
 
 
-@pytest.mark.parametrize("failure", ["rejected", "failed", "stale", "moving"])
+@pytest.mark.parametrize("failure", ["rejected", "failed", "stale", "x", "z", "roll", "pitch"])
 def test_failed_stationary_handoff_cannot_report_success(failure):
     rig = WalkingRig()
     rig.executor.finish_walking()
@@ -223,10 +257,39 @@ def test_failed_stationary_handoff_cannot_report_success(failure):
         if failure == "stale":
             rig.frozen_stamp = 100.0
             update = rig.poll(5.1)
-        elif failure == "moving":
+        elif failure in {"x", "z", "roll", "pitch"}:
             for second in range(1, 6):
-                update = rig.poll(float(second), float(second))
+                setattr(rig, failure, getattr(rig, failure) + 0.05)
+                update = rig.poll(float(second))
         assert update.outcome is Outcome.MOTION_FAILED
+    assert not rig.executor.active
+
+
+@pytest.mark.parametrize("height_change", [False, True])
+@pytest.mark.parametrize("invalid", ["missing_body", "height", "orientation"])
+def test_completion_requires_valid_full_body_feedback(height_change, invalid):
+    rig = WalkingRig()
+    if height_change:
+        rig.executor.change_height(-0.1)
+    else:
+        rig.executor.finish_walking()
+    rig.accept()
+    rig.complete()
+    assert rig.poll(0.1).outcome is Outcome.RUNNING
+
+    def invalid_sample():
+        sample = rig.sample()
+        if invalid == "missing_body":
+            return BasePoseSample(sample.x_m, sample.y_m, sample.yaw_rad, sample.stamp_sec)
+        if invalid == "height":
+            sample.body_pose.position.z = math.nan
+        else:
+            sample.body_pose.orientation.w = math.nan
+        return sample
+
+    rig.executor.base_pose_source.sample = invalid_sample
+    assert rig.poll(0.7).outcome is Outcome.RUNNING
+    assert rig.poll(5.1).outcome is Outcome.MOTION_FAILED
     assert not rig.executor.active
 
 

@@ -110,13 +110,14 @@ def test_height_completion_requires_fresh_post_result_samples_and_settling():
     assert rig.executor._commanded_height_m == pytest.approx(-0.13)
 
 
-def test_height_completion_requires_xy_settling_even_with_correct_yaw():
+@pytest.mark.parametrize("axis", ["x", "y", "z", "roll", "pitch"])
+def test_height_completion_requires_full_body_settling_even_with_correct_yaw(axis):
     rig = HeightRig()
     rig.start()
     assert rig.complete().outcome is BaseMovementOutcome.RUNNING
-    rig.set_pose(x=0.4)
+    rig.set_pose(**{axis: 0.4})
     assert rig.poll(0.1).outcome is BaseMovementOutcome.RUNNING
-    rig.set_pose(x=0.5)
+    rig.set_pose(**{axis: 0.5})
     assert rig.poll(0.6).outcome is BaseMovementOutcome.RUNNING
     assert rig.poll(0.6).outcome is BaseMovementOutcome.SUCCESS
     assert len(rig.client.goals) == 1

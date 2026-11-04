@@ -29,6 +29,7 @@ from fault_detector_spot.navigation.base_pose_source import BasePoseSample
 from fault_detector_spot.manipulation.arm_state_source import ArmStowState
 from fault_detector_spot.navigation.body_height_readiness import BodyHeightReadiness, BodyHeightSample
 from fault_detector_spot.navigation.behaviours.change_body_height_behaviour import ChangeBodyHeightBehaviour
+from fault_detector_spot.shared.geometry.models import PoseData
 from fault_detector_spot.ui.navigation.base_movement_controls import BaseMovementControls
 
 
@@ -123,7 +124,9 @@ def measured_height(offset):
 
 
 def measured_base_pose(clock=lambda: 10.0):
-    return SimpleNamespace(sample=lambda: BasePoseSample(0.0, 0.0, 0.0, clock()))
+    return SimpleNamespace(sample=lambda: BasePoseSample(
+        0.0, 0.0, 0.0, clock(), body_pose=PoseData.identity(),
+    ))
 
 
 @pytest.mark.parametrize("state", [

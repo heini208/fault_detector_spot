@@ -6,7 +6,9 @@ from dataclasses import dataclass, fields
 import math
 
 from fault_detector_spot.shared.geometry.models import PoseData
-from fault_detector_spot.shared.geometry.rotation import rotation_distance_rad
+from fault_detector_spot.shared.geometry.rotation import (
+    quaternion_to_rpy, rotation_distance_rad,
+)
 
 
 @dataclass(frozen=True)
@@ -106,6 +108,9 @@ class BaseGoalVerifier:
             ),
         )
 
+    def goal_errors(self, pose):
+        return self.errors(pose, self.target)
+
     def update(self, pose, stamp, ros_now, now):
         c = self.config
         self.current_error = None
@@ -128,7 +133,7 @@ class BaseGoalVerifier:
             self.within_tolerance = None
             self.detail = "Base pose unavailable or stale"
         else:
-            position, yaw = self.errors(pose, self.target)
+            position, yaw = self.goal_errors(pose)
             if self.yaw_only:
                 position = 0.0
             self.current_error = (position, yaw)
@@ -212,12 +217,8 @@ class BaseGoalVerifier:
         self.settled_stamp = None
 
 
-class BaseStopVerifier(BaseGoalVerifier):
-    """Use the same freshness/settling window for all six body pose axes."""
-
-    def __init__(self, config, started_at):
-        super().__init__((0.0, 0.0, 0.0), config, started_at)
-        self.target = PoseData.identity()
+class BaseBodyGoalVerifier(BaseGoalVerifier):
+    """Verify planar accuracy while requiring all six body axes to settle."""
 
     @staticmethod
     def sample_is_fresh(pose, stamp, ros_now, maximum_age_sec):
@@ -242,9 +243,27 @@ class BaseStopVerifier(BaseGoalVerifier):
             rotation_distance_rad(first.orientation, second.orientation),
         )
 
+    def goal_errors(self, pose):
+        _, _, yaw = quaternion_to_rpy(pose.orientation)
+        return BaseGoalVerifier.errors(
+            (pose.position.x, pose.position.y, yaw), self.target,
+        )
+
+
+class BaseStopVerifier(BaseBodyGoalVerifier):
+    """Use the same freshness/settling window for all six body pose axes."""
+
+    def __init__(self, config, started_at):
+        super().__init__((0.0, 0.0, 0.0), config, started_at)
+        self.target = PoseData.identity()
+
+    def goal_errors(self, pose):
+        return self.errors(pose, self.target)
+
 
 __all__ = [
     "BaseGoalVerificationConfig",
     "BaseGoalVerifier",
+    "BaseBodyGoalVerifier",
     "BaseStopVerifier",
 ]
