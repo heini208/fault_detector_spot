@@ -618,10 +618,10 @@ class RecordManager(Node):
         self._playback_acquisition_active = False
         if was_active:
             self.playback_state_pub.publish(Bool(data=False))
-        if failed:
-            self.get_logger().warning(message)
-        else:
-            self.get_logger().info(message)
+            if failed:
+                self.get_logger().warning(message)
+            else:
+                self.get_logger().info(message)
 
     def delete_recording(self, name: str):
         if self.repository.delete(name):

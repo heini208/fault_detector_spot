@@ -734,6 +734,59 @@ def test_emergency_command_stops_retry_playback(tmp_path):
     assert not manager._playback_request_id
 
 
+def test_repeated_software_stop_updates_are_silent_without_playback():
+    manager = RecordManagerHarness()
+    manager._software_stop_latched = True
+    stop = command_request_to_message(make_request(CommandID.EMERGENCY_CANCEL))
+
+    for sequence in range(1, 4):
+        manager.handle_software_stop_state(SoftwareStopState(
+            request_id="software-stop", latched=True, status_sequence=sequence,
+        ))
+        manager.capture_request(stop)
+
+    assert manager._software_stop_latched
+    assert manager._software_stop_request_id == "software-stop"
+    assert manager._software_stop_status_sequence == 3
+    assert not manager.command_submission_pub.messages
+    assert not manager.playback_state_pub.messages
+    assert not manager.logger.warning_messages
+    assert not manager.logger.info_messages
+
+
+@pytest.mark.parametrize("first_stop_source", ["state", "accepted", "status"])
+def test_software_stop_reports_playback_cancellation_once(tmp_path, first_stop_source):
+    manager = RecordingStorageHarness(tmp_path)
+    command = SemanticCommand(command_id=CommandID.MOVE_TO_WAYPOINT)
+    manager.repository.save("session", [RecordedStep(command, 2), RecordedStep(command)])
+    manager.control("play", "session")
+    request_id = manager._playback_request_id
+    stop = command_request_to_message(make_request(CommandID.EMERGENCY_CANCEL))
+    status = terminal_status(request_id, CommandStatus.STATE_STOP_UNCONFIRMED, execution_idle=False)
+    state = SoftwareStopState(request_id="software-stop", latched=True, status_sequence=1)
+    {
+        "state": lambda: manager.handle_software_stop_state(state),
+        "accepted": lambda: manager.capture_request(stop),
+        "status": lambda: manager.handle_playback_status(status),
+    }[first_stop_source]()
+
+    for sequence in range(2, 5):
+        state.status_sequence = sequence
+        manager.handle_software_stop_state(state)
+        manager.capture_request(stop)
+        manager.handle_playback_status(status)
+    manager.handle_playback_status(terminal_status(request_id, CommandStatus.STATE_SUCCEEDED))
+
+    assert manager.logger.warning_messages == [
+        "Software stop cancelled playback; remaining commands discarded.",
+    ]
+    assert [message.data for message in manager.playback_state_pub.messages] == [True, False]
+    assert len(manager.command_submission_pub.messages) == 1
+    assert not manager._playback_request_id
+    assert not manager._playback_commands
+    assert manager._playback_retries_left == 0
+
+
 def test_latched_stop_blocks_new_playback_and_reset_never_replays_discarded_work(tmp_path):
     manager = RecordingStorageHarness(tmp_path)
     command = SemanticCommand(command_id=CommandID.MOVE_TO_WAYPOINT)
