@@ -869,49 +869,45 @@ aligned tag-relative goal for the return. That goal is resolved once into odom
 before observation; later tag updates do not move the return target. It must
 be within 20 mm and 5 degrees of the actual hand and tip before observation
 can start. Standalone measurements keep the actual starting pose as their
-return target. Depth near the forward probe ray seeds a local plane fit,
-preferring nearer axial surfaces over a farther wall. Its actual intersection
-with probe +X must have local unoccluded depth and lie within the fitted region.
-Unsupported off-ray depth specks may be skipped with a bounded number of local
-fits. Returns within the projected probe footprint at their own camera depth,
-and coherent nearer surfaces, remain blocking. Skipping a seed never removes
-raw returns from the actual target's support or foreground checks.
-A visible, supported target patch is measured directly. If it is outside the
-image, a nearby fitted surface can guide one observation translation that
-brings the target just inside the image with room for the full plane-fit patch.
-If near foreground or missing local depth obscures an in-view target, a reliable
-nearby surface patch can guide a translation that projects the target onto
-supported depth. Its initial lower-middle seed search expands from 16 to 32
-pixels only when the smaller window has no valid depth. The local fit remains
-bounded to 32 pixels and retains its sample-count, spread, planarity and camera
-distance requirements. An observed near surface is never skipped by this search.
-Candidate patches are ordered by lateral displacement across
-the image, with their own local plane fit and a 3 mm positioning margin. Their
-normals must agree with the observed wall within 10 degrees, and the original
-target must lie within 15 mm of their measured plane. The observed target's
-position along the original probe ray and observed wall normal stay fixed through
-movement, retries, and sampling. Each fresh image fits the patch at that target's
-projected pixel, requiring its normal within 10 degrees and its probe-axis
-intersection within 15 mm of the original estimate. Off-ray planes
-with unsupported in-image intersections cannot replace it. Actual nearer returns
-on the probe ray and established nearer surfaces still take precedence, including
-nearer surfaces whose intersection is outside the image. The target estimate
-selects and validates the patch only; the reported
-distance and normal always come from newly measured depth. This
-search is not restricted to the lower-middle fit or a 25 mm foreground corridor.
-The proposal only chooses where to observe; fresh target depth is still required.
-Both proposals allow at most 0.15 m
-extension from measured support; neither preliminary plane is accepted as the
-final measurement. The translation preserves orientation and makes no inward
-movement along the saved probe axis. Without a reliable nearby observation
-hint, missing depth is retried in place. After an excursion,
-sparse depth frames are retried within the sampling timeout before returning;
-the operation never searches farther blindly.
-The translation is capped at 0.20 m and runs at 10 mm/s by default, including
-the return. It requires a complete, collision-checked, force-guarded Cartesian
-path. It measures the original target, not the tip's
-new location. Hidden-target extrapolation cannot produce a distance or normal
-result; the moved camera must directly observe the actual intersection.
+return target. The camera observation pose is calculated directly from the calibrated camera
+and saved probe-tip TF. The camera moves onto the saved probe +X line using the
+shortest translation perpendicular to that line, while retaining hand
+orientation. Every point ahead of the original tip then projects to the same
+image pixel, independent of the unknown surface distance. This pixel follows
+the active mount's probe direction; it is not a hard-coded camera center.
+The forward axis must project inside the image with room for the full plane-fit
+patch, and the camera must be at or behind the original tip along that axis.
+An unsupported mount direction fails without substituting a guessed wall.
+
+No initial wall plane, visible depth patch or target-distance estimate selects
+the observation move. A nonzero displacement of at least 1 mm triggers one
+observation even if the initial target happens to be visible; an already
+aligned camera measures in place. The move is capped at 0.20 m and runs at
+10 mm/s by default, including the return. It requires a complete,
+collision-checked, force-guarded Cartesian path and makes no inward movement
+along the saved probe axis.
+
+After settling, fresh depth and actual timestamped camera TF locate the surface
+along the saved probe ray, accounting for observation positioning error. Depth
+must be acquired after settling; delayed pre-move frames cannot establish the
+target or enter the sample window. Measured depth
+near that ray seeds a local plane fit, preferring nearer axial surfaces over a
+farther background. Its actual intersection with probe +X must have local
+unoccluded depth and lie within the fitted region. Unsupported off-ray depth
+specks may be skipped with a bounded number of local fits. Returns within the
+projected probe footprint at their own camera depth, and coherent nearer
+surfaces, remain blocking. Skipping a seed never removes raw returns from the
+actual target's support or foreground checks.
+
+Only the first successfully measured target establishes the plane association
+for subsequent samples. Each fresh image must support that target and the newly
+measured intersection, with its normal within 10 degrees and its intersection
+within 15 mm of the measured reference. The minimum 0.21 m camera distance
+continues to apply to optical depth, while the result refers to the saved tip.
+Sparse depth is retried in place within the sampling timeout; the operation
+never initiates a second observation search. Failure after an excursion returns
+to the original or saved pose when physical termination is confirmed. Hidden
+target extrapolation cannot produce a distance or normal result.
 
 Registered depth can contain empty pixels between valid reprojected samples.
 Target support therefore requires at least four measured returns enclosing the

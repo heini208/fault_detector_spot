@@ -369,7 +369,9 @@ class MeasureSensorTipDistanceExecution:
             view = self.surface_source.observation_view(
                 self._return_probe, self.expected_distance_m,
                 receipt_not_before=self._receipt_after,
-                target_plane_probe=self._target_plane_probe)
+                target_plane_probe=self._target_plane_probe,
+                allow_translation=not self._moved,
+                acquisition_not_before=self._pose_acquisition_after)
         except Exception as error:
             return self._wait_or_fail(error)
         if view.visible:
@@ -397,11 +399,10 @@ class MeasureSensorTipDistanceExecution:
         hand = deepcopy(self._original_hand)
         hand.position = Vector3Data(hand.position.x + delta.x, hand.position.y + delta.y, hand.position.z + delta.z)
         self._observation_hand = hand
-        # Keep the original observed wall associated with the saved probe ray;
-        # post-move discovery must not substitute nearby gripper geometry.
-        self._target_plane_probe = deepcopy(view.target_plane_probe)
+        # Geometry alone chooses this view. Freeze a surface association only
+        # after fresh depth actually supports the original probe ray.
         self._phase = "observing"
-        self.feedback_message = f"Moving camera to observe target ({distance * 1000:.1f} mm translation)"
+        self.feedback_message = f"Moving camera onto original sensor axis ({distance * 1000:.1f} mm translation)"
         self._moved = True
         return self._motion_update(self._move_hand(hand))
 
@@ -413,7 +414,8 @@ class MeasureSensorTipDistanceExecution:
                 maximum_age_sec=max(self.config.sample_timeout_sec, self.config.minimum_surface_span_sec),
                 minimum_samples=self.config.minimum_surface_samples,
                 maximum_latest_age_sec=MAX_HAND_DEPTH_AGE_SEC,
-                target_plane_probe=self._target_plane_probe)
+                target_plane_probe=self._target_plane_probe,
+                acquisition_not_before=self._pose_acquisition_after)
             for sample in fresh:
                 self._samples[sample.stamp_seconds] = sample
             aggregate = aggregate_surface_distance_samples(

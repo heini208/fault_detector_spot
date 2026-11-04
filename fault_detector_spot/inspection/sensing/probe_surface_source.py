@@ -20,7 +20,7 @@ from fault_detector_spot.inspection.geometry.surface_normal import (
 from fault_detector_spot.inspection.geometry.surface_plane import SurfacePlane
 from fault_detector_spot.inspection.geometry.sensor_tip_observation import (
     SensorTipObservationView,
-    observation_translation,
+    probe_axis_observation_translation,
 )
 from fault_detector_spot.inspection.sensing.live_surface_plane import (
     MINIMUM_SURFACE_ORIENTATION_CAMERA_DISTANCE_M,
@@ -43,10 +43,7 @@ from fault_detector_spot.inspection.sensing.live_surface_distance import (
 from fault_detector_spot.inspection.sensing.sensor_tip_distance import (
     depth_frame_id,
     measure_sensor_tip_distance,
-    sensor_tip_observation_hint,
     TARGET_SUPPORT_RADIUS_PX,
-    SensorTipTargetOutsideView,
-    SensorTipTargetUnavailable,
 )
 from fault_detector_spot.shared.ros.qos_profiles import APPLICATION_STATE_QOS
 from fault_detector_spot.shared.ros.tf_transforms import lookup_pose_data
@@ -243,65 +240,62 @@ class ProbeSurfaceSource(RuntimeSource):
         receipt_not_before: float = 0.0,
         *,
         target_plane_probe: SurfacePlane | None = None,
+        allow_translation: bool = True,
+        acquisition_not_before: float = 0.0,
     ) -> SensorTipObservationView:
-        """Inspect the intended target and propose a lateral camera observation."""
+        """Align the camera with the saved probe ray, then measure fresh depth.
+
+        Observation geometry depends only on calibrated TF and intrinsics.
+        No visible background plane may choose the hidden probe target. After
+        the one excursion, actual camera TF locates the original ray even if
+        the achieved pose differs slightly from the planned observation pose.
+        """
+        if not math.isfinite(acquisition_not_before) or acquisition_not_before < 0.0:
+            raise ValueError("Observation acquisition threshold must be finite and nonnegative")
         depth_image, camera_info = self.latest_hand_depth(
             receipt_not_before=receipt_not_before,
         )
         stamp = Time.from_msg(depth_image.header.stamp)
         if stamp.nanoseconds <= 0:
             raise ValueError("Registered hand-depth timestamp is empty")
+        stamp_seconds = stamp.nanoseconds * 1e-9
+        if stamp_seconds + 1e-9 < acquisition_not_before:
+            raise ValueError("Registered hand-depth acquisition precedes the required observation time")
+        self._validate_pose_acquisition_age(stamp_seconds)
         camera_pose = self._lookup_pose(
             "odom", depth_frame_id(depth_image, camera_info), lookup_time=stamp,
         )
-        translation = Vector3Data.zero()
+        self._validate_pose_acquisition_age(stamp_seconds)
         try:
-            try:
-                sample = measure_sensor_tip_distance(
-                    depth_image, camera_info, reference_probe_pose,
-                    camera_pose, expected_distance_m,
-                    target_plane_probe=target_plane_probe,
-                )
-            except SensorTipTargetUnavailable as target_error:
-                if target_plane_probe is not None:
-                    # The observation move already chose a measured wall target.
-                    # A new side-plane fit must not replace it while retrying.
-                    raise
-                try:
-                    observed_plane, observed_pixel = sensor_tip_observation_hint(
-                        depth_image, camera_info, reference_probe_pose,
-                        camera_pose, expected_distance_m,
-                    )
-                except ValueError as hint_error:
-                    raise SensorTipTargetUnavailable(
-                        f"{target_error}; observation unavailable: {hint_error}",
-                    ) from hint_error
-                raise SensorTipTargetOutsideView(
-                    -observed_plane.signed_distance(Vector3Data.zero()) / observed_plane.normal.x,
-                    f"Target requires another view: {target_error}",
-                    observation_pixel=observed_pixel,
-                    target_plane_probe=observed_plane,
-                ) from target_error
-            if target_plane_probe is None:
-                target_plane_probe = sample.surface_plane_probe
-            visible, detail = True, "Intended sensor-tip target has valid local depth support"
-        except SensorTipTargetOutsideView as exception:
-            # This preliminary plane only determines where to observe. After
-            # moving, the actual intersection still needs its own depth.
-            if target_plane_probe is None:
-                target_plane_probe = exception.target_plane_probe
-                translation = observation_translation(
-                    reference_probe_pose, camera_pose, exception.axis_distance_m,
+            if expected_distance_m is not None and (
+                not math.isfinite(expected_distance_m) or expected_distance_m <= 0.0
+            ):
+                raise ValueError("Expected sensor-tip distance must be positive and finite")
+            if allow_translation and target_plane_probe is None:
+                translation = probe_axis_observation_translation(
+                    reference_probe_pose, camera_pose,
                     camera_intrinsics(camera_info, (depth_image.width, depth_image.height), "Depth CameraInfo"),
                     (depth_image.width, depth_image.height),
                     SURFACE_ORIENTATION_MAXIMUM_FIT_RADIUS_PX + TARGET_SUPPORT_RADIUS_PX + 1,
-                    desired_pixel=exception.observation_pixel,
                 )
-            visible, detail = False, str(exception)
+                if math.hypot(translation.x, translation.y, translation.z) >= 0.001:
+                    return SensorTipObservationView(
+                        False, camera_pose, translation,
+                        "Align camera with the original sensor-tip +X axis using calibrated TF",
+                    )
+            sample = measure_sensor_tip_distance(
+                depth_image, camera_info, reference_probe_pose,
+                camera_pose, expected_distance_m,
+                target_plane_probe=target_plane_probe,
+            )
+            self._validate_pose_acquisition_age(stamp_seconds)
+            if target_plane_probe is None:
+                target_plane_probe = sample.surface_plane_probe
+            visible, detail = True, "Original sensor-tip target has valid local depth support"
         except ValueError as exception:
             visible, detail = False, str(exception)
         return SensorTipObservationView(
-            visible, camera_pose, translation, detail, target_plane_probe,
+            visible, camera_pose, Vector3Data.zero(), detail, target_plane_probe,
         )
 
     def sensor_tip_pose_snapshot(self, sensor_id: str, receipt_not_before: float = 0.0):
@@ -394,6 +388,7 @@ class ProbeSurfaceSource(RuntimeSource):
         maximum_latest_age_sec: float | None = None,
         *,
         target_plane_probe: SurfacePlane | None = None,
+        acquisition_not_before: float = 0.0,
     ):
         """Return fresh target-local samples in the saved original probe frame."""
         reference_probe_pose.validate()
@@ -423,13 +418,17 @@ class ProbeSurfaceSource(RuntimeSource):
             minimum_samples=minimum_samples,
             maximum_latest_age_sec=maximum_latest_age_sec,
             maximum_new_fits=1,
+            acquisition_not_before=acquisition_not_before,
         )
 
     def _distance_samples(
         self, *, measurement_context, pose_target_frame, measure, cache,
         receipt_not_before, maximum_age_sec, minimum_samples,
         maximum_latest_age_sec, maximum_new_fits=None,
+        acquisition_not_before=0.0,
     ):
+        if not math.isfinite(acquisition_not_before) or acquisition_not_before < 0.0:
+            raise ValueError("Surface acquisition threshold must be finite and nonnegative")
         if not math.isfinite(float(receipt_not_before)):
             raise ValueError("Surface sample receipt threshold must be finite")
         if not math.isfinite(float(maximum_age_sec)) or maximum_age_sec <= 0.0:
@@ -517,6 +516,8 @@ class ProbeSurfaceSource(RuntimeSource):
                 stamp = Time.from_msg(depth_image.header.stamp)
                 if stamp.nanoseconds <= 0:
                     raise ValueError("Registered hand-depth timestamp is empty")
+                if stamp.nanoseconds * 1e-9 + 1e-9 < acquisition_not_before:
+                    raise ValueError("Registered hand-depth acquisition precedes the required measurement time")
                 depth_frame = (
                     depth_image.header.frame_id.strip()
                     or camera_info.header.frame_id.strip()

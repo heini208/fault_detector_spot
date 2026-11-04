@@ -3,7 +3,6 @@
 import math
 
 import numpy as np
-from scipy.ndimage import correlate, minimum_filter
 from scipy.spatial import ConvexHull, QhullError
 
 from fault_detector_spot.inspection.geometry.depth_point_cloud import (
@@ -13,7 +12,6 @@ from fault_detector_spot.inspection.geometry.depth_point_cloud import (
 )
 from fault_detector_spot.inspection.geometry.pose import relative_pose
 from fault_detector_spot.inspection.geometry.sensor_tip_observation import (
-    observation_translations_camera,
     project_camera_point,
     probe_axis_in_camera,
     target_camera_point,
@@ -28,7 +26,6 @@ from fault_detector_spot.inspection.sensing.live_surface_plane import (
     SURFACE_ORIENTATION_MAXIMUM_FIT_RADIUS_PX,
     SURFACE_ORIENTATION_MINIMUM_SAMPLE_COUNT,
     SURFACE_ORIENTATION_WINDOW_RADIUS_PX,
-    estimate_live_surface_normal,
 )
 from fault_detector_spot.inspection.setup.reference_view_depth_projection import (
     ImageRegion,
@@ -47,17 +44,15 @@ MAXIMUM_OBSERVATION_PLANE_EXTENSION_M = 0.15
 PROBE_AXIS_SEARCH_RADIUS_M = 0.025
 MAXIMUM_SEED_FITS = 8
 SEED_DEPTH_BAND_M = 0.05
-OBSERVATION_TARGET_MARGIN_M = 0.003
 MAXIMUM_OBSERVATION_PLANE_NORMAL_DIFFERENCE_DEG = 10.0
 
 
 class SensorTipTargetOutsideView(ValueError):
-    """A nearby plane can guide observation, but is not a target measurement."""
+    """A measured plane intersects the probe axis outside the supported view."""
 
-    def __init__(self, axis_distance_m, detail, *, observation_pixel=None, target_plane_probe=None):
+    def __init__(self, axis_distance_m, detail, *, target_plane_probe=None):
         super().__init__(detail)
         self.axis_distance_m = axis_distance_m
-        self.observation_pixel = observation_pixel
         self.target_plane_probe = target_plane_probe
 
 
@@ -84,7 +79,7 @@ def measure_sensor_tip_distance(
     """Return a plane and perpendicular distance in the ORIGINAL probe frame.
 
     Discovery uses measured depth nearest the forward probe ray. Once an
-    observation has identified a wall, its measured plane retains the target
+    actual target is measured, its plane retains the target
     and normal association across the camera excursion. Fresh local depth
     must support both that target and the newly measured ray intersection;
     nearer coherent or on-ray geometry remains blocking. A saved goal may
@@ -373,176 +368,10 @@ def _check_observed_target_blocker(
     )
 
 
-def sensor_tip_observation_hint(
-    depth_image, camera_info, reference_probe_pose, camera_pose_odom, expected_distance_m=None,
-):
-    """Locate a supported camera patch to inspect an unresolved tip target.
-
-    The neighboring plane supplies only an observation direction. Its
-    extrapolated contact is never returned as a distance measurement.
-    """
-    estimate = estimate_live_surface_normal(depth_image, camera_info)
-    target_plane, _, axis_distance = _probe_target_geometry(
-        estimate.surface_plane_camera, estimate.projected_point,
-        reference_probe_pose, camera_pose_odom, expected_distance_m,
-    )
-    cloud = create_organized_depth_point_cloud(depth_image, camera_info)
-    pixel = _observation_destination(
-        depth_image, cloud, camera_info, estimate, reference_probe_pose,
-        camera_pose_odom, axis_distance, expected_distance_m,
-    )
-    return target_plane, pixel
-
-
-def _observation_destination(
-    depth_image, cloud, camera_info, estimate, reference_probe_pose, camera_pose,
-    axis_distance, expected_distance_m,
-):
-    """Find a nearby observed patch with room for camera positioning error.
-
-    The initial plane locates candidate patches throughout the image. Each
-    destination still needs its own local fit, enclosed depth support and
-    bounded connection to the probe target. This guides one observation;
-    fresh depth at the actual target is required after moving.
-    """
-    intrinsics = camera_intrinsics(camera_info, (cloud.width, cloud.height), "Depth CameraInfo")
-    origin, direction = probe_axis_in_camera(reference_probe_pose, camera_pose)
-    target = origin + axis_distance * direction
-    rows, columns = np.nonzero(cloud.valid_mask)
-    points = cloud.points_camera[rows, columns]
-    plane = estimate.surface_plane_camera
-    residual = np.einsum("ij,j->i", points - plane.point_array(), plane.normal_array())
-    margin = SURFACE_ORIENTATION_MAXIMUM_FIT_RADIUS_PX + TARGET_SUPPORT_RADIUS_PX + 1
-    candidates = np.flatnonzero(
-        (columns >= margin) & (columns < cloud.width-margin)
-        & (rows >= margin) & (rows < cloud.height-margin)
-        & (np.abs(residual) <= DEFAULT_DEPTH_PLANE_TOLERANCE_M)
-        & ~depth_below_minimum(points[:, 2], MINIMUM_SURFACE_ORIENTATION_CAMERA_DISTANCE_M)
-        & (np.linalg.norm(points - target, axis=1)
-           <= MAXIMUM_OBSERVATION_PLANE_EXTENSION_M)
-    )
-    # Require usable local target footprints throughout the positioning
-    # margin. A single enlarged hull could otherwise bridge a depth hole.
-    support = _observation_support_mask(cloud, plane)
-    margin_pixels = np.ceil(
-        max(intrinsics[:2])*OBSERVATION_TARGET_MARGIN_M/points[candidates, 2],
-    ).astype(int)
-    safe = np.zeros(len(candidates), dtype=bool)
-    enclosed_by_radius = {}
-    for radius in np.unique(margin_pixels):
-        enclosed = minimum_filter(support, size=2*int(radius)+1, mode="constant", cval=0)
-        enclosed_by_radius[radius] = enclosed
-        selected = margin_pixels == radius
-        safe[selected] = enclosed[rows[candidates[selected]], columns[candidates[selected]]]
-    candidates = candidates[safe]
-    pixels = np.column_stack((columns[candidates], rows[candidates]))
-    translations = observation_translations_camera(
-        target, direction, intrinsics, pixels,
-    )
-    # The target and current candidate need not have the same optical depth
-    # on a tilted wall. Preserve the physical margin at both depths after
-    # solving the calibrated translation, before accepting a destination.
-    target_depth = target[2] - translations[:, 2]
-    margin_depth = np.minimum(points[candidates, 2], target_depth)
-    margin_pixels = np.ceil(max(intrinsics[:2])*OBSERVATION_TARGET_MARGIN_M/margin_depth).astype(int)
-    safe = ~depth_below_minimum(target_depth, MINIMUM_SURFACE_ORIENTATION_CAMERA_DISTANCE_M)
-    for radius in np.unique(margin_pixels[safe]):
-        if radius not in enclosed_by_radius:
-            enclosed_by_radius[radius] = minimum_filter(support, size=2*int(radius)+1, mode="constant", cval=0)
-        selected = margin_pixels == radius
-        safe[selected] &= enclosed_by_radius[radius][rows[candidates[selected]], columns[candidates[selected]]]
-    candidates, pixels, translations, margin_depth = (
-        values[safe] for values in (candidates, pixels, translations, margin_depth)
-    )
-    excluded = np.zeros(len(candidates), dtype=bool)
-    fits = 0
-    for index in np.argsort(np.einsum("ij,ij->i", translations, translations)):
-        if excluded[index]:
-            continue
-        pixel = ImagePoint(u=int(pixels[index, 0]), v=int(pixels[index, 1]))
-        support_margin = max(intrinsics[:2])*OBSERVATION_TARGET_MARGIN_M/margin_depth[index]
-        support_radius = TARGET_SUPPORT_RADIUS_PX + math.ceil(support_margin)
-        if fits >= MAXIMUM_SEED_FITS:
-            break
-        fits += 1
-        try:
-            projected = project_reference_pixel(
-                pixel, depth_image, camera_info, search_radius_px=0,
-                point_cloud=cloud, rgb_size=(cloud.width, cloud.height),
-            )
-            local = estimate_surface_normal(
-                projected, depth_image, camera_info,
-                neighborhood_radius_px=SURFACE_ORIENTATION_WINDOW_RADIUS_PX,
-                maximum_neighborhood_radius_px=SURFACE_ORIENTATION_MAXIMUM_FIT_RADIUS_PX,
-                minimum_sample_count=SURFACE_ORIENTATION_MINIMUM_SAMPLE_COUNT,
-                maximum_plane_rmse_m=DEFAULT_DEPTH_PLANE_TOLERANCE_M,
-                minimum_tangent_spread_m=0.003, point_cloud=cloud,
-            )
-            local_plane = local.surface_plane_camera
-            # A boundary patch can pass an RMSE check while fitting a very
-            # different slope. It must corroborate the same wall before
-            # its image location can guide an observation of this target.
-            alignment = float(np.dot(plane.normal_array(), local_plane.normal_array()))
-            target_offset = float(np.dot(target-local_plane.point_array(), local_plane.normal_array()))
-            if (alignment < math.cos(math.radians(MAXIMUM_OBSERVATION_PLANE_NORMAL_DIFFERENCE_DEG))
-                    or abs(target_offset) > DEFAULT_DEPTH_PLANE_TOLERANCE_M):
-                raise ValueError("Observation patch does not agree with the target surface")
-            _probe_target_geometry(
-                local.surface_plane_camera, projected, reference_probe_pose,
-                camera_pose, expected_distance_m,
-            )
-            _target_patch(
-                cloud, pixel, camera_plane=local.surface_plane_camera,
-                radius_px=support_radius, minimum_support_margin_px=support_margin,
-            )
-        except ValueError:
-            radius = SURFACE_ORIENTATION_WINDOW_RADIUS_PX
-            excluded |= ((pixels[:, 0]-pixel.u)**2 + (pixels[:, 1]-pixel.v)**2 <= radius**2)
-            continue
-        # Candidate validation must not silently redefine the target used
-        # to rank translations and check its positioning margin.
-        return pixel
-    raise ValueError("No nearby observation patch has reliable local depth and positioning margin")
-
-
-def _observation_support_mask(cloud, plane):
-    """Conservatively find enclosed, foreground-free seven-pixel patches."""
-    rows, columns = np.nonzero(cloud.valid_mask)
-    points = cloud.points_camera[rows, columns]
-    rays = points/points[:, 2, None]
-    denominator = np.einsum("ij,j->i", rays, plane.normal_array())
-    predicted = np.divide(
-        np.dot(plane.point_array(), plane.normal_array()), denominator,
-        out=np.full(len(points), np.nan), where=np.abs(denominator) > 1e-12,
-    )
-    residual = points[:, 2] - predicted
-    consistent = np.zeros_like(cloud.valid_mask, dtype=np.uint8)
-    foreground = np.zeros_like(consistent)
-    consistent[rows, columns] = np.abs(residual) <= DEFAULT_DEPTH_PLANE_TOLERANCE_M
-    foreground[rows, columns] = residual < -DEFAULT_DEPTH_PLANE_TOLERANCE_M
-    radius = TARGET_SUPPORT_RADIUS_PX
-    kernel = np.ones((2*radius+1, 2*radius+1), dtype=np.uint8)
-    valid_count = correlate(cloud.valid_mask.astype(np.uint8), kernel, mode="constant", cval=0)
-    consistent_count = correlate(consistent, kernel, mode="constant", cval=0)
-    supported = (
-        (consistent_count >= MINIMUM_TARGET_SUPPORT_SAMPLES)
-        & (consistent_count >= MINIMUM_TARGET_SUPPORT_RATIO*valid_count)
-        & (correlate(foreground, kernel, mode="constant", cval=0) == 0)
-    )
-    # One real return in each open quadrant guarantees two-dimensional
-    # enclosure, including when registration leaves regularly empty pixels.
-    for vertical in (slice(0, radius), slice(radius+1, None)):
-        for horizontal in (slice(0, radius), slice(radius+1, None)):
-            quadrant = np.zeros_like(kernel)
-            quadrant[vertical, horizontal] = 1
-            supported &= correlate(consistent, quadrant, mode="constant", cval=0) > 0
-    return supported
-
-
 def _probe_target_geometry(
     camera_plane, projected, reference_probe_pose, camera_pose_odom, expected_distance_m,
 ):
-    """Share target-range and bounded plane-extension checks with view hints."""
+    """Check the measured plane intersection and bounded support extension."""
     if expected_distance_m is not None and (
         not math.isfinite(expected_distance_m) or expected_distance_m <= 0.0
     ):

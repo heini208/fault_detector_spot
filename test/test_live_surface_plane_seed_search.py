@@ -13,7 +13,7 @@ from fault_detector_spot.inspection.sensing.sensor_tip_distance import (
     SensorTipTargetUnavailable,
     measure_sensor_tip_distance,
 )
-from fault_detector_spot.shared.geometry.models import PoseData, Vector3Data
+from fault_detector_spot.shared.geometry.models import PoseData
 from test_sensor_tip_automatic_discovery import wall_image
 import test_sensor_tip_observation as observation_fixtures
 from test_surface_normal import make_32fc1, make_camera_info, plane_depth_values
@@ -50,7 +50,7 @@ def test_empty_seed_window_finds_wall_without_expanding_the_plane_fit(normal):
     )
 
 
-def test_expanded_seed_can_guide_observation_but_cannot_replace_target_depth(source):
+def test_missing_seed_does_not_affect_axis_observation_or_replace_target_depth(source):
     camera = observation_fixtures.camera_pose(0.08)
     image, info = wall_image(camera, 0.218)
     values = np.frombuffer(bytes(image.data), dtype="<f4").reshape(480, 640).copy()
@@ -66,9 +66,8 @@ def test_expanded_seed_can_guide_observation_but_cannot_replace_target_depth(sou
     view = source.source.observation_view(reference)
 
     assert not view.visible
-    assert "Target requires another view" in view.detail
-    assert view.target_plane_probe.normal_array() == pytest.approx([-1, 0, 0], abs=1e-6)
-    assert view.target_plane_probe.signed_distance(Vector3Data.zero()) == pytest.approx(0.218, abs=1e-6)
+    assert "calibrated TF" in view.detail
+    assert view.target_plane_probe is None
     delta = view.hand_translation_odom
     assert delta.x == pytest.approx(0.0, abs=1e-9)
     assert 0.001 < np.linalg.norm([delta.x, delta.y, delta.z]) < 0.20

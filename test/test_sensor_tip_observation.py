@@ -7,12 +7,8 @@ import pytest
 
 from fault_detector_spot.inspection.geometry.pose import compose_poses, inverse_pose
 from fault_detector_spot.inspection.geometry.sensor_tip_observation import (
-    observation_translation,
-    project_camera_point,
-    target_camera_point,
     transform_surface_plane,
 )
-from fault_detector_spot.inspection.model.models import ImagePoint
 from fault_detector_spot.inspection.sensing import probe_surface_source
 from fault_detector_spot.inspection.sensing.probe_surface_source import (
     ProbeSurfaceSource, NoNewSensorTipPoseSample,
@@ -35,32 +31,6 @@ def target_image(depth_m=0.35):
     image, info = planar_depth(width=128, height=96, depth_m=depth_m)
     info.k[0] = info.k[4] = 200.0
     return image, info
-
-
-def test_lowered_tip_moves_only_until_full_patch_is_visible_without_inward_motion():
-    reference = PoseData.identity()
-    camera = camera_pose(height=0.10)
-    point = target_camera_point(reference, camera, 0.25)
-    pixel = project_camera_point(point, (200.0, 200.0, 64.0, 48.0))
-    assert pixel[1] > 96
-    translation = observation_translation(reference, camera, 0.25, (200, 200, 64, 48), (128, 96), 36)
-    assert translation.x == pytest.approx(0.0)
-    assert translation.y == pytest.approx(0.0)
-    assert translation.z == pytest.approx(-0.08075)
-    camera.position.z += translation.z
-    centered = target_camera_point(reference, camera, 0.25)
-    assert project_camera_point(centered, (200.0, 200.0, 64.0, 48.0)) == pytest.approx((64, 59))
-
-
-def test_observation_translation_respects_rotated_probe_axis():
-    anchor = PoseData(
-        Vector3Data(1.0, -2.0, 3.0),
-        quaternion_from_matrix(np.array([[0, -1, 0], [1, 0, 0], [0, 0, 1]])),
-    )
-    camera = compose_poses(anchor, camera_pose(height=0.10))
-    translation = observation_translation(anchor, camera, 0.25, (200, 200, 64, 48), (128, 96), 36)
-    assert translation.y == pytest.approx(0.0)
-    assert translation.z == pytest.approx(-0.08075)
 
 
 def test_plane_transform_preserves_normal_sign_and_round_trips():
@@ -190,11 +160,7 @@ def test_failed_anchored_view_cannot_reselect_an_observation_target(source, monk
         assert kwargs["target_plane_probe"] == target
         raise SensorTipTargetUnavailable("target depth missing")
 
-    def unexpected_hint(*args, **kwargs):
-        pytest.fail("An observed wall target must not be replaced during a retry")
-
     monkeypatch.setattr(probe_surface_source, "measure_sensor_tip_distance", missing_target)
-    monkeypatch.setattr(probe_surface_source, "sensor_tip_observation_hint", unexpected_hint)
     view = source.source.observation_view(PoseData.identity(), target_plane_probe=target)
     assert not view.visible
     assert view.target_plane_probe == target
@@ -242,6 +208,26 @@ def test_target_samples_preserve_receipt_freshness_and_count_contract(source):
         )
 
 
+def test_postmove_sampling_excludes_pre_settle_acquisitions_even_when_cached(source):
+    reference = PoseData.identity()
+    source.source.sensor_tip_distance_samples(reference)
+    source.now, source.ros_now = 100.2, 10.2
+    # A previously fitted pre-move frame may be delivered again after settling.
+    old_image, _ = target_image()
+    source.source._receive_hand_depth(old_image)
+    with pytest.raises(ValueError, match="acquisition precedes the required measurement"):
+        source.source.sensor_tip_distance_samples(reference, acquisition_not_before=10.1)
+    assert source.fits == 1
+
+    image, _ = target_image()
+    image.header.stamp.nanosec = 200_000_000
+    source.source._receive_hand_depth(image)
+    samples = source.source.sensor_tip_distance_samples(reference, acquisition_not_before=10.1)
+    assert len(samples) == 1
+    assert samples[0].stamp_seconds == pytest.approx(10.2)
+    assert source.fits == 2
+
+
 def test_observation_view_and_snapshot_use_same_timestamped_frames(source):
     view = source.source.observation_view(PoseData.identity(), 0.25)
     assert view.visible
@@ -263,72 +249,6 @@ def test_pose_snapshot_refuses_pre_return_and_empty_timestamp_frames(source):
     source.source._receive_hand_depth(image)
     with pytest.raises(ValueError, match="timestamp is empty"):
         source.source.sensor_tip_pose_snapshot("test_sensor")
-
-
-def test_visible_target_does_not_require_motion_to_image_center():
-    camera = camera_pose(height=0.01)
-    translation = observation_translation(
-        PoseData.identity(), camera, 0.25, (200, 200, 64, 48), (128, 96), 36,
-    )
-    assert translation == Vector3Data.zero()
-
-
-@pytest.mark.parametrize("rotation", [np.eye(3), np.array([[0, -1, 0], [1, 0, 0], [0, 0, 1]])])
-@pytest.mark.parametrize("destination", [ImagePoint(40, 40), ImagePoint(36, 36), ImagePoint(91, 59)])
-def test_observation_moves_original_target_to_measured_patch_without_advancing(rotation, destination):
-    reference = PoseData(Vector3Data(1.0, -2.0, 3.0), quaternion_from_matrix(rotation))
-    camera = compose_poses(reference, camera_pose(height=0.01))
-    intrinsics = (200, 200, 64, 48)
-    translation = observation_translation(
-        reference, camera, 0.25, intrinsics, (128, 96), 36,
-        desired_pixel=destination,
-    )
-    delta = np.array([translation.x, translation.y, translation.z])
-    assert np.linalg.norm(delta) > 0.001
-    assert np.dot(delta, rotation[:, 0]) == pytest.approx(0.0, abs=1e-12)
-    camera.position = Vector3Data(
-        camera.position.x + translation.x,
-        camera.position.y + translation.y,
-        camera.position.z + translation.z,
-    )
-    after = project_camera_point(target_camera_point(reference, camera, 0.25), intrinsics)
-    assert after == pytest.approx((destination.u, destination.v))
-
-
-@pytest.mark.parametrize("destination", [ImagePoint(35, 48), ImagePoint(92, 48), ImagePoint(64, 35), ImagePoint(64, 60)])
-def test_observation_destination_requires_full_patch_margin(destination):
-    with pytest.raises(ValueError, match="full patch margin"):
-        observation_translation(
-            PoseData.identity(), camera_pose(), 0.25, (200, 200, 64, 48),
-            (128, 96), 36, desired_pixel=destination,
-        )
-
-
-def test_captured_mount_geometry_needs_far_less_than_full_centering():
-    camera = PoseData(
-        Vector3Data(-0.114589969, 0.0182147651, 0.130271103),
-        quaternion_from_matrix(np.array([
-            [0.000004199, 0.136085467, 0.990697101],
-            [-1.0, -0.0000006196, 0.0000043235],
-            [0.0000012022, -0.990697101, 0.136085467],
-        ])),
-    )
-    intrinsics = (552.0291012161067, 552.0291012161067, 320, 240)
-    reference = PoseData.identity()
-    before = project_camera_point(target_camera_point(reference, camera, 0.25), intrinsics)
-    assert before[1] == pytest.approx(527.17, abs=0.01)
-    delta = observation_translation(reference, camera, 0.25, intrinsics, (640, 480), 36)
-    assert delta.x == pytest.approx(0, abs=1e-9)
-    assert np.linalg.norm([delta.x, delta.y, delta.z]) < 0.06
-    camera.position = Vector3Data(camera.position.x+delta.x, camera.position.y+delta.y, camera.position.z+delta.z)
-    after = project_camera_point(target_camera_point(reference, camera, 0.25), intrinsics)
-    assert after == pytest.approx((before[0], 443))
-
-
-@pytest.mark.parametrize("size, margin", [((64, 64), 36), ((128, 96), -1)])
-def test_invalid_observation_image_margin_is_rejected(size, margin):
-    with pytest.raises(ValueError, match="patch margin"):
-        observation_translation(PoseData.identity(), camera_pose(.1), .25, (200, 200, 64, 48), size, margin)
 
 
 def test_pose_sample_rejects_delayed_acquisition_even_after_new_receipt(source):

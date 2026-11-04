@@ -7,14 +7,13 @@ import numpy as np
 
 from fault_detector_spot.inspection.geometry.pose import relative_pose
 from fault_detector_spot.inspection.geometry.surface_plane import SurfacePlane
-from fault_detector_spot.inspection.model.models import ImagePoint
 from fault_detector_spot.shared.geometry.models import PoseData, Vector3Data
 from fault_detector_spot.shared.geometry.rotation import rotation_from_quaternion
 
 
 @dataclass(frozen=True)
 class SensorTipObservationView:
-    """Visibility, lateral observation move, and advisory target association."""
+    """Visibility, lateral observation move, and measured target association."""
 
     visible: bool
     camera_pose_odom: PoseData
@@ -40,66 +39,44 @@ def probe_axis_in_camera(reference_probe_pose, camera_pose_odom):
     )
 
 
-def observation_translation(
-    reference_probe_pose, camera_pose_odom, expected_distance_m,
-    intrinsics, image_size, patch_margin_px, *, desired_pixel: ImagePoint | None = None,
+def probe_axis_observation_translation(
+    reference_probe_pose, camera_pose_odom, intrinsics, image_size, patch_margin_px,
 ):
-    """Bring the target to a usable image pixel, without advancing.
+    """Place the camera on the saved probe axis without knowing target depth.
 
-    By default, clip only out-of-bounds coordinates to the full-fit inset.
-    A measured clear patch can instead provide an explicit destination for an
-    occluded target. Solve translation perpendicular to the saved probe +X;
-    hand orientation stays unchanged and no mount-specific offsets are used.
+    Translate perpendicular to the original probe +X and preserve orientation.
+    Once the optical center lies on that line, every forward target projects to
+    the same calibrated pixel. The pixel follows the mount direction, rather
+    than a surface estimate or an arbitrary image destination.
     """
     reference_probe_pose.validate()
     camera_pose_odom.validate()
     width, height = image_size
-    if (not math.isfinite(patch_margin_px) or patch_margin_px < 0
+    if (not all(math.isfinite(value) for value in (width, height, patch_margin_px))
+            or patch_margin_px < 0
             or min(width, height) <= 2 * patch_margin_px + 1):
         raise ValueError("Camera image is too small for the observation patch margin")
-    fx, fy, cx, cy = intrinsics
+    fx, fy, _, _ = intrinsics
     if not all(math.isfinite(value) for value in intrinsics) or min(fx, fy) <= 0:
         raise ValueError("Observation requires valid camera intrinsics")
-    point_camera = target_camera_point(
-        reference_probe_pose, camera_pose_odom, expected_distance_m,
+
+    origin, direction = probe_axis_in_camera(reference_probe_pose, camera_pose_odom)
+    if direction[2] <= 0.0:
+        raise ValueError("The saved probe axis does not face forward in the camera")
+    u, v = project_camera_point(direction, intrinsics)
+    if not (patch_margin_px <= u <= width - 1 - patch_margin_px
+            and patch_margin_px <= v <= height - 1 - patch_margin_px):
+        raise ValueError("The saved probe axis does not preserve the full observation patch margin")
+
+    axial_offset = float(np.dot(origin, direction))
+    # Ignore only floating-point transform noise at coincident axial positions.
+    if axial_offset < -1e-9:
+        raise ValueError("Camera is ahead of the original sensor tip along the saved probe axis")
+    translation_camera = origin - axial_offset * direction
+    translation_odom = rotation_from_quaternion(camera_pose_odom.orientation).apply(
+        translation_camera,
     )
-    u, v = project_camera_point(point_camera, intrinsics)
-    if desired_pixel is None:
-        desired_u = max(patch_margin_px, min(width - 1 - patch_margin_px, u))
-        desired_v = max(patch_margin_px, min(height - 1 - patch_margin_px, v))
-    else:
-        if not isinstance(desired_pixel, ImagePoint):
-            raise TypeError("Observation destination must be an ImagePoint")
-        desired_pixel.validate()
-        desired_u, desired_v = desired_pixel.u, desired_pixel.v
-        if not (patch_margin_px <= desired_u <= width - 1 - patch_margin_px
-                and patch_margin_px <= desired_v <= height - 1 - patch_margin_px):
-            raise ValueError("Observation destination does not preserve the full patch margin")
-    if (desired_u, desired_v) == (u, v):
-        return Vector3Data.zero()
-
-    _, probe_axis = probe_axis_in_camera(reference_probe_pose, camera_pose_odom)
-    camera_rotation = rotation_from_quaternion(camera_pose_odom.orientation)
-    translation = camera_rotation.apply(observation_translations_camera(
-        point_camera, probe_axis, intrinsics, [(desired_u, desired_v)],
-    )[0])
-    return Vector3Data(*(float(value) for value in translation))
-
-
-def observation_translations_camera(point_camera, probe_axis_camera, intrinsics, desired_pixels):
-    """Solve lateral observation displacements for calibrated image pixels."""
-    pixels = np.asarray(desired_pixels, dtype=float)
-    if pixels.ndim != 2 or pixels.shape[1] != 2 or not np.all(np.isfinite(pixels)):
-        raise ValueError("Observation destinations must be finite image pixel pairs")
-    fx, fy, cx, cy = intrinsics
-    rays = np.column_stack(((pixels[:, 0]-cx)/fx, (pixels[:, 1]-cy)/fy, np.ones(len(pixels))))
-    denominator = np.einsum("ij,j->i", rays, probe_axis_camera)
-    if np.any(denominator <= 0.1):
-        raise ValueError("Camera viewing direction cannot observe the forward probe target safely")
-    optical_depth = float(np.dot(point_camera, probe_axis_camera)) / denominator
-    if np.any(optical_depth <= 0.0):
-        raise ValueError("Intended sensor-tip target is behind the camera")
-    return point_camera - optical_depth[:, None] * rays
+    return Vector3Data(*(float(value) for value in translation_odom))
 
 
 def project_camera_point(point_camera, intrinsics):

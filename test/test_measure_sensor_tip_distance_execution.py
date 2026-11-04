@@ -142,6 +142,8 @@ class Source:
         self.sample_calls = []
         self.view_calls = []
         self.view_targets = []
+        self.view_allow_translation = []
+        self.view_acquisition_cutoffs = []
         self.snapshot_calls = []
         self.pose_sample_calls = []
         self.normal = Vector3Data(-1.0, 0.0, 0.0)
@@ -174,16 +176,19 @@ class Source:
 
     def observation_view(
         self, reference, expected_distance_m=None, *, receipt_not_before=0.0,
-        target_plane_probe=None,
+        target_plane_probe=None, allow_translation=True, acquisition_not_before=0.0,
     ):
         self.view_calls.append((deepcopy(reference), expected_distance_m, receipt_not_before))
         self.view_targets.append(target_plane_probe)
+        self.view_allow_translation.append(allow_translation)
+        self.view_acquisition_cutoffs.append(acquisition_not_before)
+        visible = self.initially_visible or len(self.executor.calls) > 0
         return SensorTipObservationView(
-            visible=self.initially_visible or len(self.executor.calls) > 0,
+            visible=visible,
             camera_pose_odom=pose(),
             hand_translation_odom=deepcopy(self.translation),
             detail="target in view" if self.initially_visible else "target outside image",
-            target_plane_probe=fitted_plane(0.25),
+            target_plane_probe=fitted_plane(0.25) if visible else None,
         )
 
     def sensor_tip_distance_samples(self, reference, expected_distance_m, **options):
@@ -285,7 +290,7 @@ def test_distance_uses_achieved_return_pose_instead_of_assuming_exact_return():
     assert case.execution.result.distance_m == pytest.approx(0.247)
 
 
-def test_observation_target_stays_fixed_through_sparse_retry_and_sampling():
+def test_observation_freezes_only_real_postmove_target_and_never_requests_another_move():
     case = harness(visible=False)
     read_view = case.source.observation_view
     retries = []
@@ -296,15 +301,21 @@ def test_observation_target_stays_fixed_through_sparse_retry_and_sampling():
             retries.append(1)
             return replace(
                 view, visible=len(retries) > 1,
-                target_plane_probe=fitted_plane(0.12), detail="transient side-plane fit",
+                target_plane_probe=fitted_plane(0.12 if len(retries) == 1 else 0.25),
+                detail="transient side-plane fit",
             )
         return view
 
     case.source.observation_view = changing_patch
     assert finish(case) is MeasureSensorTipDistanceOutcome.SUCCESS
     assert len(retries) == 2
-    assert case.source.view_targets == [None, fitted_plane(0.25), fitted_plane(0.25)]
+    assert case.source.view_targets == [None, None, None]
+    assert case.source.view_allow_translation == [True, False, False]
+    cutoffs = case.source.view_acquisition_cutoffs
+    assert cutoffs[1] > cutoffs[0] > 0.0
+    assert cutoffs[1] == cutoffs[2]
     assert all(call[2]["target_plane_probe"] == fitted_plane(0.25) for call in case.source.sample_calls)
+    assert all(call[2]["acquisition_not_before"] == cutoffs[1] for call in case.source.sample_calls)
     assert len(case.executor.calls) == 2
     assert case.execution.result.distance_m == pytest.approx(0.25)
 

@@ -5,14 +5,20 @@ from copy import deepcopy
 import numpy as np
 import pytest
 
-from fault_detector_spot.inspection.geometry.sensor_tip_observation import observation_translation
+from fault_detector_spot.inspection.geometry.sensor_tip_observation import (
+    probe_axis_in_camera, project_camera_point, target_camera_point,
+)
 from fault_detector_spot.inspection.sensing.sensor_tip_distance import (
     SensorTipTargetOutsideView, measure_sensor_tip_distance,
 )
 from fault_detector_spot.shared.geometry.models import PoseData, Vector3Data
 from fault_detector_spot.shared.geometry.rotation import quaternion_from_matrix, rotation_from_quaternion
 from test_live_surface_distance import planar_depth
-from test_sensor_tip_observation import camera_pose, source
+import test_sensor_tip_observation as observation_fixtures
+from test_sensor_tip_observation import camera_pose
+
+
+source = observation_fixtures.source
 
 
 def mounted_camera():
@@ -48,35 +54,35 @@ def set_view(state, camera, distance):
     state.source._lookup_pose = lambda *args, **kwargs: deepcopy(camera)
 
 
-@pytest.mark.parametrize("distance", [0.379, 0.381])
-def test_visible_wall_needs_neither_estimate_nor_unnecessary_observation_move(source, distance):
-    set_view(source, mounted_camera(), distance)
-    view = source.source.observation_view(PoseData.identity())
-    assert view.visible
-    assert view.hand_translation_odom == Vector3Data.zero()
-    samples = source.source.sensor_tip_distance_samples(PoseData.identity())
-    assert samples[-1].distance_m == pytest.approx(distance, abs=1e-6)
-
-
-@pytest.mark.parametrize("distance", [0.20, 0.25])
-def test_hidden_target_move_uses_depth_and_measures_original_tip_after_excursion(source, distance):
+@pytest.mark.parametrize("distance", [0.20, 0.25, 0.379, 0.381])
+def test_mount_geometry_aligns_original_axis_before_target_measurement(source, distance):
     camera = mounted_camera()
     set_view(source, camera, distance)
     view = source.source.observation_view(PoseData.identity())
     assert not view.visible
-    expected_delta = observation_translation(
-        PoseData.identity(), camera, distance, (552, 552, 320, 240), (640, 480), 36,
-    )
     delta = view.hand_translation_odom
+    assert view.target_plane_probe is None
+    assert source.fits == 0
     assert delta.x == pytest.approx(0.0, abs=1e-8)
-    assert delta.y == pytest.approx(expected_delta.y, abs=1e-6)
-    assert delta.z == pytest.approx(expected_delta.z, abs=1e-6)
-    assert -0.10 < delta.z < 0.0
+    assert delta.y == pytest.approx(-camera.position.y, abs=1e-8)
+    assert delta.z == pytest.approx(-camera.position.z, abs=1e-8)
     for axis in ("x", "y", "z"):
         setattr(camera.position, axis, getattr(camera.position, axis) + getattr(delta, axis))
-    image, info = wall_image(camera, distance)
-    # The camera has moved, but the measured reference remains the original tip.
-    sample = measure_sensor_tip_distance(image, info, PoseData.identity(), camera)
+    origin, direction = probe_axis_in_camera(PoseData.identity(), camera)
+    assert np.linalg.norm(np.cross(origin, direction)) < 1e-8
+    # Every distance along the original axis now projects to the same pixel.
+    for probe_distance in (0.05, 0.25, 0.45):
+        pixel = project_camera_point(
+            target_camera_point(PoseData.identity(), camera, probe_distance),
+            (552, 552, 320, 240),
+        )
+        assert pixel == pytest.approx(project_camera_point(direction, (552, 552, 320, 240)), abs=1e-5)
+    set_view(source, camera, distance)
+    observed = source.source.observation_view(PoseData.identity(), allow_translation=False)
+    assert observed.visible
+    assert observed.hand_translation_odom == Vector3Data.zero()
+    # The camera has moved, but measurement still refers to the original tip.
+    sample = source.source.sensor_tip_distance_samples(PoseData.identity())[-1]
     assert sample.distance_m == pytest.approx(distance, abs=1e-6)
     assert sample.surface_plane_probe.normal_array() == pytest.approx([-1, 0, 0], abs=1e-6)
 
@@ -113,9 +119,54 @@ def test_farther_wall_cannot_hide_nearer_surface_along_probe_path():
     assert error.value.axis_distance_m == pytest.approx(0.22, abs=1e-6)
 
 
-def test_no_nearby_supported_surface_cannot_trigger_a_guessed_camera_move(source):
-    set_view(source, camera_pose(0.40), 0.25)
-    view = source.source.observation_view(PoseData.identity())
-    assert not view.visible
-    assert view.hand_translation_odom == Vector3Data.zero()
-    assert "No measured depth near forward probe" in view.detail
+def test_object_on_original_axis_is_measured_instead_of_initial_background(source):
+    camera = mounted_camera()
+    set_view(source, camera, 0.45)
+    initial = source.source.observation_view(PoseData.identity())
+    assert initial.target_plane_probe is None
+    for axis in ("x", "y", "z"):
+        setattr(camera.position, axis, getattr(camera.position, axis) + getattr(initial.hand_translation_odom, axis))
+
+    background, info = wall_image(camera, 0.45)
+    object_image, _ = wall_image(camera, 0.20)
+    values = np.frombuffer(bytes(background.data), dtype="<f4").reshape(480, 640).copy()
+    foreground = np.frombuffer(bytes(object_image.data), dtype="<f4").reshape(480, 640)
+    u, v = np.rint(project_camera_point(
+        target_camera_point(PoseData.identity(), camera, 0.20), (552, 552, 320, 240),
+    )).astype(int)
+    values[v-10:v+11, u-10:u+11] = foreground[v-10:v+11, u-10:u+11]
+    background.data = values.tobytes()
+    source.source._receive_hand_depth_camera_info(info)
+    source.source._receive_hand_depth(background)
+    source.source._lookup_pose = lambda *args, **kwargs: deepcopy(camera)
+
+    observed = source.source.observation_view(PoseData.identity(), allow_translation=False)
+
+    assert observed.visible
+    assert observed.hand_translation_odom == Vector3Data.zero()
+    assert observed.target_plane_probe.signed_distance(Vector3Data.zero()) == pytest.approx(0.20, abs=1e-6)
+
+
+def test_postmove_target_uses_actual_camera_tf_despite_lateral_position_error(source):
+    # The intended aligned camera pixel is (320, 240). The actual camera
+    # stops 20 mm higher, so the original target appears around (320, 275).
+    camera = camera_pose(0.020)
+    background, info = wall_image(camera, 0.40)
+    object_image, _ = wall_image(camera, 0.218)
+    values = np.frombuffer(bytes(background.data), dtype="<f4").reshape(480, 640).copy()
+    foreground = np.frombuffer(bytes(object_image.data), dtype="<f4").reshape(480, 640)
+    u, v = np.rint(project_camera_point(
+        target_camera_point(PoseData.identity(), camera, 0.218), (552, 552, 320, 240),
+    )).astype(int)
+    assert v - 240 > 30
+    values[v-20:v+21, u-20:u+21] = foreground[v-20:v+21, u-20:u+21]
+    background.data = values.tobytes()
+    source.source._receive_hand_depth_camera_info(info)
+    source.source._receive_hand_depth(background)
+    source.source._lookup_pose = lambda *args, **kwargs: deepcopy(camera)
+
+    observed = source.source.observation_view(PoseData.identity(), allow_translation=False)
+
+    assert observed.visible
+    assert observed.hand_translation_odom == Vector3Data.zero()
+    assert observed.target_plane_probe.signed_distance(Vector3Data.zero()) == pytest.approx(0.218, abs=1e-6)
