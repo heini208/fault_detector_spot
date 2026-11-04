@@ -31,7 +31,11 @@ from fault_detector_msgs.msg import (
 
 from fault_detector_spot.inspection.model.models import (
     ImagePoint,
-    MINIMUM_ALIGNED_PREAPPROACH_SEPARATION_M,
+)
+from fault_detector_spot.inspection.sensing.surface_distance_validation import (
+    require_nonnegative_finite_distance,
+    require_positive_finite_distance,
+    validate_surface_distance_pair,
 )
 from fault_detector_spot.shared.geometry.models import (
     Vector3Data,
@@ -389,7 +393,9 @@ class InspectionControls(UIControlHelper):
         self.reference_target_distance_field = QLineEdit("0.03")
         self.reference_target_distance_field.setFixedWidth(90)
         self.reference_target_distance_field.setValidator(
-            self._distance_validator(self.reference_target_distance_field)
+            self._distance_validator(
+                self.reference_target_distance_field, allow_zero=True,
+            )
         )
         self.reference_preapproach_distance_field = QLineEdit("0.25")
         self.reference_preapproach_distance_field.setFixedWidth(90)
@@ -1122,8 +1128,10 @@ class InspectionControls(UIControlHelper):
         return math.isfinite(value) and value > 0.0
 
     @staticmethod
-    def _distance_validator(parent):
-        validator = QDoubleValidator(0.001, 10.0, 3, parent)
+    def _distance_validator(parent, *, allow_zero=False):
+        validator = QDoubleValidator(
+            0.0 if allow_zero else 0.001, 10.0, 3, parent,
+        )
         validator.setLocale(QLocale.c())
         validator.setNotation(QDoubleValidator.StandardNotation)
         return validator
@@ -1200,9 +1208,13 @@ class InspectionControls(UIControlHelper):
             )
             return
         self._handle_reference_image_point_changed(u, v)
-        intent = self._geometry_intent(
-            ProbeSetupIntent.OPERATION_SELECT_REFERENCE_PIXEL
-        )
+        try:
+            intent = self._geometry_intent(
+                ProbeSetupIntent.OPERATION_SELECT_REFERENCE_PIXEL
+            )
+        except ValueError as exception:
+            self._show_setup_error("Select Reference Point", exception)
+            return
         intent.reference_view_id = view_id
         intent.pixel_u = int(u)
         intent.pixel_v = int(v)
@@ -1246,10 +1258,15 @@ class InspectionControls(UIControlHelper):
         intent.target_surface_distance_m = self._distance_value(
             self.reference_target_distance_field,
             "Target surface distance",
+            allow_zero=True,
         )
         intent.aligned_preapproach_distance_m = self._distance_value(
             self.reference_preapproach_distance_field,
             "Aligned pre-approach distance",
+        )
+        validate_surface_distance_pair(
+            intent.target_surface_distance_m,
+            intent.aligned_preapproach_distance_m,
         )
         return intent
 
@@ -1326,6 +1343,7 @@ class InspectionControls(UIControlHelper):
             else self._distance_value(
                 self.reference_target_distance_field,
                 "Target surface distance",
+                allow_zero=True,
             )
         )
         old_aligned = (
@@ -1344,22 +1362,13 @@ class InspectionControls(UIControlHelper):
             target = self._distance_value(
                 self.refinement_dialog.target_distance_field,
                 "Desired surface distance",
+                allow_zero=True,
             )
             aligned = self._distance_value(
                 self.refinement_dialog.aligned_distance_field,
                 "Aligned pre-approach distance",
             )
-            if (
-                aligned
-                < target
-                + MINIMUM_ALIGNED_PREAPPROACH_SEPARATION_M
-                - 1e-12
-            ):
-                raise ValueError(
-                    "Aligned pre-approach distance must be at least "
-                    f"{MINIMUM_ALIGNED_PREAPPROACH_SEPARATION_M:.2f} m "
-                    "greater than desired surface distance"
-                )
+            validate_surface_distance_pair(target, aligned)
         except Exception as exception:
             self.refinement_dialog.target_distance_field.setText(
                 f"{old_target:.3f}"
@@ -2235,7 +2244,7 @@ class InspectionControls(UIControlHelper):
             self.status_label.setText(text)
 
     @staticmethod
-    def _distance_value(field, label):
+    def _distance_value(field, label, *, allow_zero=False):
         text = field.text().strip()
         try:
             value = float(text)
@@ -2243,9 +2252,9 @@ class InspectionControls(UIControlHelper):
             raise ValueError(
                 f"{label} must be a number"
             ) from exception
-        if value <= 0.0:
-            raise ValueError(f"{label} must be positive")
-        return value
+        if allow_zero:
+            return require_nonnegative_finite_distance(value, label)
+        return require_positive_finite_distance(value, label)
 
     @staticmethod
     def _bounded_positive_value(field, label, maximum):
