@@ -389,23 +389,23 @@ def test_endpoint_validation_rejects_excessive_settled_lateral_error():
 
 def test_axis_guard_reports_absolute_alignment_and_initial_margin():
     action = execution()
-    action._plan = SimpleNamespace(initial_axis_error_rad=math.radians(4.9))
+    action._plan = SimpleNamespace(initial_axis_error_rad=math.radians(9.9))
     # The admission margin does not change the absolute runtime safety limit.
-    action._validate_axis_guard(SimpleNamespace(axis_error_rad=math.radians(4.85)))
+    action._validate_axis_guard(SimpleNamespace(axis_error_rad=math.radians(9.85)))
 
     with pytest.raises(RuntimeError) as failure:
-        action._validate_axis_guard(SimpleNamespace(axis_error_rad=math.radians(5.05)))
+        action._validate_axis_guard(SimpleNamespace(axis_error_rad=math.radians(10.05)))
 
     detail = str(failure.value)
-    assert "current 5.05 deg > 5.00 deg" in detail
-    assert "initial alignment 4.90 deg left 0.10 deg margin" in detail
+    assert "current 10.05 deg > 10.00 deg" in detail
+    assert "initial alignment 9.90 deg left 0.10 deg margin" in detail
     assert "rotated" not in detail
 
 
 @pytest.mark.parametrize("body_pose, expected", [
-    (pose(x=0.011), "translation 11.00 mm (limit 10.00 mm), rotation 0.00 deg (limit 2.00 deg)"),
+    (pose(x=0.0201), "translation 20.10 mm (limit 20.00 mm), rotation 0.00 deg (limit 2.00 deg)"),
     (pose(orientation=quaternion_from_euler("z", math.radians(2.1))),
-     "translation 0.00 mm (limit 10.00 mm), rotation 2.10 deg (limit 2.00 deg)"),
+     "translation 0.00 mm (limit 20.00 mm), rotation 2.10 deg (limit 2.00 deg)"),
     (None, "Unable to verify measurement reference: TF unavailable"),
 ])
 def test_reference_failure_during_recovery_preserves_initial_failure(body_pose, expected):

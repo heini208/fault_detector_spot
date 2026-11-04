@@ -153,6 +153,12 @@ def test_approach_allowances_require_positive_finite_values(name, value):
         execution(**{name: value})
 
 
+@pytest.mark.parametrize("angle_deg", [90.0, 120.0])
+def test_approach_alignment_limit_must_face_toward_the_surface(angle_deg):
+    with pytest.raises(ValueError, match="90"):
+        execution(maximum_approach_axis_error_rad=math.radians(angle_deg))
+
+
 def test_configuration_rejects_contact_search_beyond_one_step():
     with pytest.raises(ValueError, match="Contact search overtravel"):
         execution(contact_search_overtravel_m=0.011)
