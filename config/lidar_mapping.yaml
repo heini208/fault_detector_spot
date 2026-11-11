@@ -1,0 +1,70 @@
+# Shared by mapping and localization. RTAB-Map core values must be strings.
+# Launch overrides select map metadata, topics, clock and mapping/localization mode.
+# TF odometry uses scan acquisition time; depth-one queues avoid stale scan backlog.
+# Planar ICP retains measured odometry height/tilt and uses local height filtering.
+# The arm exclusion box is body-relative; obstacle heights are ground-relative.
+rtabmap:
+  ros__parameters:
+    subscribe_rgb: false
+    subscribe_depth: false
+    subscribe_rgbd: false
+    subscribe_scan: false
+    subscribe_scan_cloud: true
+    subscribe_odom: false
+    pub_loc_pose_only_when_localizing: false
+    approx_sync: false
+    qos: 1
+    qos_scan: 2
+    wait_for_transform: 0.5
+    topic_queue_size: 1
+    sync_queue_size: 1
+    Rtabmap/DetectionRate: '2.0'
+    Mem/NotLinkedNodesKept: 'false'
+    Mem/STMSize: '30'
+    RGBD/NeighborLinkRefining: 'true'
+    RGBD/ProximityBySpace: 'true'
+    RGBD/ProximityMaxGraphDepth: '0'
+    RGBD/AngularUpdate: '0.05'
+    RGBD/LinearUpdate: '0.05'
+    RGBD/CreateOccupancyGrid: 'true'
+    RGBD/ForceOdom3DoF: 'false'
+    Reg/Strategy: '1'
+    Reg/Force3DoF: 'true'
+    Icp/Strategy: '1'
+    Icp/PointToPlane: 'true'
+    Icp/PointToPlaneK: '20'
+    Icp/PointToPlaneRadius: '0'
+    Icp/Iterations: '20'
+    Icp/Epsilon: '0.001'
+    Icp/VoxelSize: '0.10'
+    Icp/MaxCorrespondenceDistance: '1.0'
+    Icp/MaxTranslation: '1.0'
+    Icp/CorrespondenceRatio: '0.20'
+    Icp/OutlierRatio: '0.7'
+    Icp/RangeMin: '0.8'
+    Icp/RangeMax: '12.0'
+    Grid/Sensor: '0'
+    Grid/3D: 'true'
+    Grid/RayTracing: 'true'
+    Grid/MapFrameProjection: 'false'
+    Grid/NormalsSegmentation: 'false'
+    Grid/MinGroundHeight: '0.0'
+    Grid/MaxObstacleHeight: '1.50'
+    GridGlobal/ProbHit: '0.70'
+    GridGlobal/ProbMiss: '0.46'
+    GridGlobal/OccupancyThr: '0.50'
+    GridGlobal/MaxNodes: '0'
+lidar_self_filter:
+  ros__parameters:
+    minimum_obstacle_height: 0.05
+    maximum_obstacle_height: 1.5
+    obstacle_topic: /velodyne/points_obstacles
+    arm_box:
+    - 0.25
+    - 0.7
+    - -0.23
+    - 0.23
+    - -1.0
+    - 1.1
+    tf_timeout_sec: 0.25
+    publish_markers: true

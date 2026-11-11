@@ -14,6 +14,7 @@ from launch.actions import DeclareLaunchArgument
 from launch.utilities import normalize_to_list_of_substitutions, perform_substitutions
 from rclpy.qos import ReliabilityPolicy
 import pytest
+import yaml
 
 
 @pytest.fixture
@@ -33,13 +34,27 @@ def launch_file(monkeypatch, tmp_path):
     return launch_file
 
 
+def node_parameters(launch_file, node):
+    context = LaunchContext()
+    for entity in launch_file.generate_launch_description().entities:
+        if isinstance(entity, DeclareLaunchArgument):
+            entity.execute(context)
+    parameter_file, overrides = node["parameters"]
+    path = Path(parameter_file.perform(context))
+    assert path == Path(launch_file.pkg) / "config" / "lidar_mapping.yaml"
+    parameters = yaml.safe_load(path.read_text())[node["name"]]["ros__parameters"]
+    if node["name"] == "rtabmap":
+        assert all(isinstance(value, str) for key, value in parameters.items() if "/" in key)
+    return {**parameters, **overrides}
+
+
 @pytest.mark.parametrize("incremental_memory", ["true", "false"])
 @pytest.mark.parametrize("ground_height", ["0.05", "0.12"])
 def test_planar_lidar_mapping_preserves_height_and_uses_local_height_limits(
     launch_file, incremental_memory, ground_height,
 ):
     node = launch_file.make_rtabmap_node(incremental_memory, condition=None)
-    parameters = node["parameters"][0]
+    parameters = node_parameters(launch_file, node)
     context = LaunchContext()
     context.launch_configurations["ground_max_height"] = ground_height
 
@@ -65,10 +80,11 @@ def test_standalone_defaults_preserve_legacy_maps_without_moving_nav2_ground_gat
     assert context.launch_configurations["body_frame"] == "base_link"
     assert context.launch_configurations["ground_frame"] == "feet_center"
     assert context.launch_configurations["ground_max_height"] == "0.12"
-    filtering = next(
+    filtering_node = next(
         entity for entity in entities
         if isinstance(entity, dict) and entity["name"] == "lidar_self_filter"
-    )["parameters"][0]
+    )
+    filtering = node_parameters(launch_file, filtering_node)
     assert filtering["base_frame"].perform(context) == "base_link"
     assert filtering["ground_frame"].perform(context) == "feet_center"
     assert filtering["minimum_obstacle_height"] == 0.05
@@ -84,7 +100,9 @@ def test_standalone_defaults_preserve_legacy_maps_without_moving_nav2_ground_gat
 def test_rtabmap_keeps_latest_scan_and_resolves_odometry_from_capture_time_tf(
     launch_file, incremental_memory,
 ):
-    parameters = launch_file.make_rtabmap_node(incremental_memory, condition=None)["parameters"][0]
+    parameters = node_parameters(
+        launch_file, launch_file.make_rtabmap_node(incremental_memory, condition=None),
+    )
     # With one scan stream and TF odometry there is no cross-topic synchronizer
     # requiring queued old scans. DDS history must also remain bounded during ICP.
     assert parameters["subscribe_scan_cloud"] is True
