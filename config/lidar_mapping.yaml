@@ -51,7 +51,8 @@ rtabmap:
     Grid/MapFrameProjection: 'false'
     Grid/NormalsSegmentation: 'false'
     Grid/MinGroundHeight: '0.0'
-    Grid/MaxObstacleHeight: '1.50'
+    # Nominal walking envelope including stowed arm/LiDAR: 0.90 m + 0.05 m.
+    Grid/MaxObstacleHeight: '0.95'
     GridGlobal/ProbHit: '0.70'
     GridGlobal/ProbMiss: '0.46'
     GridGlobal/OccupancyThr: '0.50'
@@ -59,7 +60,8 @@ rtabmap:
 lidar_self_filter:
   ros__parameters:
     minimum_obstacle_height: 0.05
-    maximum_obstacle_height: 1.5
+    # Match the map obstacle ceiling for the measured navigation posture.
+    maximum_obstacle_height: 0.95
     obstacle_topic: /velodyne/points_obstacles
     arm_box:
     - 0.25

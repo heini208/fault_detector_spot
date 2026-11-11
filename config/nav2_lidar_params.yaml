@@ -112,6 +112,7 @@ controller_server:
         - GoalAngleCritic
         - PathAlignCritic
         - PathFollowCritic
+        - PathAngleCritic
 
       ConstraintCritic:
         enabled: true
@@ -156,6 +157,17 @@ controller_server:
         cost_weight: 5.0
         offset_from_furthest: 5
         threshold_to_consider: 1.4
+
+      # Omni motion may otherwise track a straight path while facing sideways.
+      # Humble uses forward_preference rather than the newer mode parameter.
+      PathAngleCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 2.0
+        offset_from_furthest: 4
+        threshold_to_consider: 0.5
+        max_angle_to_furthest: 0.20
+        forward_preference: true
 
 local_costmap:
   local_costmap:
