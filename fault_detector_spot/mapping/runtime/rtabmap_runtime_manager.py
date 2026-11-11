@@ -135,8 +135,17 @@ class RtabmapRuntimeManager(RuntimeManager):
     def _stop_rtabmap(self, save):
         """Stop only this manager's process; the caller handles Nav2 separately."""
         if save and self.is_running() and self.get_running_mode() == self.MODE_MAPPING:
-            for service in ("pause", "save_db", "publish_map"):
-                self._call_service(f"/rtabmap/{service}")
+            if not self._call_service("/rtabmap/pause"):
+                raise RuntimeError("Could not pause RTAB-Map before saving; mapping process retained")
+            # RTAB-Map's backup service flushes memory to the active DB,
+            # copies it to .back, then reopens it. There is no save_db service.
+            # Wait for acknowledgement before shutdown can escalate signals.
+            if not self._call_service("/rtabmap/backup", timeout_sec=60.0):
+                resumed = self._call_service("/rtabmap/resume")
+                raise RuntimeError(
+                    "Could not confirm RTAB-Map database save; mapping process retained"
+                    + ("" if resumed else "; resume could not be confirmed")
+                )
         stopped = self._stop_process(
             interrupt_timeout_sec=3.0 if save else 2.0,
             terminate_timeout_sec=2.0 if save else 1.0,

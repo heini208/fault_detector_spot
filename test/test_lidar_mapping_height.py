@@ -70,6 +70,16 @@ def test_planar_lidar_mapping_preserves_height_and_uses_local_height_limits(
     )
 
 
+@pytest.mark.parametrize("incremental_memory", ["true", "false"])
+def test_scan_only_proximity_registration_has_an_odometry_guess(launch_file, incremental_memory):
+    node = launch_file.make_rtabmap_node(incremental_memory, condition=None)
+    parameters = node_parameters(launch_file, node)
+    assert parameters["subscribe_scan_cloud"] is True
+    assert parameters["Reg/Strategy"] == "1"
+    assert parameters["RGBD/ProximityBySpace"] == "true"
+    assert parameters["RGBD/ProximityOdomGuess"] == "true"
+
+
 def test_standalone_defaults_preserve_legacy_maps_without_moving_nav2_ground_gate(launch_file):
     entities = launch_file.generate_launch_description().entities
     context = LaunchContext()

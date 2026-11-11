@@ -132,13 +132,31 @@ def test_save_and_no_save_shutdown_paths(runtime):
     manager.start_mapping("plant")
     assert manager.stop()
     assert [call.args[0] for call in manager._call_service.call_args_list] == [
-        "/rtabmap/pause", "/rtabmap/save_db", "/rtabmap/publish_map",
+        "/rtabmap/pause", "/rtabmap/backup",
     ]
     assert manager.get_running_mode() == manager.MODE_NONE
     manager._call_service.reset_mock()
     manager.start_mapping("plant")
     assert manager.stop(save=False)
     manager._call_service.assert_not_called()
+
+
+@pytest.mark.parametrize("failed_service", ["pause", "backup"])
+def test_save_failure_preserves_mapping_and_prevents_localization(runtime, tmp_path, failed_service):
+    manager, launches, stops = runtime
+    (tmp_path / "plant.db").touch()
+    previous = manager.start_mapping("plant")
+    manager._call_service.side_effect = lambda service, **kwargs: service != f"/rtabmap/{failed_service}"
+
+    with pytest.raises(RuntimeError, match="mapping process retained"):
+        manager.start_localization("plant")
+
+    assert previous.alive
+    assert manager.is_mapping_running()
+    assert len(launches) == 1
+    assert stops == []
+    if failed_service == "backup":
+        manager._call_service.assert_any_call("/rtabmap/resume")
 
 
 def test_localization_launch_and_map_switch_use_one_launch_path(runtime, tmp_path):
@@ -169,7 +187,7 @@ def test_localization_replaces_mapping_even_for_the_same_map(runtime, tmp_path, 
     assert manager.bb.active_map_name == target_map
     assert manager.is_localization_running()
     assert [call.args[0] for call in manager._call_service.call_args_list] == [
-        "/rtabmap/pause", "/rtabmap/save_db", "/rtabmap/publish_map",
+        "/rtabmap/pause", "/rtabmap/backup",
     ]
     assert len(launches) == 3  # Old mapping, replacement localization, Nav2.
     assert f"db_path:={tmp_path / (target_map + '.db')}" in launches[1]
@@ -184,8 +202,8 @@ def test_new_map_is_saved_before_localization_checks_database(runtime, tmp_path,
     previous = manager.start_mapping("new_map")
     database = tmp_path / "new_map.db"
 
-    def save(service):
-        if service == "/rtabmap/save_db":
+    def save(service, **kwargs):
+        if service == "/rtabmap/backup":
             database.touch()
         return True
 
@@ -207,7 +225,7 @@ def test_new_map_without_database_after_save_does_not_launch_localization(runtim
     with pytest.raises(FileNotFoundError):
         manager.start_localization("new_map")
 
-    manager._call_service.assert_any_call("/rtabmap/save_db")
+    manager._call_service.assert_any_call("/rtabmap/backup", timeout_sec=60.0)
     assert not previous.alive
     assert len(launches) == 1
     assert not manager.nav2_runtime.is_running()

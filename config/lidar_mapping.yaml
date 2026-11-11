@@ -23,6 +23,8 @@ rtabmap:
     Mem/STMSize: '30'
     RGBD/NeighborLinkRefining: 'true'
     RGBD/ProximityBySpace: 'true'
+    # Scan-only one-to-one registration needs a pose guess (no visual features).
+    RGBD/ProximityOdomGuess: 'true'
     RGBD/ProximityMaxGraphDepth: '0'
     RGBD/AngularUpdate: '0.05'
     RGBD/LinearUpdate: '0.05'
