@@ -239,7 +239,11 @@ class RtabmapRuntimeManager(RuntimeManager):
                 )
 
         db_path = self._db_path(map_name)
-        if not extend_map and not os.path.exists(db_path):
+        # A new active map may only get its database when mapping is saved.
+        saving_target_map = (
+            map_name == self.bb.active_map_name and self.is_mapping_running()
+        )
+        if not extend_map and not saving_target_map and not os.path.exists(db_path):
             raise FileNotFoundError(f"Database file not found for map: {db_path}")
         repository = MapRepository(self.maps_dir)
         # The setup coordinator records feet_center for new application maps.
@@ -251,6 +255,8 @@ class RtabmapRuntimeManager(RuntimeManager):
         )
         if not self.stop():
             raise RuntimeError("Could not stop runtime before switching maps")
+        if not extend_map and not os.path.exists(db_path):
+            raise FileNotFoundError(f"Database file not found for map: {db_path}")
         os.makedirs(os.path.dirname(db_path), exist_ok=True)
 
         extend_map_str = "true" if extend_map else "false"

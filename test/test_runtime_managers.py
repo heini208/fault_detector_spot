@@ -178,6 +178,41 @@ def test_localization_replaces_mapping_even_for_the_same_map(runtime, tmp_path, 
     assert "rviz:=false" in launches[1]
 
 
+@pytest.mark.parametrize("explicit_map", [True, False])
+def test_new_map_is_saved_before_localization_checks_database(runtime, tmp_path, explicit_map):
+    manager, launches, stops = runtime
+    previous = manager.start_mapping("new_map")
+    database = tmp_path / "new_map.db"
+
+    def save(service):
+        if service == "/rtabmap/save_db":
+            database.touch()
+        return True
+
+    manager._call_service.side_effect = save
+    assert not database.exists()
+    manager.start_localization("new_map" if explicit_map else None)
+
+    assert database.exists()
+    assert not previous.alive
+    assert manager.is_localization_running()
+    assert len(launches) == 3
+    assert "delete_db:=false" in launches[1]
+
+
+def test_new_map_without_database_after_save_does_not_launch_localization(runtime):
+    manager, launches, stops = runtime
+    previous = manager.start_mapping("new_map")
+
+    with pytest.raises(FileNotFoundError):
+        manager.start_localization("new_map")
+
+    manager._call_service.assert_any_call("/rtabmap/save_db")
+    assert not previous.alive
+    assert len(launches) == 1
+    assert not manager.nav2_runtime.is_running()
+
+
 def test_matching_localization_reuses_running_processes(runtime, tmp_path):
     manager, launches, stops = runtime
     (tmp_path / "one.db").touch()
