@@ -34,7 +34,7 @@ For the full technical description, refer to the accompanying system design docu
 - `config/`
   - `nav2_lidar_params.yaml` – current Nav2 configuration
   - `mapping.rviz` – RViz config for mapping/navigation
-  - `my_tags.yaml`, `my_tags_sim.yaml` – AprilTag configuration for `apriltag_ros`
+  - `my_tags.yaml` – AprilTag configuration for `apriltag_ros`
 - `documentation/`
   - `System_Design.md` – detailed system design & architecture (you pasted the latest version)
   - Additional docs, figures and example recordings under `images/System_Design/…`
