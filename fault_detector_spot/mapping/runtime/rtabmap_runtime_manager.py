@@ -8,6 +8,7 @@ from diagnostic_msgs.msg import DiagnosticStatus, KeyValue
 from rclpy.clock import Clock, ClockType
 
 from fault_detector_spot.navigation.runtime.nav2_runtime_manager import Nav2RuntimeManager
+from fault_detector_spot.mapping.runtime.mapping_safety_monitor import MappingSafetyMonitor
 from fault_detector_spot.mapping.repository.map_repository import MapRepository
 from fault_detector_spot.shared.persistence.runtime_paths import (
     default_map_root,
@@ -57,6 +58,7 @@ class RtabmapRuntimeManager(RuntimeManager):
         self._status_pub = node.create_publisher(
             DiagnosticStatus, "fault_detector/navigation_runtime", LATCHED_QOS,
         )
+        self._safety = MappingSafetyMonitor(node, self)
         self._status_timer = node.create_timer(
             0.5, self._publish_runtime_status,
             clock=Clock(clock_type=ClockType.STEADY_TIME),
@@ -70,7 +72,10 @@ class RtabmapRuntimeManager(RuntimeManager):
         except RuntimeError as exception:
             mode = self.MODE_NONE
             errors.append(str(exception))
+        localization_state, localization_detail, mapping_paused = self._safety.tick()
         nav2_running = self.nav2_runtime.is_running()
+        if mapping_paused and mode == self.MODE_MAPPING:
+            errors.append(f"Mapping paused: {localization_detail}")
         if self.process is not None and mode == self.MODE_NONE:
             errors.append("RTAB-Map process exited unexpectedly")
         if mode == self.MODE_LOCALIZATION and not nav2_running:
@@ -84,12 +89,16 @@ class RtabmapRuntimeManager(RuntimeManager):
             values=[
                 KeyValue(key="mode", value=mode),
                 KeyValue(key="active_map", value=self.bb.active_map_name or ""),
+                KeyValue(key="localization_state", value=localization_state.value),
+                KeyValue(key="localization_detail", value=localization_detail),
+                KeyValue(key="mapping_paused", value=str(mapping_paused).lower()),
             ],
         )
         self._status_pub.publish(status)
 
     def close(self):
         result = super().close()
+        self._safety.close()
         if self._status_timer is not None:
             self._publish_runtime_status()
             self.node.destroy_timer(self._status_timer)
@@ -152,6 +161,7 @@ class RtabmapRuntimeManager(RuntimeManager):
         )
         if stopped:
             self.bb.slam_runtime_mode = self.MODE_NONE
+            self._safety.tracker.reset()
         return stopped
 
     def stop(self, save=True):
@@ -223,15 +233,31 @@ class RtabmapRuntimeManager(RuntimeManager):
                 pass
 
     def start_mapping(self, map_name=None, delete_db=False, rviz=True):
-        if (not self.is_running() or delete_db
-                or (map_name is not None and map_name != self.bb.active_map_name)):
+        """Existing databases require fresh verified localization in this session."""
+        with self._process_lock:
+            target = map_name if map_name is not None else self.bb.active_map_name
+            if not target:
+                raise RuntimeError("No active map selected")
+            existing = os.path.exists(self._db_path(target))
+            if delete_db and existing:
+                raise RuntimeError("Refusing to overwrite an existing saved map")
+            if (self.is_mapping_running() and target == self.bb.active_map_name
+                    and not delete_db):
+                return self.process
+            if existing:
+                allowed, detail = self._safety.tracker.can_extend(target, self.process)
+                if not allowed:
+                    raise RuntimeError(
+                        f"Cannot extend existing map '{target}': {detail}. "
+                        "Start localization and wait for verified lidar-map matches."
+                    )
+                if not self.nav2_runtime.stop():
+                    raise RuntimeError("Could not stop Nav2 before mapping")
+                self.set_mode_mapping()
+                return self.process
             return self._start_rtabmap(
-                map_name, extend_map=True, delete_db=delete_db, rviz=rviz,
+                target, extend_map=True, delete_db=delete_db, rviz=rviz,
             )
-        if not self.nav2_runtime.stop():
-            raise RuntimeError("Could not stop Nav2 before mapping")
-        self.set_mode_mapping()
-        return self.process
 
     def _start_rtabmap(
         self,
@@ -248,6 +274,10 @@ class RtabmapRuntimeManager(RuntimeManager):
                 )
 
         db_path = self._db_path(map_name)
+        if extend_map and os.path.exists(db_path):
+            raise RuntimeError(
+                "Existing maps must be localized and verified before mapping"
+            )
         # A new active map may only get its database when mapping is saved.
         saving_target_map = (
             map_name == self.bb.active_map_name and self.is_mapping_running()
@@ -291,6 +321,10 @@ class RtabmapRuntimeManager(RuntimeManager):
             self.MODE_MAPPING if extend_map else self.MODE_LOCALIZATION
         )
         self.bb.active_map_name = map_name
+        if extend_map:
+            self._safety.tracker.begin_mapping(map_name, proc, existing_map=False)
+        else:
+            self._safety.tracker.begin_localization(map_name, proc)
         self._publish_active_map()
 
         self.node.get_logger().info(
@@ -317,18 +351,32 @@ class RtabmapRuntimeManager(RuntimeManager):
         return self.bb.slam_launch_process
 
     def set_mode_localization(self):
-        if not self._call_service("/rtabmap/set_mode_localization"):
-            raise RuntimeError(
-                "Could not switch RTAB-Map to localization mode"
-            )
-        self.bb.slam_runtime_mode = self.MODE_LOCALIZATION
+        with self._process_lock:
+            if not self._call_service("/rtabmap/set_mode_localization"):
+                raise RuntimeError(
+                    "Could not switch RTAB-Map to localization mode"
+                )
+            self.bb.slam_runtime_mode = self.MODE_LOCALIZATION
+            self._safety.tracker.begin_localization(self.bb.active_map_name, self.process)
 
     def set_mode_mapping(self):
-        if not self._call_service("/rtabmap/set_mode_mapping"):
-            raise RuntimeError(
-                "Could not switch RTAB-Map to mapping mode"
+        with self._process_lock:
+            if self.is_mapping_running():
+                return
+            target = self.bb.active_map_name
+            existing = os.path.exists(self._db_path(target))
+            if existing:
+                allowed, detail = self._safety.tracker.can_extend(target, self.process)
+                if not allowed:
+                    raise RuntimeError(f"Cannot enable mapping: {detail}")
+            if not self._call_service("/rtabmap/set_mode_mapping"):
+                raise RuntimeError(
+                    "Could not switch RTAB-Map to mapping mode"
+                )
+            self.bb.slam_runtime_mode = self.MODE_MAPPING
+            self._safety.tracker.begin_mapping(
+                target, self.process, existing_map=existing,
             )
-        self.bb.slam_runtime_mode = self.MODE_MAPPING
 
     def get_running_mode(self) -> str:
         if not self.is_running():

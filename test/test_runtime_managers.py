@@ -76,7 +76,7 @@ def test_managed_mapping_and_localization_forward_corrected_lidar(runtime, tmp_p
     manager.raw_lidar_topic = "/velodyne/points_sensor"
     (tmp_path / "plant.db").touch()
     start = manager.start_mapping if mode == "mapping" else manager.start_localization
-    start("plant", rviz=False)
+    start("plant" if mode == "localization" else "fresh_plant", rviz=False)
     assert "raw_lidar_topic:=/velodyne/points_sensor" in launches[0]
 
 
@@ -144,7 +144,6 @@ def test_save_and_no_save_shutdown_paths(runtime):
 @pytest.mark.parametrize("failed_service", ["pause", "backup"])
 def test_save_failure_preserves_mapping_and_prevents_localization(runtime, tmp_path, failed_service):
     manager, launches, stops = runtime
-    (tmp_path / "plant.db").touch()
     previous = manager.start_mapping("plant")
     manager._call_service.side_effect = lambda service, **kwargs: service != f"/rtabmap/{failed_service}"
 
@@ -177,8 +176,8 @@ def test_localization_launch_and_map_switch_use_one_launch_path(runtime, tmp_pat
 @pytest.mark.parametrize("target_map", ["one", "two"])
 def test_localization_replaces_mapping_even_for_the_same_map(runtime, tmp_path, target_map):
     manager, launches, stops = runtime
-    (tmp_path / f"{target_map}.db").touch()
     previous = manager.start_mapping("one")
+    (tmp_path / f"{target_map}.db").touch()
 
     process = manager.start_localization(target_map, rviz=False)
 
@@ -269,8 +268,9 @@ def test_cancelled_launch_completion_cannot_satisfy_next_map_request(
     runtime, tmp_path, behavior_type, initial_mode, expected_mode, launch_count,
 ):
     manager, launches, stops = runtime
-    for name in ("initial", "one", "two"):
-        (tmp_path / f"{name}.db").touch()
+    if expected_mode == "localization":
+        for name in ("initial", "one", "two"):
+            (tmp_path / f"{name}.db").touch()
     if initial_mode is not None:
         getattr(manager, f"start_{initial_mode}")("initial")
     behavior = behavior_type(manager)
@@ -310,8 +310,9 @@ def test_preempted_map_worker_drains_before_replacement_request(
     target_map, old_failure,
 ):
     manager, launches, stops = runtime
-    for name in ("initial", "one", "two"):
-        (tmp_path / f"{name}.db").touch()
+    if expected_mode == "localization":
+        for name in ("initial", "one", "two"):
+            (tmp_path / f"{name}.db").touch()
     getattr(manager, f"start_{initial_mode}")("initial")
     entered, release = Event(), Event()
     original_start = manager._start_rtabmap
@@ -395,15 +396,17 @@ def test_invalid_localization_map_does_not_stop_current_runtime(runtime):
     assert manager.is_mapping_running()
 
 
-def test_switching_back_to_mapping_stops_nav2_without_relaunching_rtab(runtime, tmp_path):
+def test_switching_back_to_mapping_requires_verified_alignment(runtime, tmp_path):
     manager, launches, stops = runtime
     (tmp_path / "one.db").touch()
     process = manager.start_localization("one")
-    assert manager.start_mapping() is process
-    assert not manager.nav2_runtime.is_running()
-    assert manager.is_mapping_running()
+    with pytest.raises(RuntimeError, match="Cannot extend existing map"):
+        manager.start_mapping()
+    assert manager.process is process
+    assert manager.nav2_runtime.is_running()
+    assert manager.is_localization_running()
     assert len(launches) == 2
-    manager._call_service.assert_called_with("/rtabmap/set_mode_mapping")
+    manager._call_service.assert_not_called()
 
 
 def test_background_operation_busy_poll_and_error_propagation(runtime):
@@ -586,8 +589,9 @@ def test_start_waiting_to_launch_is_rejected_when_system_is_closing(runtime, mon
 @pytest.mark.parametrize("mode", ["mapping", "localization"])
 def test_change_map_preserves_mode_and_restarts_only_expected_children(runtime, tmp_path, mode):
     manager, launches, stops = runtime
-    (tmp_path / "one.db").touch()
-    (tmp_path / "two.db").touch()
+    if mode == "localization":
+        (tmp_path / "one.db").touch()
+        (tmp_path / "two.db").touch()
     start = manager.start_mapping if mode == "mapping" else manager.start_localization
     first = start("one")
     assert manager.change_map("two")
