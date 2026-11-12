@@ -36,9 +36,9 @@ def make_rtabmap_node(incremental_memory, condition):
             "RGBD/ProximityPathMaxNeighbors": (
                 "10" if incremental_memory == "false" else "1"
             ),
-            "RGBD/ProximityGlobalScanMap": (
-                "true" if incremental_memory == "false" else "false"
-            ),
+            # Use proximity-path scan matching in localization too. Global
+            # scan-map matching showed multi-second updates without matches.
+            "RGBD/ProximityGlobalScanMap": "false",
 
             "Grid/MaxGroundHeight": ParameterValue(
                 LaunchConfiguration("ground_max_height"), value_type=str,
