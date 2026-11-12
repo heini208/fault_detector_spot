@@ -1,6 +1,4 @@
 """Regression coverage for map extension admission and tracking-loss suspension."""
-from types import SimpleNamespace
-
 import pytest
 from builtin_interfaces.msg import Time
 from geometry_msgs.msg import PoseWithCovarianceStamped
@@ -140,3 +138,44 @@ def test_new_map_remains_creatable_without_prior_localization(runtime):
     manager.start_mapping("brand_new")
     assert manager.is_mapping_running()
     assert "extend_map:=true" in launches[0]
+
+
+def test_rejected_lidar_registration_never_confirms_alignment():
+    tracker, process, now, steady, sample = harness()
+    for second in (11, 12, 13, 14):
+        sample(second, accepted=False)
+    assert tracker.snapshot()[0] == LocalizationState.LOCALIZING
+    assert not tracker.can_extend("plant", process)[0]
+
+
+def test_seed_during_mapping_requires_immediate_pause():
+    tracker, process, now, steady, sample = harness()
+    for second in (11, 12, 13):
+        sample(second)
+    tracker.begin_mapping("plant", process, existing_map=True)
+    tracker.observe_seed(pose(13))
+    assert tracker.snapshot()[0] == LocalizationState.LOST
+    assert tracker.requires_pause(process)
+
+
+def test_lost_alignment_during_mode_transition_is_latched():
+    tracker, process, now, steady, sample = harness()
+    for second in (11, 12, 13):
+        sample(second)
+    tracker.observe_seed(pose(13))
+    tracker.begin_mapping("plant", process, existing_map=True)
+    assert tracker.snapshot()[0] == LocalizationState.LOST
+    assert tracker.requires_pause(process)
+
+
+def test_watchdog_requests_pause_after_tracking_loss(runtime):
+    manager, launches, stops = runtime
+    manager.start_mapping("new_map")
+    tracker = manager._safety.tracker
+    tracker._mapping_since -= 10.0
+    monitor = manager._safety
+    monitor.tick()
+    assert monitor._pause_future is not None
+    monitor._pause_future.result(timeout=2)
+    manager._call_service.assert_any_call("/rtabmap/pause", timeout_sec=3.0)
+    assert tracker.snapshot()[2]

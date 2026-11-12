@@ -5,6 +5,7 @@ Only fresh, matched, accepted lidar registrations establish LOCALIZED.
 """
 from enum import Enum
 from threading import RLock
+import math
 import time
 
 from fault_detector_spot.navigation.localization_quality import (
@@ -41,6 +42,13 @@ class LocalizationStateTracker:
         self.maximum_age_sec = maximum_age_sec
         self.stream_timeout_sec = stream_timeout_sec
         self._quality = LocalizationQualityConfig(maximum_age_sec=maximum_age_sec)
+        # Mapping covariance accumulates along the graph; do not apply the
+        # much tighter localization-admission uncertainty threshold to mapping.
+        self._mapping_quality = LocalizationQualityConfig(
+            maximum_age_sec=maximum_age_sec,
+            maximum_position_std_m=1.5,
+            maximum_yaw_std_rad=math.radians(30.0),
+        )
         self._lock = RLock()
         self.reset()
 
@@ -66,6 +74,13 @@ class LocalizationStateTracker:
             self._mapping_info_boundary = 0.0
             self._paused = False
 
+    def _now_ns(self):
+        try:
+            value = self._ros_clock_ns()
+            return value if type(value) is int and value >= 0 else 0
+        except (TypeError, ValueError, OverflowError):
+            return 0
+
     def begin_localization(self, map_name, process):
         with self._lock:
             self.reset()
@@ -74,14 +89,18 @@ class LocalizationStateTracker:
             self.mode = "localization"
             self.state = LocalizationState.LOCALIZING
             self.reason = "Awaiting fresh, accepted lidar-to-map registrations"
-            self._minimum_stamp = int(self._ros_clock_ns())
+            self._minimum_stamp = self._now_ns()
 
     def begin_mapping(self, map_name, process, *, existing_map):
         with self._lock:
             if existing_map:
+                # Admission was checked before the mode-change service. A seed
+                # could arrive while the service call is in flight. In that case
+                # record LOST and let the watchdog pause immediately.
                 allowed, reason = self.can_extend(map_name, process)
                 if not allowed:
-                    raise RuntimeError(f"Cannot extend map: {reason}")
+                    self.state = LocalizationState.LOST
+                    self.reason = f"Localization changed during mapping transition: {reason}"
             else:
                 self.reset()
                 self.map_name = map_name
@@ -126,12 +145,13 @@ class LocalizationStateTracker:
             self._info = message
             self._check_registration()
 
-    def _pose_error(self):
+    def _pose_error(self, *, mapping=False):
         if self._pose is None:
             return "No localization pose"
         try:
             return assess_localization_quality(
-                self._pose, int(self._ros_clock_ns()), self._quality,
+                self._pose, self._now_ns(),
+                self._mapping_quality if mapping else self._quality,
             ).detail
         except (TypeError, ValueError, OverflowError):
             return "Localization clock is invalid"
@@ -163,7 +183,7 @@ class LocalizationStateTracker:
             if self.mode == "none":
                 return
             self._minimum_stamp = max(
-                self._minimum_stamp, int(self._ros_clock_ns()),
+                self._minimum_stamp, self._now_ns(),
                 self._pose_stamp, self._info_stamp,
             )
             self._accepted_matches = 0
@@ -191,7 +211,7 @@ class LocalizationStateTracker:
                 self.state = LocalizationState.LOST
                 self.reason = "RTAB-Map pose or processed-scan stream stopped advancing"
                 return
-            error = self._pose_error()
+            error = self._pose_error(mapping=True)
             if error:
                 self.state = LocalizationState.LOST
                 self.reason = f"Mapping pose became unreliable: {error}"

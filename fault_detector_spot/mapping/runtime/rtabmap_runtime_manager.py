@@ -74,8 +74,10 @@ class RtabmapRuntimeManager(RuntimeManager):
             errors.append(str(exception))
         localization_state, localization_detail, mapping_paused = self._safety.tick()
         nav2_running = self.nav2_runtime.is_running()
+        if mode == self.MODE_MAPPING and localization_state.value == "lost":
+            errors.append(f"Unsafe mapping: {localization_detail}")
         if mapping_paused and mode == self.MODE_MAPPING:
-            errors.append(f"Mapping paused: {localization_detail}")
+            errors.append("Mapping is paused")
         if self.process is not None and mode == self.MODE_NONE:
             errors.append("RTAB-Map process exited unexpectedly")
         if mode == self.MODE_LOCALIZATION and not nav2_running:
