@@ -508,6 +508,7 @@ class NavigationSetupCoordinator:
         operation_code: int,
         command_id: CommandID,
         map_name: str = "",
+        mapping_rviz: bool = True,
     ) -> SetupOperation:
         """Delegate one asynchronous runtime operation to the shared lane."""
         with self._lock:
@@ -516,7 +517,7 @@ class NavigationSetupCoordinator:
             command_id, normalized_map = self._runtime_command(
                 command_id, map_name,
             )
-            command = self.command_factory.create(command_id, normalized_map)
+            command = self.command_factory.create(command_id, normalized_map, mapping_rviz=mapping_rviz)
             operation = self.setup_coordinator.prepare_command(context, command)
             self._operations.register(
                 operation.request_id,

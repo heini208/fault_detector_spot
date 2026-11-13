@@ -32,7 +32,7 @@ BASE_KEYS.update({
     for mode in ('normal', 'precision')
 })
 BASE_KEYS.update(relative_profile='base_mode', tag_profile='base_mode')
-BOOL_KEYS = {'mount_approval_at_startup', 'environment_collision_checking'}
+BOOL_KEYS = {'mount_approval_at_startup', 'environment_collision_checking', 'mapping_rviz'}
 MODE_KEYS = {'arm_mode', 'base_mode'}
 NUMBER_KEYS = set(ARM_KEYS.values()) | (set(BASE_KEYS.values()) - MODE_KEYS) | {'force_threshold_percent'}
 
@@ -83,6 +83,7 @@ def factory_settings():
     values = {
         'mount_approval_at_startup': False,
         'environment_collision_checking': False,
+        'mapping_rviz': True,
         'arm_mode': 'normal',
         'base_mode': 'normal',
         'force_threshold_percent': 100.0,

@@ -2,6 +2,7 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
     QButtonGroup,
     QComboBox,
+    QCheckBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -16,6 +17,7 @@ from fault_detector_msgs.msg import (
     OperationalIntent,
 )
 from ..shared.control_helper import UIControlHelper
+from fault_detector_spot.shared.persistence.basic_settings import startup_settings
 
 
 class NavigationControls(UIControlHelper):
@@ -190,6 +192,13 @@ class NavigationControls(UIControlHelper):
         row.addWidget(self.mode_none)
         row.addWidget(self.mode_mapping)
         row.addWidget(self.mode_localization)
+        self.mapping_rviz = QCheckBox("RViz mapping visualization")
+        self.mapping_rviz.setChecked(startup_settings().get('mapping_rviz', True))
+        self.mapping_rviz.setToolTip(
+            "Show RViz on the next mapping or localization launch. "
+            "Changing this does not affect a running session."
+        )
+        row.addWidget(self.mapping_rviz)
 
         return row
 
@@ -423,6 +432,7 @@ class NavigationControls(UIControlHelper):
         intent = NavigationSetupIntent()
         intent.operation = operation
         intent.map_name = map_name
+        intent.mapping_rviz = self.mapping_rviz.isChecked()
         intent.waypoint_name = waypoint_name
         intent.tag_id = tag_id
         return self.ui.execute_navigation_setup(intent)

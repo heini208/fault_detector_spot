@@ -408,6 +408,7 @@ class NavigationSetupApi:
                 operation_code=operation_code,
                 command_id=_RUNTIME_OPERATIONS[operation_code],
                 map_name=intent.map_name,
+                mapping_rviz=intent.mapping_rviz,
             )
             execution = _NavigationExecution(
                 goal_handle=goal_handle,

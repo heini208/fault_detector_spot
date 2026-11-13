@@ -440,6 +440,7 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
             command_id=command.command_id,
             stamp=self._create_command_stamp(),
             map_name=command.map_name,
+            mapping_rviz=command.mapping_rviz,
         )
 
     def _waypoint_command(

@@ -61,9 +61,10 @@ class _AsyncHelper:
         self.change_calls.append(map_name)
         return True
 
-    def start_localization(self, map_name):
+    def start_localization(self, map_name, rviz=True):
         self.start_localization_calls += 1
         self.localization_map = map_name
+        self.localization_rviz = rviz
         return SimpleNamespace(poll=lambda: None)
 
     def is_localization_running(self):

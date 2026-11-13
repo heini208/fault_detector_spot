@@ -416,10 +416,10 @@ def test_concurrent_request_cannot_enter_between_validation_and_registration(tmp
     release = Event()
     original = navigation.command_factory.create
 
-    def create(*args):
+    def create(*args, **kwargs):
         entered.set()
         assert release.wait(5)
-        return original(*args)
+        return original(*args, **kwargs)
 
     monkeypatch.setattr(navigation.command_factory, "create", create)
     with ThreadPoolExecutor(max_workers=2) as pool:

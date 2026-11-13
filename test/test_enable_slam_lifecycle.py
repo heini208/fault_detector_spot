@@ -43,7 +43,7 @@ class FakeHelper:
         self.change_calls.append(map_name)
         return True
 
-    def start_mapping(self, map_name=None):
+    def start_mapping(self, map_name=None, rviz=True):
         self.start_calls += 1
         self.start_maps.append(map_name)
         if map_name is not None:

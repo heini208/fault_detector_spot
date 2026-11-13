@@ -20,6 +20,7 @@ RECORDING_SCHEMA_VERSION = 1
 _TRANSIENT_FIELDS = {
     SemanticCommand: frozenset({
         "motion_sensor_id",
+        "mapping_rviz",
     }),
 }
 

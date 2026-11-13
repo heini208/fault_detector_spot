@@ -136,6 +136,9 @@ def generate_launch_description():
         package="fault_detector_spot",
         executable="lidar_self_filter",
         name="lidar_self_filter",
+        # Small three-coordinate transforms do not need a BLAS worker pool.
+        # Keep scan processing from competing with control/TF callbacks.
+        additional_env={"OPENBLAS_NUM_THREADS": "1", "OMP_NUM_THREADS": "1"},
         output="screen",
         parameters=[LaunchConfiguration("mapping_params_file"), {
             "use_sim_time": LaunchConfiguration("use_sim_time"),

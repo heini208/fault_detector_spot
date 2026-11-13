@@ -129,6 +129,7 @@ class SemanticCommand:
     surface_tolerance_m: float = 0.0
     aligned_preapproach_distance_m: float = 0.0
     map_name: str = ""
+    mapping_rviz: bool = True
     waypoint_name: str = ""
     inspection: InspectionSelection = field(
         default_factory=InspectionSelection
@@ -147,6 +148,8 @@ class SemanticCommand:
     ignore_environment_collisions: bool = False
 
     def __post_init__(self):
+        if type(self.mapping_rviz) is not bool:
+            raise TypeError("Mapping RViz must be a boolean")
         if not isinstance(self.precision_mode, bool):
             raise TypeError("Precision mode must be a boolean")
         if (not math.isfinite(self.precision_orientation_tolerance_rad)

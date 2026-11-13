@@ -36,10 +36,10 @@ class EnableLocalization(py_trees.behaviour.Behaviour):
         command = getattr(self.blackboard, "last_command", None)
         return getattr(command, "map_name", "").strip()
 
-    def _start_localization(self, map_name):
+    def _start_localization(self, map_name, rviz):
         # The runtime owns the complete stop/start transition. Changing maps
         # separately would first launch the target in the previous mode.
-        process = self.rtabmap_runtime.start_localization(map_name)
+        process = self.rtabmap_runtime.start_localization(map_name, rviz=rviz)
         if process is None:
             raise RuntimeError(
                 "Localization launch did not return a process"
@@ -65,6 +65,7 @@ class EnableLocalization(py_trees.behaviour.Behaviour):
                     self._operation_name,
                     self._start_localization,
                     requested_map or current_map,
+                    getattr(getattr(self.blackboard, "last_command", None), "mapping_rviz", True),
                 )
             except Exception as exception:
                 self.feedback_message = (

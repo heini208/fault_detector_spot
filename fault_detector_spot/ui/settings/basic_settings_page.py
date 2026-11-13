@@ -74,6 +74,8 @@ class BasicSettingsPage(QWidget):
         self._boolean(startup, 'environment_collision_checking', 'Check for surrounding obstacles at startup',
                       'Use MoveIt to check arm paths against surrounding obstacles after the mount is approved. '
                       'Checks for collisions with the robot itself are controlled separately.')
+        self._boolean(startup, 'mapping_rviz', 'RViz mapping visualization enabled at startup',
+                      'Initial value of the mapping visualization toggle. Applies to mapping and localization launches.')
         modes = self._group('Default movement modes')
         for key, label in [('arm_mode', 'Default arm mode'), ('base_mode', 'Default walking mode')]:
             field = _NoWheelComboBox()

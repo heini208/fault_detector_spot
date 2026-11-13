@@ -33,6 +33,7 @@ class _Phase(Enum):
     FORCE_BASELINE = "force_baseline"
     PLAN_WAIT = "plan_wait"
     MOTION_PREPARING = "motion_preparing"
+    FRAME_WAIT = "frame_wait"
     MOVING = "moving"
     ARM_STOPPING = "arm_stopping"
     ARM_SETTLING = "arm_settling"
@@ -265,6 +266,11 @@ class GuardedProbeExecution:
             return self._prepare_plan()
         if phase is _Phase.MOTION_PREPARING:
             return self._advance_motion_preparation(self._poll_preparation)
+        if phase is _Phase.FRAME_WAIT:
+            update = self._check_prepared_motion()
+            if update is not None:
+                return update
+            return self._begin_prepared_motion()
         if phase is _Phase.MOVING:
             return self._poll_primary_motion()
         if phase is _Phase.ARM_STOPPING:
@@ -528,6 +534,11 @@ class GuardedProbeExecution:
             return None
         try:
             reason = self._validate_prepared_motion(self._plan)
+        except MovementGeometryUnavailable as exception:
+            self._phase = _Phase.FRAME_WAIT
+            self._force_baseline = None
+            self.force_baseline_sampler.reset()
+            return ArmMovementUpdate(ArmMovementOutcome.RUNNING, str(exception))
         except Exception as exception:
             return self._terminal(
                 ArmMovementOutcome.PLANNING_FAILED,

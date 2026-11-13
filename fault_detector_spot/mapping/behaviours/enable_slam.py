@@ -32,10 +32,10 @@ class EnableSLAM(py_trees.behaviour.Behaviour):
         command = getattr(self.blackboard, "last_command", None)
         return getattr(command, "map_name", "").strip()
 
-    def _start_mapping(self, map_name):
+    def _start_mapping(self, map_name, rviz):
         # The runtime owns the map/mode transition. Passing the target directly
         # avoids relying on an active-map snapshot taken before worker admission.
-        process = self.rtabmap_runtime.start_mapping(map_name)
+        process = self.rtabmap_runtime.start_mapping(map_name, rviz=rviz)
         if process is None:
             raise RuntimeError(
                 "Mapping launch did not return a process"
@@ -61,6 +61,7 @@ class EnableSLAM(py_trees.behaviour.Behaviour):
                     self._operation_name,
                     self._start_mapping,
                     requested_map or current_map,
+                    getattr(getattr(self.blackboard, "last_command", None), "mapping_rviz", True),
                 )
             except Exception as exception:
                 self.feedback_message = (

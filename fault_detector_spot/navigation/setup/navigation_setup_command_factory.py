@@ -20,6 +20,7 @@ class NavigationSetupCommandFactory:
         self,
         command_id: CommandID,
         map_name: str = "",
+        mapping_rviz: bool = True,
     ) -> SemanticCommand:
         try:
             normalized_id = CommandID(command_id)
@@ -44,6 +45,7 @@ class NavigationSetupCommandFactory:
         return SemanticCommand(
             command_id=normalized_id,
             map_name=normalized_map,
+            mapping_rviz=mapping_rviz,
         )
 
 

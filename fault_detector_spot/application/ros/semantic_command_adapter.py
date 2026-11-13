@@ -92,6 +92,7 @@ def semantic_command_from_message(
             message.aligned_preapproach_distance_m
         ),
         map_name=message.map_name,
+        mapping_rviz=message.mapping_rviz,
         waypoint_name=message.waypoint_name,
         inspection=InspectionSelection(
             object_id=message.object_id,
@@ -139,6 +140,7 @@ def semantic_command_to_message(
         command.aligned_preapproach_distance_m
     )
     message.map_name = command.map_name
+    message.mapping_rviz = command.mapping_rviz
     message.waypoint_name = command.waypoint_name
     message.object_id = command.inspection.object_id
     message.routine_id = command.inspection.routine_id

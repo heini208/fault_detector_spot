@@ -13,6 +13,8 @@ class MapCommand(ExecutionCommand):
         command_id: str,
         stamp: Time,
         map_name: str,
+        mapping_rviz: bool = True,
     ):
         super().__init__(command_id, stamp)
         self.map_name = map_name
+        self.mapping_rviz = mapping_rviz

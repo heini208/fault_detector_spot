@@ -95,6 +95,7 @@ from fault_detector_spot.manipulation.arm_motion_parameters import (
 TAG_POSITION_VERIFY_TIMEOUT_SEC = 2.0
 CHECKPOINT_POSITION_TOLERANCE_M = 0.020
 PLANNING_FRAME_MAX_AGE_SEC = 0.25
+PLANNING_FRAME_WAIT_TIMEOUT_SEC = 3.0
 PRECISION_SETTLE_SEC = 0.5
 PRECISION_SAMPLE_TIMEOUT_SEC = 6.0
 PRECISION_CORRECTION_SPEED_SCALE = 0.25
@@ -106,6 +107,10 @@ SURFACE_ORIENTATION_MAX_ERROR_RAD = math.radians(5.0)
 SURFACE_ORIENTATION_TIMEOUT_SEC = 2.0
 SURFACE_ORIENTATION_SENSING_TIMEOUT_SEC = 6.0
 SURFACE_ORIENTATION_MAX_CORRECTIONS = 1
+
+
+class _PlanningFrameNotFresh(ValueError):
+    """A valid planning transform may become available on a later poll."""
 
 
 class _ArmOperation:
@@ -1235,7 +1240,7 @@ class ArmMovementExecutor(MovementExecutor):
                     transform_time=now, timeout_sec=0.0,
                 )
             except TransformException as exception:
-                raise ValueError(
+                raise _PlanningFrameNotFresh(
                     f"Planning frame TF is not fresh: latest age {age:.3f} s; "
                     f"current-time transform unavailable: {exception}"
                 ) from exception
@@ -1244,11 +1249,31 @@ class ArmMovementExecutor(MovementExecutor):
                 raise ValueError("Planning frame TF did not match the requested current time")
             age = (clock.now().nanoseconds - stamp_ns) * 1e-9
         if not 0.0 <= age <= PLANNING_FRAME_MAX_AGE_SEC:
-            raise ValueError(
+            raise _PlanningFrameNotFresh(
                 f"Planning frame TF is not fresh: age {age:.3f} s, "
                 f"maximum {PLANNING_FRAME_MAX_AGE_SEC:.3f} s"
             )
         transform_to_pose_data(transform).validate()
+        return transform
+
+    def _await_fresh_planning_frame_transform(self):
+        """Yield to the executor while waiting; never accept older geometry."""
+        try:
+            transform = self._fresh_planning_frame_transform()
+        except (_PlanningFrameNotFresh, TransformException) as exception:
+            now = self._monotonic_clock()
+            if self._planning_frame_wait_started is None:
+                self._planning_frame_wait_started = now
+            elapsed = now - self._planning_frame_wait_started
+            if elapsed >= PLANNING_FRAME_WAIT_TIMEOUT_SEC:
+                raise ValueError(
+                    f"Timed out after {elapsed:.3f} s waiting for fresh planning frame TF: {exception}"
+                ) from exception
+            raise MovementGeometryUnavailable(
+                f"Waiting for fresh planning frame TF ({elapsed:.1f}/"
+                f"{PLANNING_FRAME_WAIT_TIMEOUT_SEC:.1f} s): {exception}"
+            ) from exception
+        self._planning_frame_wait_started = None
         return transform
 
     def _planning_target(self, target_hand, planning_frame):
@@ -1256,7 +1281,7 @@ class ArmMovementExecutor(MovementExecutor):
             return self.probe_motion_planner.normalize_target(target_hand, planning_frame)
         if target_hand.header.frame_id != ODOM_FRAME_NAME or planning_frame != "body":
             raise ValueError("Planning frame verification requires an odom target and body planning frame")
-        transform = self._fresh_planning_frame_transform()
+        transform = self._await_fresh_planning_frame_transform()
         target = self.probe_motion_planner.normalize_target(
             target_hand, planning_frame, frame_transform=transform,
         )
@@ -1272,7 +1297,7 @@ class ArmMovementExecutor(MovementExecutor):
         if snapshot is None:
             raise RuntimeError("Prepared arm trajectory has no planning frame snapshot")
         source_target, planned_target, planned_transform = snapshot
-        current_transform = self._fresh_planning_frame_transform()
+        current_transform = self._await_fresh_planning_frame_transform()
         if self._pose_stamp_ns(current_transform) < self._pose_stamp_ns(planned_transform):
             raise ValueError("Planning frame TF timestamp moved backwards")
         current_target = self.probe_motion_planner.normalize_target(
@@ -2309,6 +2334,7 @@ class ArmMovementExecutor(MovementExecutor):
         self._planning_frame_tolerances = None
         self._planning_frame_snapshot = None
         self._ignore_environment_collisions = False
+        self._planning_frame_wait_started = None
 
     def _clear_surface_orientation_state(self) -> None:
         self._surface_orientation_sensor_id = None
