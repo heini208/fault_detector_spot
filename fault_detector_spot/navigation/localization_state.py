@@ -1,11 +1,10 @@
-"""Map-alignment evidence and fail-closed mapping tracking state.
+"""Map-alignment evidence for existing-map admission.
 
 Process liveness and pose covariance alone are not proof of map alignment.
 Only fresh, matched, accepted lidar registrations establish LOCALIZED.
 """
 from enum import Enum
 from threading import RLock
-import math
 import time
 
 from fault_detector_spot.navigation.localization_quality import (
@@ -35,22 +34,13 @@ class LocalizationStateTracker:
     def __init__(
         self, ros_clock_ns, *, steady_clock=time.monotonic,
         required_matches=3, maximum_age_sec=1.5, stream_timeout_sec=3.0,
-        startup_timeout_sec=30.0,
     ):
         self._ros_clock_ns = ros_clock_ns
         self._steady_clock = steady_clock
         self.required_matches = required_matches
         self.maximum_age_sec = maximum_age_sec
         self.stream_timeout_sec = stream_timeout_sec
-        self.startup_timeout_sec = startup_timeout_sec
         self._quality = LocalizationQualityConfig(maximum_age_sec=maximum_age_sec)
-        # Mapping covariance accumulates along the graph; do not apply the
-        # much tighter localization-admission uncertainty threshold to mapping.
-        self._mapping_quality = LocalizationQualityConfig(
-            maximum_age_sec=maximum_age_sec,
-            maximum_position_std_m=1.5,
-            maximum_yaw_std_rad=math.radians(30.0),
-        )
         self._lock = RLock()
         self.reset()
 
@@ -65,17 +55,10 @@ class LocalizationStateTracker:
             self._info = None
             self._pose_stamp = 0
             self._info_stamp = 0
-            self._pose_at = 0.0
-            self._info_at = 0.0
             self._last_checked_stamp = 0
             self._minimum_stamp = 0
             self._accepted_matches = 0
             self._last_accepted_at = 0.0
-            self._mapping_since = 0.0
-            self._mapping_starting = False
-            self._mapping_pose_boundary = 0.0
-            self._mapping_info_boundary = 0.0
-            self._paused = False
 
     def _now_ns(self):
         try:
@@ -99,7 +82,7 @@ class LocalizationStateTracker:
             if existing_map:
                 # Admission was checked before the mode-change service. A seed
                 # could arrive while the service call is in flight. In that case
-                # record LOST and let the watchdog pause immediately.
+                # record LOST for the runtime diagnostics.
                 allowed, reason = self.can_extend(map_name, process)
                 if not allowed:
                     self.state = LocalizationState.LOST
@@ -112,11 +95,6 @@ class LocalizationStateTracker:
                 self.reason = "Creating a new map, no prior global alignment"
                 self._minimum_stamp = self._now_ns()
             self.mode = "mapping"
-            self._mapping_starting = not existing_map
-            self._mapping_since = self._steady_clock()
-            self._mapping_pose_boundary = self._pose_at
-            self._mapping_info_boundary = self._info_at
-            self._paused = False
 
     def observe_pose(self, message):
         with self._lock:
@@ -130,7 +108,6 @@ class LocalizationStateTracker:
                 return
             if stamp > self._pose_stamp:
                 self._pose_stamp = stamp
-                self._pose_at = self._steady_clock()
             self._pose = message
             self._check_registration()
 
@@ -146,17 +123,16 @@ class LocalizationStateTracker:
                 return
             if stamp > self._info_stamp:
                 self._info_stamp = stamp
-                self._info_at = self._steady_clock()
             self._info = message
             self._check_registration()
 
-    def _pose_error(self, *, mapping=False):
+    def _pose_error(self):
         if self._pose is None:
             return "No localization pose"
         try:
             return assess_localization_quality(
                 self._pose, self._now_ns(),
-                self._mapping_quality if mapping else self._quality,
+                self._quality,
             ).detail
         except (TypeError, ValueError, OverflowError):
             return "Localization clock is invalid"
@@ -206,38 +182,10 @@ class LocalizationStateTracker:
             if now - self._last_accepted_at > self.stream_timeout_sec:
                 self.state = LocalizationState.LOST
                 self.reason = "Accepted lidar-to-map registration stream is stale"
-        if self.mode == "mapping" and not self._paused:
-            # A newly launched ROS process needs time for node initialization,
-            # discovery and the first processed scan. Once both streams arrive,
-            # use the normal tracking timeout for the rest of this session.
-            if self._mapping_starting:
-                if (self._pose_at > self._mapping_pose_boundary
-                        and self._info_at > self._mapping_info_boundary):
-                    self._mapping_starting = False
-                elif now - self._mapping_since < self.startup_timeout_sec:
-                    return
-                else:
-                    self.state = LocalizationState.LOST
-                    self.reason = "RTAB-Map startup timed out awaiting pose and processed-scan streams"
-                    return
-            if now - self._mapping_since < self.stream_timeout_sec:
-                return
-            if (self._pose_at <= self._mapping_pose_boundary
-                    or self._info_at <= self._mapping_info_boundary
-                    or now - self._pose_at > self.stream_timeout_sec
-                    or now - self._info_at > self.stream_timeout_sec):
-                self.state = LocalizationState.LOST
-                self.reason = "RTAB-Map pose or processed-scan stream stopped advancing"
-                return
-            error = self._pose_error(mapping=True)
-            if error:
-                self.state = LocalizationState.LOST
-                self.reason = f"Mapping pose became unreliable: {error}"
-
     def snapshot(self):
         with self._lock:
             self._refresh()
-            return self.state, self.reason, self._paused
+            return self.state, self.reason, False
 
     def can_extend(self, map_name, process):
         with self._lock:
@@ -251,14 +199,3 @@ class LocalizationStateTracker:
             if error:
                 return False, error
             return True, ""
-
-    def requires_pause(self, process):
-        with self._lock:
-            self._refresh()
-            return (self.mode == "mapping" and self.process is process
-                    and self.state == LocalizationState.LOST and not self._paused)
-
-    def pause_confirmed(self, process):
-        with self._lock:
-            if self.process is process and self.mode == "mapping":
-                self._paused = True

@@ -1,4 +1,4 @@
-"""Regression coverage for map extension admission and tracking-loss suspension."""
+"""Regression coverage for map extension admission without automatic mapping suspension."""
 import pytest
 from builtin_interfaces.msg import Time
 from geometry_msgs.msg import PoseWithCovarianceStamped
@@ -82,19 +82,6 @@ def test_seed_and_loss_of_accepted_registrations_revoke_permission():
     assert not tracker.can_extend("plant", process)[0]
 
 
-def test_mapping_lost_tracking_requires_pause_and_latches_loss():
-    tracker, process, now, steady, sample = harness()
-    for second in (11, 12, 13):
-        sample(second)
-    tracker.begin_mapping("plant", process, existing_map=True)
-    steady[0] = 17.0
-    assert tracker.requires_pause(process)
-    assert tracker.snapshot()[0] == LocalizationState.LOST
-    tracker.pause_confirmed(process)
-    assert tracker.snapshot()[2]
-    assert not tracker.requires_pause(process)
-
-
 def test_runtime_rejects_saved_map_without_localization(runtime, tmp_path):
     manager, launches, stops = runtime
     (tmp_path / "plant.db").touch()
@@ -148,14 +135,14 @@ def test_rejected_lidar_registration_never_confirms_alignment():
     assert not tracker.can_extend("plant", process)[0]
 
 
-def test_seed_during_mapping_requires_immediate_pause():
+def test_seed_during_mapping_invalidates_alignment():
     tracker, process, now, steady, sample = harness()
     for second in (11, 12, 13):
         sample(second)
     tracker.begin_mapping("plant", process, existing_map=True)
     tracker.observe_seed(pose(13))
     assert tracker.snapshot()[0] == LocalizationState.LOST
-    assert tracker.requires_pause(process)
+    assert not tracker.snapshot()[2]
 
 
 def test_lost_alignment_during_mode_transition_is_latched():
@@ -165,46 +152,7 @@ def test_lost_alignment_during_mode_transition_is_latched():
     tracker.observe_seed(pose(13))
     tracker.begin_mapping("plant", process, existing_map=True)
     assert tracker.snapshot()[0] == LocalizationState.LOST
-    assert tracker.requires_pause(process)
-
-
-def test_watchdog_requests_pause_after_tracking_loss(runtime):
-    manager, launches, stops = runtime
-    manager.start_mapping("new_map")
-    tracker = manager._safety.tracker
-    tracker._mapping_since -= tracker.startup_timeout_sec + 1.0
-    monitor = manager._safety
-    monitor.tick()
-    assert monitor._pause_future is not None
-    monitor._pause_future.result(timeout=2)
-    manager._call_service.assert_any_call("/rtabmap/pause", timeout_sec=3.0)
-    assert tracker.snapshot()[2]
-
-
-@pytest.mark.parametrize("already_paused", [False, True])
-def test_failed_save_does_not_resume_unsafe_mapping(runtime, already_paused):
-    manager, launches, stops = runtime
-    process = manager.start_mapping("new_map")
-    tracker = manager._safety.tracker
-
-    def service(name, **kwargs):
-        if name == "/rtabmap/backup":
-            # Loss may also arrive while waiting for the backup response.
-            tracker.observe_seed(pose(13))
-            return False
-        return True
-
-    if already_paused:
-        tracker.observe_seed(pose(13))
-        tracker.pause_confirmed(process)
-    manager._call_service.side_effect = service
-    with pytest.raises(RuntimeError, match="unsafe mapping remains paused"):
-        manager.stop(save=True)
-    assert tracker.snapshot()[2]
-    assert manager.process is process
-    assert "/rtabmap/resume" not in [
-        call.args[0] for call in manager._call_service.call_args_list
-    ]
+    assert not tracker.snapshot()[2]
 
 
 def test_map_extension_rejects_pose_older_than_quality_limit():
@@ -217,34 +165,25 @@ def test_map_extension_rejects_pose_older_than_quality_limit():
     assert not tracker.can_extend("plant", process)[0]
 
 
-def test_new_map_allows_process_startup_then_enforces_tracking_timeout():
-    tracker, process, now, steady, sample = harness()
-    tracker.begin_mapping("new", process, existing_map=False)
-    steady[0] = 15.0  # RTAB-Map can still be initializing after five seconds.
-    assert not tracker.requires_pause(process)
-    sample(16, accepted=False)
-    assert not tracker.requires_pause(process)
-    assert tracker.snapshot()[0] == LocalizationState.UNLOCALIZED
-    steady[0] = 20.0  # Loss after startup must not get another startup window.
-    assert tracker.requires_pause(process)
-
-
-@pytest.mark.parametrize("stream", [None, "pose", "info"])
-def test_new_map_startup_timeout_requires_both_streams(stream):
-    tracker, process, now, steady, sample = harness()
-    tracker.begin_mapping("new", process, existing_map=False)
-    now[0] = 41
-    steady[0] = 41.0
-    if stream == "pose":
-        tracker.observe_pose(pose(41))
-    elif stream == "info":
-        tracker.observe_info(registration(41, accepted=False))
-    assert tracker.requires_pause(process)
-    assert "startup timed out" in tracker.snapshot()[1]
-
-
-def test_new_map_seed_during_startup_still_requires_immediate_pause():
-    tracker, process, now, steady, sample = harness()
-    tracker.begin_mapping("new", process, existing_map=False)
-    tracker.observe_seed(pose(11))
-    assert tracker.requires_pause(process)
+@pytest.mark.parametrize("observation", ["missing", "stale", "invalid", "seed"])
+def test_mapping_observations_never_pause_or_stop_runtime(runtime, observation):
+    manager, launches, stops = runtime
+    process = manager.start_mapping("new_map")
+    tracker = manager._safety.tracker
+    tracker._steady_clock = lambda: 1000.0
+    tracker._ros_clock_ns = lambda: 1000_000_000_000
+    if observation in ("stale", "invalid"):
+        message = pose(11 if observation == "stale" else 1000)
+        if observation == "invalid":
+            message.pose.covariance[0] = float("nan")
+        tracker.observe_pose(message)
+        tracker.observe_info(registration(message.header.stamp.sec, accepted=False))
+    elif observation == "seed":
+        tracker.observe_seed(pose(1000))
+    manager._call_service.reset_mock()
+    manager._publish_runtime_status()
+    manager._call_service.assert_not_called()
+    assert manager.process is process
+    assert manager.is_mapping_running()
+    assert not stops
+    assert not tracker.snapshot()[2]
