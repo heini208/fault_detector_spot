@@ -1409,7 +1409,7 @@ application selects a private topic and forwards velocity only during its own
 navigation execution; it disconnects that output before shutting down Nav2.
 The behaviour tree's `NavigateToGoalPose` behaviour delegates to
 `WaypointNavigationExecutor`, which owns arm stow, walking-height preparation,
-Nav2's `/navigate_to_pose` action, cancellation, and stationary completion.
+Nav2's `/navigate_to_pose` action, cancellation, and result propagation.
 
 ---
 
@@ -1589,9 +1589,8 @@ blocks movement. Height is scoped to the stand command and never changes the
 driver's persistent mobility parameters. The slider retains the selection for
 reuse.
 
-Application-managed walks finish with an explicit stationary pose hold. Relative and
-tag moves first wait for measured arrival/settling, then replace the walking
-command and verify the achieved position again using fresh post-stand samples.
+Relative and tag walks finish with an explicit stationary pose hold. These moves
+first wait for measured arrival/settling, then replace the walking command and verify the achieved position again using fresh post-stand samples.
 The hold uses Spot's absolute `body_pose` stand command with the freshly measured
 full `odom`-to-`body` pose, preserving achieved position, height, lean and yaw.
 It does not request the default body alignment relative to the feet, which can
@@ -1613,14 +1612,11 @@ is rechecked after height preparation and monitored during navigation. Loss of
 stowed-arm confirmation requests Nav2 cancellation and fails the operation.
 Preparation failures prevent Nav2 dispatch, and cancellation reaches the current
 preparation or navigation operation, including goals accepted after cancellation.
-After Nav2 reports success, the executor waits for 0.3 s without `/cmd_vel`
-messages before submitting the stationary stand. Even zero-velocity messages
-from Nav2's smoother become new Spot commands and can otherwise override that
-stand. A stream still active after 3 s fails the handoff; cancellation retains
-ownership until the stream is quiet and fresh measured feedback proves stopped.
-The same base executor then requires a successful stand and fresh settling before
-waypoint execution reports success. Failed base commands include Spot's mobility
-feedback status alongside the driver's message, distinguishing overrides,
+Nav2 success completes waypoint execution immediately, without a stationary stand
+or additional pose/settling verification. Cancellation and failure retain ownership
+until the velocity stream is quiet and fresh measured feedback proves stopped.
+Failed base commands include Spot's mobility feedback status alongside the
+driver's message, distinguishing overrides,
 timeouts, and robot-state failures.
 Nav2 goals sent straight to its action server by external clients still bypass
 this application-owned preparation and completion.

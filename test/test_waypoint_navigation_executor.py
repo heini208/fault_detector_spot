@@ -88,11 +88,6 @@ def prepare(executor, arm, base, pose):
     return executor.navigate(pose)
 
 
-def release_velocity(executor, clock):
-    clock.now += executor.velocity_quiet_sec + 0.001
-    return executor.poll()
-
-
 def test_direct_caller_waits_for_stow_then_height_before_dispatch():
     executor, arm, base, client, send, clock, pose, events = rig()
     pose.pose.position.x = 2.0
@@ -185,90 +180,35 @@ def test_nav2_result_is_propagated(success):
     send.set_result(handle)
     assert executor.poll().outcome is Outcome.RUNNING
     result.set_result(SimpleNamespace(status=GoalStatus.STATUS_SUCCEEDED if success else GoalStatus.STATUS_ABORTED))
-    assert executor.poll().outcome is Outcome.RUNNING
     if success:
-        assert "finish_walking" not in events
-        assert release_velocity(executor, clock).outcome is Outcome.RUNNING
-        assert executor.active and base.active
-        assert events[-1] == "finish_walking"
-        assert executor.poll().outcome is Outcome.RUNNING
-        assert executor.navigate(pose).outcome is Outcome.BUSY
-        base.next = BaseOutcome.SUCCESS
         assert executor.poll().outcome is Outcome.SUCCESS
-        assert events.count("finish_walking") == 1
+        assert executor.execution_idle
+        assert not base.active
+        assert handle.cancel_calls == 0
         client.send_goal_async.assert_called_once()
     else:
-        settle_cancel(executor, clock)
-        assert "finish_walking" not in events
-    assert not executor.active
-    if success:
-        assert handle.cancel_calls == 0
-
-
-@pytest.mark.parametrize("immediate", [False, True])
-def test_walking_completion_failure_never_reports_navigation_success(immediate):
-    executor, arm, base, client, send, clock, pose, events = rig()
-    prepare(executor, arm, base, pose)
-    result = ManualFuture()
-    handle = FakeGoalHandle(result)
-    send.set_result(handle)
-    result.set_result(SimpleNamespace(status=GoalStatus.STATUS_SUCCEEDED))
-    if immediate:
-        base.finish_outcome = BaseOutcome.MOTION_FAILED
-    assert executor.poll().outcome is Outcome.RUNNING
-    assert release_velocity(executor, clock).outcome is Outcome.RUNNING
-    if not immediate:
-        base.next = BaseOutcome.MOTION_FAILED
         assert executor.poll().outcome is Outcome.RUNNING
-    assert executor.cancelling
-    assert "Walking completion failed" in executor._cancel_detail
-    settle_cancel(executor, clock)
+        settle_cancel(executor, clock)
+    assert "finish_walking" not in events
     assert not executor.active
-    assert handle.cancel_calls == 0
-    assert events.count("finish_walking") == 1
-    client.send_goal_async.assert_called_once()
 
 
-def test_cancel_during_walking_completion_retains_owner_until_stopped():
+@pytest.mark.parametrize("feedback", [None, "stale"])
+def test_nav2_success_does_not_require_hold_or_pose_feedback(feedback):
     executor, arm, base, client, send, clock, pose, events = rig()
     prepare(executor, arm, base, pose)
+    base.base_pose_source.sample = Mock(return_value=(
+        None if feedback is None else BasePoseSample(0.0, 0.0, 0.0, 0.0)
+    ))
+    base.finish_walking = Mock(side_effect=AssertionError("No hold after Nav2 success"))
     result = ManualFuture()
-    handle = FakeGoalHandle(result)
-    send.set_result(handle)
+    send.set_result(FakeGoalHandle(result))
+    executor._receive_velocity(Twist())
     result.set_result(SimpleNamespace(status=GoalStatus.STATUS_SUCCEEDED))
-    assert executor.poll().outcome is Outcome.RUNNING
-    assert release_velocity(executor, clock).outcome is Outcome.RUNNING
-    # Model the base action retaining ownership until its cancellation completes.
-    base.cancel = Mock()
-    executor.cancel()
-    base.cancel.assert_called_once()
-    assert executor.poll().outcome is Outcome.RUNNING
-    assert executor.active and base.active
-    assert executor.navigate(pose).outcome is Outcome.BUSY
-    base.next = BaseOutcome.MOTION_FAILED
-    assert executor.poll().outcome is Outcome.RUNNING
-    settle_cancel(executor, clock)
-    assert not executor.active
-    assert handle.cancel_calls == 0
-    assert events.count("finish_walking") == 1
-
-
-def test_stowed_arm_guard_remains_active_during_walking_completion():
-    executor, arm, base, client, send, clock, pose, events = rig()
-    timer = attach_monitor(executor)
-    prepare(executor, arm, base, pose)
-    result = ManualFuture()
-    handle = FakeGoalHandle(result)
-    send.set_result(handle)
-    result.set_result(SimpleNamespace(status=GoalStatus.STATUS_SUCCEEDED))
-    assert executor.poll().outcome is Outcome.RUNNING
-    assert release_velocity(executor, clock).outcome is Outcome.RUNNING
-    arm.state = ArmStowState.DEPLOYED
-    timer.callback()
-    assert executor.cancelling
-    assert base.cancel_calls == 1
-    assert handle.cancel_calls == 0
-    assert "Stowed-arm feedback lost" in executor._cancel_detail
+    assert executor.poll().outcome is Outcome.SUCCESS
+    assert executor.execution_idle
+    base.finish_walking.assert_not_called()
+    base.base_pose_source.sample.assert_not_called()
 
 
 def test_rejection_fails_instead_of_waiting_forever():
@@ -451,10 +391,6 @@ def test_navigation_monitor_stops_on_success_and_shutdown():
     handle = FakeGoalHandle(result)
     send.set_result(handle)
     result.set_result(SimpleNamespace(status=GoalStatus.STATUS_SUCCEEDED))
-    assert executor.poll().outcome is Outcome.RUNNING
-    assert release_velocity(executor, clock).outcome is Outcome.RUNNING
-    timer.cancel.assert_not_called()
-    base.next = BaseOutcome.SUCCESS
     assert executor.poll().outcome is Outcome.SUCCESS
     timer.cancel.assert_called_once()
     arm.state = ArmStowState.DEPLOYED
@@ -493,11 +429,10 @@ def completed_nav2():
     result = ManualFuture()
     send.set_result(FakeGoalHandle(result))
     result.set_result(SimpleNamespace(status=GoalStatus.STATUS_SUCCEEDED))
-    assert executor.poll().outcome is Outcome.RUNNING
     return value
 
 
-def test_final_zero_velocity_stream_cannot_override_walking_completion():
+def test_success_stops_forwarding_navigation_velocity_without_sending_hold():
     from fault_detector_spot.application.behaviour_tree.behaviours.robot_command_resources import RobotCommandResources
 
     executor, _, base, client, _, clock, pose, events = completed_nav2()
@@ -505,62 +440,21 @@ def test_final_zero_velocity_stream_cannot_override_walking_completion():
     resources._waypoint_executor = executor
     resources._velocity_publisher = Mock()
     resources._velocity_publisher.publish.side_effect = executor._receive_velocity
-    # Humble's smoother keeps publishing zeros at 20 Hz until its 0.5 s timeout.
-    for index in range(1, 12):
-        clock.now = index * 0.05
-        resources._forward_navigation_velocity(Twist())
-        assert executor.poll().outcome is Outcome.RUNNING
-        assert "finish_walking" not in events
-        assert executor.navigate(pose).outcome is Outcome.BUSY
-    assert resources._velocity_publisher.publish.call_count == 11
-    clock.now = 0.70
-    assert executor.poll().outcome is Outcome.RUNNING
-    assert "finish_walking" not in events
-    clock.now = 0.86
-    assert executor.poll().outcome is Outcome.RUNNING
-    assert events.count("finish_walking") == 1
-    base.next = BaseOutcome.SUCCESS
+    resources._forward_navigation_velocity(Twist())
     assert executor.poll().outcome is Outcome.SUCCESS
     resources._forward_navigation_velocity(Twist())
-    assert resources._velocity_publisher.publish.call_count == 11
-    client.send_goal_async.assert_called_once()
-
-
-def test_continuing_velocity_stream_times_out_without_sending_stand():
-    executor, _, _, _, _, clock, _, events = completed_nav2()
-    timer = attach_monitor(executor)
-    executor._start_monitor()
-    clock.now = executor.velocity_release_timeout_sec + 0.01
-    executor._receive_velocity(Twist())
-    timer.callback()
-    assert executor.cancelling
-    assert "velocity commands did not stop" in executor._cancel_detail
+    resources._velocity_publisher.publish.assert_called_once()
     assert "finish_walking" not in events
-    # Failure still retains ownership until the stream stops and fresh measured
-    # feedback proves stationary; an action result alone never releases it.
-    assert executor.poll().outcome is Outcome.RUNNING
-    settle_cancel(executor, clock)
-    assert not executor.active
-    assert "finish_walking" not in events
+    assert executor.execution_idle
 
 
-def test_delayed_poll_after_quiet_stream_is_not_a_handoff_timeout():
-    executor, _, _, _, _, clock, _, events = completed_nav2()
-    clock.now = executor.velocity_release_timeout_sec + 1.0
-    assert executor.poll().outcome is Outcome.RUNNING
-    assert events.count("finish_walking") == 1
-    assert not executor.cancelling
-
-
-def test_cancel_while_waiting_for_velocity_release_never_submits_stand():
+def test_cancel_after_success_does_not_start_base_completion():
     executor, _, base, _, send, clock, _, events = completed_nav2()
-    executor._receive_velocity(Twist())
+    assert executor.poll().outcome is Outcome.SUCCESS
     executor.cancel()
     assert base.cancel_calls == 0
-    assert send.result().cancel_calls == 0  # Nav2 already succeeded.
-    assert executor.poll().outcome is Outcome.RUNNING
-    settle_cancel(executor, clock)
-    assert not executor.active
+    assert send.result().cancel_calls == 0
+    assert executor.execution_idle
     assert "finish_walking" not in events
 
 
@@ -584,7 +478,7 @@ def test_velocity_resuming_during_cancellation_restarts_stationary_confirmation(
     assert "finish_walking" not in events
 
 
-def test_stowed_arm_guard_runs_during_velocity_release_without_bt_ticks():
+def test_stowed_arm_guard_runs_until_result_is_consumed_without_bt_ticks():
     executor, arm, base, _, _, _, _, events = completed_nav2()
     timer = attach_monitor(executor)
     executor._start_monitor()
@@ -612,12 +506,11 @@ def test_velocity_monitor_observes_driver_topic_and_is_destroyed_once():
     node.destroy_subscription.assert_called_once_with(node.create_subscription.return_value)
 
 
-@pytest.mark.parametrize("quiet,timeout", [(0.0, 3.0), (float("nan"), 3.0), (0.3, 0.3), (0.3, float("inf"))])
-def test_invalid_velocity_handoff_limits_are_rejected(quiet, timeout):
-    with pytest.raises(ValueError, match="Velocity release timeout"):
+@pytest.mark.parametrize("quiet", [0.0, float("nan"), float("inf")])
+def test_invalid_velocity_quiet_interval_is_rejected(quiet):
+    with pytest.raises(ValueError, match="Velocity quiet interval"):
         WaypointNavigationExecutor(
-            Mock(), Mock(), Mock(), Mock(),
-            velocity_quiet_sec=quiet, velocity_release_timeout_sec=timeout,
+            Mock(), Mock(), Mock(), Mock(), velocity_quiet_sec=quiet,
         )
 
 
