@@ -250,3 +250,87 @@ def test_precision_timeout_and_cancel_do_not_start_correction(monkeypatch):
     assert len(value.client.sent_goals) == 1
     assert stable_feedback(value, position=0.990).outcome is ArmMovementOutcome.RUNNING
     assert len(value.client.sent_goals) == 1
+
+
+def precision_buffer(value):
+    from rclpy.time import Time
+    from tf2_ros import Buffer
+    buffer = Buffer()
+    calls = []
+    def lookup(target, source, *, transform_time=None, timeout_sec=0.0):
+        assert timeout_sec == 0.0
+        calls.append(transform_time)
+        return buffer.lookup_transform(target, source, transform_time or Time())
+    listener = SimpleNamespace(lookup_a_tform_b=lookup)
+    value.executor.tf_listener = listener
+    value.executor.probe_motion_planner.tf_listener = listener
+    value.state.node = SimpleNamespace(get_clock=lambda: SimpleNamespace(
+        now=lambda: Time(nanoseconds=round((10 + value.clock.now) * 1e9)),
+    ))
+    return buffer, calls
+
+
+def add_precision_transform(buffer, stamp, x=1.0):
+    sample = transform('odom', 'hand', x=x)
+    sample.header.stamp.sec, sample.header.stamp.nanosec = divmod(round(stamp * 1e9), 10**9)
+    buffer.set_transform(sample, 'spot')
+
+
+@pytest.mark.parametrize('lead', [0.003, 0.04])
+def test_future_precision_tf_uses_current_time_geometry(monkeypatch, lead):
+    value = precision_rig(monkeypatch)
+    finish_motion(value)
+    buffer, calls = precision_buffer(value)
+    for now in (0.5, 0.65, 0.8):
+        value.clock.now = now
+        add_precision_transform(buffer, 10 + now - lead, x=0.99)
+        add_precision_transform(buffer, 10 + now + lead, x=1.01)
+        update = value.executor.poll()
+    assert update.outcome is ArmMovementOutcome.SUCCESS
+    assert len(value.client.sent_goals) == 1
+    assert len([stamp for stamp in calls if stamp is not None]) == 3
+
+
+def test_future_precision_tf_without_bracketing_history_waits_and_reports_reason(monkeypatch):
+    value = precision_rig(monkeypatch)
+    finish_motion(value)
+    buffer, _ = precision_buffer(value)
+    value.clock.now = 0.5
+    add_precision_transform(buffer, 10.54)
+    assert value.executor.poll().outcome is ArmMovementOutcome.RUNNING
+    assert value.executor._tag_accuracy['stability'].sample_count == 0
+    reason = value.executor._tag_accuracy['last_feedback_detail']
+    value.clock.now = 7.0
+    update = value.executor.poll()
+    assert update.outcome is ArmMovementOutcome.MOTION_FAILED
+    assert 'timed out' in update.detail
+    assert reason in update.detail
+    assert len(value.client.sent_goals) == 1
+
+
+def test_excessive_future_precision_stamp_is_not_interpolated(monkeypatch):
+    value = precision_rig(monkeypatch)
+    finish_motion(value)
+    buffer, calls = precision_buffer(value)
+    value.clock.now = 0.5
+    add_precision_transform(buffer, 10.49)
+    add_precision_transform(buffer, 10.8)
+    update = value.executor.poll()
+    assert update.outcome is ArmMovementOutcome.RUNNING
+    assert 'future-dated' in update.detail
+    assert calls == [None]
+    assert value.executor._tag_accuracy['stability'].sample_count == 0
+
+
+def test_frozen_future_history_cannot_create_a_stable_precision_window(monkeypatch):
+    value = precision_rig(monkeypatch)
+    finish_motion(value)
+    buffer, _ = precision_buffer(value)
+    add_precision_transform(buffer, 10.49)
+    add_precision_transform(buffer, 10.7)
+    for now in (0.5, 0.6, 0.7, 0.8, 0.9):
+        value.clock.now = now
+        assert value.executor.poll().outcome is ArmMovementOutcome.RUNNING
+    value.clock.now = 7.0
+    assert value.executor.poll().outcome is ArmMovementOutcome.MOTION_FAILED
+    assert len(value.client.sent_goals) == 1

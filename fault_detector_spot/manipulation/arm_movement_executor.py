@@ -790,6 +790,26 @@ class ArmMovementExecutor(MovementExecutor):
     def _precision_ros_now_ns(self):
         return self.arm_state_source.node.get_clock().now().nanoseconds
 
+    def _precision_current_pose(self):
+        current = self._tag_current_pose()
+        now = self.arm_state_source.node.get_clock().now()
+        age = (now.nanoseconds - self._pose_stamp_ns(current)) * 1e-9
+        if -PLANNING_FRAME_MAX_AGE_SEC <= age < 0.0:
+            # Match planning-frame verification: Spot acquisition stamps can
+            # lead the host clock. Require buffered history at the current
+            # time instead of accepting future geometry or rewriting its stamp.
+            target = self._tag_accuracy["target"]
+            transform = self.tf_listener.lookup_a_tform_b(
+                target.target.header.frame_id, sensor_probe_frame(target.sensor_id),
+                transform_time=now, timeout_sec=0.0,
+            )
+            if self._pose_stamp_ns(transform) != now.nanoseconds:
+                raise ValueError("Precision pose TF did not match the requested current time")
+            current = self.probe_motion_planner.pose_from_transform(
+                transform, target.target.header.frame_id,
+            )
+        return current
+
     def _begin_precision_verification(self):
         state = self._tag_accuracy
         try:
@@ -801,6 +821,7 @@ class ArmMovementExecutor(MovementExecutor):
             )
         state["not_before"] = self._monotonic_clock() + PRECISION_SETTLE_SEC
         state["deadline"] = state["not_before"] + PRECISION_SAMPLE_TIMEOUT_SEC
+        state["last_feedback_detail"] = "No pose samples received"
         state["stability"] = PoseStabilityWindow(pose_names=(
             "hand" if state["target"].sensor_id == BARE_HAND_MOTION_ID else "sensor tip",
         ))
@@ -813,40 +834,50 @@ class ArmMovementExecutor(MovementExecutor):
         state = self._tag_accuracy
         now = self._monotonic_clock()
         if now >= state["deadline"]:
+            window = state["stability"]
             return self._finish_operation(
                 ArmMovementOutcome.MOTION_FAILED,
-                "Precision verification timed out waiting for fresh, stable pose feedback",
+                "Precision verification timed out waiting for fresh, stable pose feedback; "
+                f"{window.sample_count} samples spanning {window.span_sec:.3f} s; "
+                f"last feedback: {state['last_feedback_detail']}",
             )
         if now < state["not_before"]:
             return ArmMovementUpdate(ArmMovementOutcome.RUNNING, "Waiting for precision movement to settle")
         window = state["stability"]
         try:
-            current = self._tag_current_pose()
+            current = self._precision_current_pose()
             stamp = self._pose_stamp_ns(current)
             if not math.isfinite(stamp) or stamp <= 0:
                 raise ValueError("Pose TF acquisition timestamp is invalid")
             if window.last_stamp_seconds and stamp * 1e-9 <= window.last_stamp_seconds:
+                state["last_feedback_detail"] = "Pose acquisition timestamp did not advance"
                 return ArmMovementUpdate(
                     ArmMovementOutcome.RUNNING,
                     "Waiting for a distinct, advancing precision pose acquisition timestamp",
                 )
             age = (self._precision_ros_now_ns() - stamp) * 1e-9
             if stamp < state["acquisition_after_ns"] or not 0 <= age <= PLANNING_FRAME_MAX_AGE_SEC:
-                raise ValueError("Pose TF is stale or predates the settling deadline")
+                raise ValueError(
+                    f"Pose TF is stale, future-dated, or predates the settling deadline "
+                    f"(age {age:.3f} s, maximum {PLANNING_FRAME_MAX_AGE_SEC:.3f} s)"
+                )
             sample_pose = pose_to_pose_data(current.pose)
             sample_pose.validate()
         except Exception as exception:
             window.invalidate(str(exception))
+            state["last_feedback_detail"] = str(exception)
             return ArmMovementUpdate(
                 ArmMovementOutcome.RUNNING, f"Waiting for precision pose feedback: {exception}",
             )
         try:
             stable = window.add(stamp * 1e-9, (sample_pose,))
         except Exception as exception:
+            state["last_feedback_detail"] = str(exception)
             return ArmMovementUpdate(
                 ArmMovementOutcome.RUNNING, f"Waiting for precision pose feedback: {exception}",
             )
         if not stable:
+            state["last_feedback_detail"] = window.last_reset_reason or "Pose stability window is incomplete"
             return ArmMovementUpdate(
                 ArmMovementOutcome.RUNNING,
                 f"Waiting for stable precision pose: {window.sample_count} distinct samples "
