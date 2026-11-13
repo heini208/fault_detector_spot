@@ -56,7 +56,8 @@ def test_base_executor_inherits_lifecycle_and_planner_builds_planar_goals():
     assert "cancel_goal_async(" in shared
     assert "send_goal_async(" not in executor
     assert "def cancel(" in executor
-    assert "handle.get_result_async()" in executor
+    assert "self._goal_result_future(self._send_goal_future, handle)" in executor
+    assert "handle.get_result_async()" in shared
     assert "self._cancel_goal_if_open(handle)" in executor
     assert "cancel_goal_async(" not in executor
 

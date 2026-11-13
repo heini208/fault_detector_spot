@@ -179,3 +179,39 @@ def test_watchdog_requests_pause_after_tracking_loss(runtime):
     monitor._pause_future.result(timeout=2)
     manager._call_service.assert_any_call("/rtabmap/pause", timeout_sec=3.0)
     assert tracker.snapshot()[2]
+
+
+@pytest.mark.parametrize("already_paused", [False, True])
+def test_failed_save_does_not_resume_unsafe_mapping(runtime, already_paused):
+    manager, launches, stops = runtime
+    process = manager.start_mapping("new_map")
+    tracker = manager._safety.tracker
+
+    def service(name, **kwargs):
+        if name == "/rtabmap/backup":
+            # Loss may also arrive while waiting for the backup response.
+            tracker.observe_seed(pose(13))
+            return False
+        return True
+
+    if already_paused:
+        tracker.observe_seed(pose(13))
+        tracker.pause_confirmed(process)
+    manager._call_service.side_effect = service
+    with pytest.raises(RuntimeError, match="unsafe mapping remains paused"):
+        manager.stop(save=True)
+    assert tracker.snapshot()[2]
+    assert manager.process is process
+    assert "/rtabmap/resume" not in [
+        call.args[0] for call in manager._call_service.call_args_list
+    ]
+
+
+def test_map_extension_rejects_pose_older_than_quality_limit():
+    tracker, process, now, steady, sample = harness()
+    for second in (11, 12, 13):
+        sample(second)
+    # Still within the three-second stream timeout, but beyond pose freshness.
+    now[0] = 15
+    steady[0] = 15.0
+    assert not tracker.can_extend("plant", process)[0]

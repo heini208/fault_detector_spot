@@ -313,7 +313,11 @@ def test_preempted_map_worker_drains_before_replacement_request(
     if expected_mode == "localization":
         for name in ("initial", "one", "two"):
             (tmp_path / f"{name}.db").touch()
+    if initial_mode == "mapping":
+        (tmp_path / "initial.db").unlink(missing_ok=True)
     getattr(manager, f"start_{initial_mode}")("initial")
+    if expected_mode == "localization":
+        (tmp_path / "initial.db").touch()
     entered, release = Event(), Event()
     original_start = manager._start_rtabmap
 
@@ -524,7 +528,8 @@ def test_system_close_attempts_each_process_once_and_keeps_failed_owner(runtime,
 @pytest.mark.parametrize("mode", ["mapping", "localization"])
 def test_system_close_waits_for_inflight_launch_then_stops_all_children(runtime, monkeypatch, tmp_path, mode):
     manager, launches, stops = runtime
-    (tmp_path / "plant.db").touch()
+    if mode == "localization":
+        (tmp_path / "plant.db").touch()
     entered, release, closing = Event(), Event(), Event()
     original_launch = runtime_module.subprocess.Popen
     original_shutdown = manager._runtime_executor.shutdown

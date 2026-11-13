@@ -6,6 +6,7 @@ from unittest.mock import Mock
 
 import pytest
 
+from fault_detector_spot.navigation.localization_state import LocalizationStateTracker
 from fault_detector_spot.mapping.model.models import MapDefinition
 from fault_detector_spot.mapping.repository.map_repository import MapRepository
 from fault_detector_spot.mapping.runtime.rtabmap_runtime_manager import RtabmapRuntimeManager
@@ -81,6 +82,7 @@ def runtime(tmp_path):
     manager.launch_file = "lidar_rtab_mapping_launch.py"
     manager.raw_lidar_topic = None
     manager.node = Mock()
+    manager._safety = SimpleNamespace(tracker=LocalizationStateTracker(lambda: 0))
     manager.stop = Mock(return_value=True)
     manager._launch = Mock(return_value=object())
     manager._publish_active_map = Mock()
@@ -94,7 +96,8 @@ def test_runtime_passes_recorded_frame_without_rewriting_metadata(tmp_path, fram
     repository.save("plant", MapDefinition("plant", "Plant", localization_frame=frame))
     path = repository.get_map_path("plant")
     original = path.read_bytes()
-    (tmp_path / "plant.db").touch()
+    if not mapping:
+        (tmp_path / "plant.db").touch()
     manager = runtime(tmp_path)
     manager._start_rtabmap("plant", extend_map=mapping)
     _, arguments = manager._launch.call_args.args
@@ -109,7 +112,7 @@ def test_metadata_absent_runtime_calls_stay_legacy_without_creating_metadata(tmp
     if database_exists:
         (tmp_path / "plant.db").touch()
     manager = runtime(tmp_path)
-    manager._start_rtabmap("plant", extend_map=True)
+    manager._start_rtabmap("plant", extend_map=not database_exists)
     _, arguments = manager._launch.call_args.args
     assert "frame_id:=base_link" in arguments
     assert "ground_max_height:=0.12" in arguments

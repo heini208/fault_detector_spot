@@ -13,6 +13,7 @@ from action_msgs.msg import GoalStatus
 
 from fault_detector_spot.application.behaviour_tree import runner
 from fault_detector_spot.mapping.runtime.rtabmap_runtime_manager import RtabmapRuntimeManager
+from fault_detector_spot.mapping.runtime.mapping_safety_monitor import MappingSafetyMonitor
 from fault_detector_spot.shared.ros.shutdown_coordinator import ShutdownCoordinator
 
 
@@ -57,6 +58,7 @@ def test_idle_runtime_close_is_immediate_and_idempotent():
     helper._executor_closed = False
     helper._closed = False
     helper._status_timer = None
+    helper._safety = MappingSafetyMonitor(Mock(), helper)
 
     assert helper.close()
     assert helper.close()

@@ -78,6 +78,7 @@ def test_api_action_waits_for_confirmed_stop_and_publishes_uncertainty(kind):
         receive(SimpleNamespace(
             operation=operation, request_id="request", operation_code=0,
             state=state, detail=state.value, buffered_command_count=1,
+            continuation_safe=False,
             motion=SimpleNamespace(kind=ProbeMotionKind.MOVE_SAFE_APPROACH), snapshot=object(),
             execution_instance_id="owner-a", status_sequence=sequence,
         ))

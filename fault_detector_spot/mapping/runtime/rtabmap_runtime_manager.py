@@ -152,6 +152,13 @@ class RtabmapRuntimeManager(RuntimeManager):
             # copies it to .back, then reopens it. There is no save_db service.
             # Wait for acknowledgement before shutdown can escalate signals.
             if not self._call_service("/rtabmap/backup", timeout_sec=60.0):
+                if (self._safety.tracker.snapshot()[2]
+                        or self._safety.tracker.requires_pause(self.process)):
+                    self._safety.tracker.pause_confirmed(self.process)
+                    raise RuntimeError(
+                        "Could not confirm RTAB-Map database save; "
+                        "unsafe mapping remains paused"
+                    )
                 resumed = self._call_service("/rtabmap/resume")
                 raise RuntimeError(
                     "Could not confirm RTAB-Map database save; mapping process retained"

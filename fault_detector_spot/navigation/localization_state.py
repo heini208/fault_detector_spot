@@ -229,6 +229,9 @@ class LocalizationStateTracker:
                 return False, "matching active localization session required"
             if self.state != LocalizationState.LOCALIZED:
                 return False, self.reason
+            error = self._pose_error()
+            if error:
+                return False, error
             return True, ""
 
     def requires_pause(self, process):
