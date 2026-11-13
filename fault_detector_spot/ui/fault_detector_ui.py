@@ -260,7 +260,7 @@ class Fault_Detector_UI(QWidget):
         recording_layout.setContentsMargins(0, 0, 0, 0)
         self.recording_controls.add_rows(recording_layout)
         self.recording_section = CollapsibleSection(
-            "Command recording & playback", recording_panel, expanded=False,
+            "Command recording && playback", recording_panel, expanded=False,
         )
         main_layout.addWidget(self.recording_section)
         QTimer.singleShot(0, self._refresh_buffer_label)

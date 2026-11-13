@@ -138,12 +138,17 @@ def test_main_manipulator_mode_and_tolerance_reach_tag_and_relative_intents(appl
     assert controls.precision_mode_combo.currentText() == "Normal"
     assert controls.add_tag_info_to_intent(OperationalIntent()).precision_mode is False
     controls.precision_mode_combo.setCurrentText("Precision")
-    controls.tag_tolerance_input.setValue(.023)
+    controls.position_tolerance_input.setValue(.023)
     intent = controls.add_tag_info_to_intent(OperationalIntent())
     assert (intent.precision_mode, intent.tag_position_tolerance_m) == (True, .023)
-    controls.relative_tolerance_input.setValue(.017)
+    controls.handle_full_message(OperationalIntent.INTENT_MOVE_ARM_RELATIVE)
+    assert calls[-1].tag_position_tolerance_m == .023
+    controls.position_tolerance_input.setValue(.017)
     controls.handle_full_message(OperationalIntent.INTENT_MOVE_ARM_RELATIVE)
     assert (calls[-1].precision_mode, calls[-1].tag_position_tolerance_m) == (True, .017)
+    assert controls.add_tag_info_to_intent(OperationalIntent()).tag_position_tolerance_m == .017
+    controls.precision_mode_combo.setCurrentText("Normal")
+    assert controls.position_tolerance_input.value() == .017
 
 
 def test_waypoint_ui_loads_and_saves_all_selected_settings(application):

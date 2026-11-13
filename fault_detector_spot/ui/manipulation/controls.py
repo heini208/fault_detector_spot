@@ -15,7 +15,7 @@ from geometry_msgs.msg import Quaternion
 from ..shared.control_helper import UIControlHelper
 from ..shared.collapsible_section import CollapsibleSection
 from ..shared.posture_toggle import PostureToggle
-from ..shared.movement_layout import control_group
+from ..shared.movement_layout import control_group, emphasize_action
 from ..ros.arm_collision_client import ArmCollisionClient
 
 if TYPE_CHECKING:
@@ -69,10 +69,11 @@ class ManipulationControls(UIControlHelper):
         orientation = self._make_orientation_offset_row()
         offsets = QHBoxLayout()
         offsets.setSpacing(20)
-        offsets.addLayout(position, 1)
-        offsets.addLayout(orientation, 1)
+        offsets.addLayout(control_group("Position · meters", position), 1)
+        offsets.addLayout(control_group("Rotation · degrees", orientation), 1)
         return [
-            control_group("Tag actions", self._make_precision_mode_row(), tag_row),
+            self._make_precision_mode_row(),
+            control_group("Move to tag", tag_row),
             control_group(
                 "Arm offset", offsets,
                 self._make_arm_collision_row(),
@@ -158,22 +159,10 @@ class ManipulationControls(UIControlHelper):
         self.update_tags_dropdown()
 
         self.submit_button = QPushButton("Move to Tag")
+        emphasize_action(self.submit_button)
         self.submit_button.clicked.connect(self.handle_tag_selection)
         row.addWidget(self.tag_dropdown)
         row.addWidget(self.submit_button)
-        row.addWidget(QLabel("Position tolerance [m]:"))
-        self.tag_tolerance_input = QDoubleSpinBox()
-        self.tag_tolerance_input.setDecimals(3)
-        self.tag_tolerance_input.setRange(0.001, 0.100)
-        self.tag_tolerance_input.setSingleStep(0.001)
-        self.tag_tolerance_input.setValue(ArmMotionParameters().get("motion.position_tolerance_m"))
-        self.tag_tolerance_input.setToolTip(
-            "Allowed position error. Normal checks the final position with one slow "
-            "adjustment if needed; Precision verifies a stable achieved pose and "
-            "allows bounded slow corrections."
-        )
-        row.addWidget(self.tag_tolerance_input)
-
         row.addWidget(QLabel("Wait (s):"))
         self.duration_input = QDoubleSpinBox()
         self.duration_input.setRange(0.0, 60.0)
@@ -189,7 +178,7 @@ class ManipulationControls(UIControlHelper):
         )
         row.addWidget(self.wait_time_button)
 
-        self.move_wait_button = QPushButton("Move & Wait")
+        self.move_wait_button = QPushButton("Move && wait")
         self.move_wait_button.clicked.connect(self.handle_move_and_wait)
         row.addWidget(self.move_wait_button)
 
@@ -201,7 +190,7 @@ class ManipulationControls(UIControlHelper):
         frame_row = QHBoxLayout()
 
         self.frames_dropdown = QComboBox()
-        frame_row.addWidget(QLabel("Position (m) · Frame:"))
+        frame_row.addWidget(QLabel("Frame:"))
         self.update_frames_dropdown()
         frame_row.addWidget(self.frames_dropdown)
         frame_row.addStretch()
@@ -222,15 +211,16 @@ class ManipulationControls(UIControlHelper):
 
     def _make_reset_fields_and_move_relative_row(self):
         row = QHBoxLayout()
-        reset_zero_btn = QPushButton("Set All = 0")
+        reset_zero_btn = QPushButton("Zero offsets")
         reset_zero_btn.clicked.connect(self._reset_all_zero)
         row.addWidget(reset_zero_btn)
 
-        reset_default_btn = QPushButton("Set All = Default")
+        reset_default_btn = QPushButton("Reset defaults")
         reset_default_btn.clicked.connect(self._reset_all_default)
         row.addWidget(reset_default_btn)
 
         self.move_by_offset_button = QPushButton("Move Arm by Offset")
+        emphasize_action(self.move_by_offset_button)
         self.move_by_offset_button.clicked.connect(
             lambda _: self.handle_full_message(
                 OperationalIntent.INTENT_MOVE_ARM_RELATIVE
@@ -238,22 +228,12 @@ class ManipulationControls(UIControlHelper):
         )
         row.addStretch()
         row.addWidget(self.move_by_offset_button)
-        row.addWidget(QLabel("Position tolerance [m]:"))
-        self.relative_tolerance_input = QDoubleSpinBox()
-        self.relative_tolerance_input.setDecimals(3)
-        self.relative_tolerance_input.setRange(.001, .100)
-        self.relative_tolerance_input.setSingleStep(.001)
-        self.relative_tolerance_input.setValue(ArmMotionParameters().get("motion.position_tolerance_m"))
-        self.relative_tolerance_input.setToolTip(
-            "Allowed position error for stable pose verification in Precision mode."
-        )
-        row.addWidget(self.relative_tolerance_input)
 
         return row
 
     def _make_precision_mode_row(self):
         row = QHBoxLayout()
-        row.addWidget(QLabel("Tag / offset movement mode:"))
+        row.addWidget(QLabel("Movement mode:"))
         self.precision_mode_combo = QComboBox()
         self.precision_mode_combo.addItem("Normal", False)
         self.precision_mode_combo.addItem("Precision", True)
@@ -266,6 +246,20 @@ class ManipulationControls(UIControlHelper):
             "slow corrections. Normal preserves ordinary movement checks."
         )
         row.addWidget(self.precision_mode_combo)
+        row.addSpacing(16)
+        row.addWidget(QLabel("Position tolerance (m):"))
+        self.position_tolerance_input = QDoubleSpinBox()
+        self.position_tolerance_input.setDecimals(3)
+        self.position_tolerance_input.setRange(0.001, 0.100)
+        self.position_tolerance_input.setSingleStep(0.001)
+        self.position_tolerance_input.setValue(ArmMotionParameters().get("motion.position_tolerance_m"))
+        self.position_tolerance_input.setToolTip(
+            "Allowed position error for tag moves in Normal and Precision modes, "
+            "and offset moves in Precision mode. Precision uses this value while "
+            "verifying a stable achieved pose and allowing bounded corrections. "
+            "Normal offset moves do not use this value for final-pose verification."
+        )
+        row.addWidget(self.position_tolerance_input)
         row.addStretch()
         return row
 
@@ -576,7 +570,7 @@ class ManipulationControls(UIControlHelper):
     def add_orientation_dropdown(self, row: QHBoxLayout):
         self.orientation_combo = QComboBox()
         self.orientation_combo.addItems([mode.value for mode in OrientationModes])
-        row.addWidget(QLabel("Rotation (°) · Mode:"))
+        row.addWidget(QLabel("Mode:"))
         row.addWidget(self.orientation_combo)
 
     def _change_offset(self, axis: str, delta: float):
@@ -675,7 +669,7 @@ class ManipulationControls(UIControlHelper):
         return q
 
     def add_tag_info_to_intent(self, intent: OperationalIntent):
-        intent.tag_position_tolerance_m = self.tag_tolerance_input.value()
+        intent.tag_position_tolerance_m = self.position_tolerance_input.value()
         intent.precision_mode = bool(self.precision_mode_combo.currentData())
         intent.precision_orientation_tolerance_rad = ArmMotionParameters().get("motion.orientation_tolerance_rad")
         intent = self.add_tag_element_to_intent(intent)
@@ -727,7 +721,7 @@ class ManipulationControls(UIControlHelper):
         if intent_id == OperationalIntent.INTENT_MOVE_ARM_RELATIVE:
             intent.precision_mode = bool(self.precision_mode_combo.currentData())
             intent.precision_orientation_tolerance_rad = ArmMotionParameters().get("motion.orientation_tolerance_rad")
-            intent.tag_position_tolerance_m = self.relative_tolerance_input.value()
+            intent.tag_position_tolerance_m = self.position_tolerance_input.value()
             return self._execute_basic_movement(intent)
         return self.ui.execute_operation(intent)
 

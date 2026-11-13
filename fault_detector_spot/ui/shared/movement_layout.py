@@ -13,3 +13,12 @@ def control_group(title, *rows):
     wrapper = QHBoxLayout()
     wrapper.addWidget(group)
     return wrapper
+
+
+def emphasize_action(button):
+    """Give the main explicit movement action a consistent visual weight."""
+    button.setMinimumHeight(32)
+    button.setStyleSheet(
+        "QPushButton:enabled { background: palette(highlight); color: palette(highlighted-text); "
+        "font-weight: bold; border: none; border-radius: 4px; padding: 6px 12px; }"
+    )

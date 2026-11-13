@@ -3,7 +3,7 @@ import json
 from PyQt5.QtCore import QObject, Qt, pyqtSignal
 from std_msgs.msg import Bool, String, UInt32
 from PyQt5.QtWidgets import (
-    QHBoxLayout, QLineEdit, QPushButton, QComboBox, QSpinBox, QWidget, QLabel, QSizePolicy, QMessageBox,
+    QHBoxLayout, QVBoxLayout, QGroupBox, QLineEdit, QPushButton, QComboBox, QSpinBox, QWidget, QLabel, QSizePolicy, QMessageBox,
 )
 
 from fault_detector_msgs.msg import CommandRecordControl
@@ -80,28 +80,34 @@ class RecordingControls(UIControlHelper):
 
     def _make_recording_row(self) -> QHBoxLayout:
         row = QHBoxLayout()
+        capture = QGroupBox("Record commands")
+        capture_row = QHBoxLayout(capture)
+        playback = QGroupBox("Saved recordings")
+        playback_row = QHBoxLayout(playback)
+        row.addWidget(capture, 1)
+        row.addWidget(playback, 1)
 
         self.record_name_field = QLineEdit()
         self.record_name_field.setPlaceholderText("Recording name")
-        self.record_name_field.setFixedWidth(250)
-        row.addWidget(self.record_name_field)
+        self.record_name_field.setMinimumWidth(140)
+        capture_row.addWidget(self.record_name_field)
 
         self.record_button = QPushButton("Waiting for recording state")
         self.record_button.setEnabled(False)
         self.record_button.clicked.connect(self.toggle_recording)
-        row.addWidget(self.record_button)
+        capture_row.addWidget(self.record_button)
 
         self.recordings_dropdown = QComboBox()
         self.recordings_dropdown.addItem("No recordings available")
-        row.addWidget(self.recordings_dropdown)
+        playback_row.addWidget(self.recordings_dropdown)
 
         self.play_button = QPushButton("Play Recording")
         self.play_button.clicked.connect(self.play_selected_recording)
-        row.addWidget(self.play_button)
+        playback_row.addWidget(self.play_button)
 
         self.delete_button = QPushButton("Delete")
         self.delete_button.clicked.connect(self.delete_selected_recording)
-        row.addWidget(self.delete_button)
+        playback_row.addWidget(self.delete_button)
 
         return row
 
@@ -156,12 +162,14 @@ class RecordingControls(UIControlHelper):
         controls.addWidget(self.pause_recording_button)
 
         self.recording_options.setEnabled(bool(self._recording))
-        row = QHBoxLayout()
+        row = QVBoxLayout()
+        controls.addStretch()
         row.addWidget(self.recording_options)
         self.recording_feedback_label = QLabel("No command yet")
         self.recording_feedback_label.setTextFormat(Qt.PlainText)
         self.recording_feedback_label.setAccessibleName("Last command recording result")
         self.recording_feedback_label.setMinimumWidth(160)
+        self.recording_feedback_label.setWordWrap(True)
         self.recording_feedback_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         row.addWidget(self.recording_feedback_label, 1)
         return row

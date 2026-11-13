@@ -237,8 +237,8 @@ def test_arm_editor_defaults_reach_command_without_overriding_user_tolerance(app
     controls._make_precision_mode_row()
     monkeypatch.setattr(controls, 'add_tag_element_to_intent', lambda intent, *_: intent)
     monkeypatch.setattr(controls, 'add_offset_to_intent', lambda intent: intent)
-    assert controls.tag_tolerance_input.value() == .023
-    controls.tag_tolerance_input.setValue(.015)
+    assert controls.position_tolerance_input.value() == .023
+    controls.position_tolerance_input.setValue(.015)
     intent = controls.add_tag_info_to_intent(OperationalIntent())
     assert intent.tag_position_tolerance_m == .015
     assert intent.precision_orientation_tolerance_rad == .07

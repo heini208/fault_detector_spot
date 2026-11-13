@@ -15,7 +15,7 @@ from fault_detector_msgs.msg import OperationalIntent, TagElement
 from geometry_msgs.msg import Quaternion
 from ..shared.control_helper import UIControlHelper
 from ..shared.posture_toggle import PostureToggle
-from ..shared.movement_layout import control_group
+from ..shared.movement_layout import control_group, emphasize_action
 
 if TYPE_CHECKING:
     from ..fault_detector_ui import Fault_Detector_UI
@@ -49,8 +49,8 @@ class BaseMovementControls(UIControlHelper):
 
     def make_rows(self):
         return [
-            control_group("Walking profile", self._make_walking_profile_row()),
-            control_group("Tag actions", self._make_tag_input_row()),
+            self._make_walking_profile_row(),
+            control_group("Move to tag", self._make_tag_input_row()),
             control_group("Base offset", self._make_offset_row(),
                           self._make_reset_and_move_row()),
             control_group("Body height", self._make_body_height_row()),
@@ -69,7 +69,7 @@ class BaseMovementControls(UIControlHelper):
             "Applies to the next Move to Tag or Move Base by Offset command. "
             "Precision uses the configured slower walking profile."
         )
-        row.addWidget(QLabel("Profile:"))
+        row.addWidget(QLabel("Walking profile:"))
         row.addWidget(self.walking_profile_dropdown)
         row.addStretch()
         return row
@@ -82,6 +82,7 @@ class BaseMovementControls(UIControlHelper):
         self.update_tags_dropdown()
 
         move_to_tag_btn = QPushButton("Move to Tag")
+        emphasize_action(move_to_tag_btn)
         move_to_tag_btn.clicked.connect(self.handle_move_to_tag)
         row.addWidget(self.tag_dropdown)
         row.addWidget(move_to_tag_btn)
@@ -146,18 +147,19 @@ class BaseMovementControls(UIControlHelper):
 
     def _make_reset_and_move_row(self):
         row = QHBoxLayout()
-        reset_zero_btn = QPushButton("Set All = 0")
+        reset_zero_btn = QPushButton("Zero offsets")
         reset_zero_btn.clicked.connect(self._reset_all_zero)
         row.addWidget(reset_zero_btn)
 
-        reset_default_btn = QPushButton("Set All = Default")
+        reset_default_btn = QPushButton("Reset defaults")
         reset_default_btn.clicked.connect(self._reset_all_default)
         row.addWidget(reset_default_btn)
 
         move_offset_btn = QPushButton("Move Base by Offset")
+        emphasize_action(move_offset_btn)
         move_offset_btn.clicked.connect(self.handle_move_base_relative)
-        row.addStretch()
         row.addWidget(move_offset_btn)
+        row.addStretch()
 
         return row
 
@@ -206,6 +208,7 @@ class BaseMovementControls(UIControlHelper):
             self.ui, getattr(self.ui, "posture_state_source", None)
         )
         row.addWidget(self.posture_button)
+        row.addStretch()
         return row
 
     # ---------------------- Logic ----------------------
