@@ -16,6 +16,8 @@ from PyQt5.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMenu,
+    QToolButton,
     QPushButton,
     QSizePolicy,
     QTabWidget,
@@ -135,7 +137,21 @@ class InspectionControls(UIControlHelper):
             "Delete the object selected above and all of its routines"
         )
         self.delete_object_button.clicked.connect(self.handle_delete_object)
-        row.addWidget(self.delete_object_button)
+        self.delete_object_button.hide()
+        object_menu = QMenu(self.ui if isinstance(self.ui, QWidget) else None)
+        delete_object_action = object_menu.addAction("Delete object…")
+        delete_object_action.triggered.connect(self.delete_object_button.click)
+        object_menu.aboutToShow.connect(
+            lambda: delete_object_action.setEnabled(self.delete_object_button.isEnabled())
+        )
+        object_more = QToolButton()
+        object_more.setText("⋯")
+        object_more.setToolTip("Object actions")
+        object_more.setAccessibleName("Object actions")
+        object_menu.setParent(object_more, object_menu.windowFlags())
+        object_more.setMenu(object_menu)
+        object_more.setPopupMode(QToolButton.InstantPopup)
+        row.addWidget(object_more)
 
         row.addWidget(QLabel("Routine:"))
         self.saved_routine_dropdown = QComboBox()
@@ -151,7 +167,21 @@ class InspectionControls(UIControlHelper):
             "Delete the currently selected routine"
         )
         self.delete_routine_button.clicked.connect(self.handle_delete_routine)
-        row.addWidget(self.delete_routine_button)
+        self.delete_routine_button.hide()
+        routine_menu = QMenu(self.ui if isinstance(self.ui, QWidget) else None)
+        delete_routine_action = routine_menu.addAction("Delete routine…")
+        delete_routine_action.triggered.connect(self.delete_routine_button.click)
+        routine_menu.aboutToShow.connect(
+            lambda: delete_routine_action.setEnabled(self.delete_routine_button.isEnabled())
+        )
+        routine_more = QToolButton()
+        routine_more.setText("⋯")
+        routine_more.setToolTip("Routine actions")
+        routine_more.setAccessibleName("Routine actions")
+        routine_menu.setParent(routine_more, routine_menu.windowFlags())
+        routine_more.setMenu(routine_menu)
+        routine_more.setPopupMode(QToolButton.InstantPopup)
+        row.addWidget(routine_more)
 
         self.refresh_definitions_button = QPushButton("Refresh")
         self.refresh_definitions_button.clicked.connect(

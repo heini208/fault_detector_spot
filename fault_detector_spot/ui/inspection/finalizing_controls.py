@@ -90,7 +90,7 @@ class FinalizingInspectionControls(InspectionControls):
             is_refinement_start_pending=lambda: self._reference_start_pending,
         )
         self.start_probe_refinement_button.setText(
-            "Add New Probe Point"
+            "+ Add"
         )
 
         self.abort_probe_refinement_button = QPushButton(
@@ -406,7 +406,7 @@ class FinalizingInspectionControls(InspectionControls):
 
         if self._refinement_presentation is None:
             self.start_probe_refinement_button.setText(
-                "Add New Probe Point"
+                "+ Add"
             )
             self.start_probe_refinement_button.setEnabled(
                 bool(state.selected_routine_id)
@@ -760,7 +760,7 @@ class FinalizingInspectionControls(InspectionControls):
             if hasattr(self, "inspection_workspace_tabs"):
                 self.inspection_workspace_tabs.setEnabled(True)
             self.start_probe_refinement_button.setText(
-                "Add New Probe Point"
+                "+ Add"
             )
             self.abort_probe_refinement_button.hide()
             if self.refinement_dialog.isVisible():
@@ -799,7 +799,7 @@ class FinalizingInspectionControls(InspectionControls):
             if hasattr(self, "inspection_workspace_tabs"):
                 self.inspection_workspace_tabs.setEnabled(True)
             self.start_probe_refinement_button.setText(
-                "Add New Probe Point"
+                "+ Add"
             )
             return True
 
@@ -875,7 +875,7 @@ class FinalizingInspectionControls(InspectionControls):
         self._refinement_emergency_stop_requested = False
         result = super()._finish_refinement_workflow_close()
         self.start_probe_refinement_button.setText(
-            "Add New Probe Point"
+            "+ Add"
         )
         if (
             hasattr(self, "refinement_dialog")

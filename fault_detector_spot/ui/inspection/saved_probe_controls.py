@@ -2,10 +2,13 @@
 
 from uuid import uuid4
 
+from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QPalette
 from PyQt5.QtWidgets import (
     QDoubleSpinBox,
     QFrame,
+    QGroupBox,
+    QWidget,
     QHBoxLayout,
     QLabel,
     QListWidget,
@@ -40,24 +43,35 @@ class SavedProbeControls(QFrame):
         self._selection_after_finalization = None
 
         self.setFrameShape(QFrame.StyledPanel)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 12, 12, 12)
+        outer = QHBoxLayout(self)
+        outer.setContentsMargins(12, 12, 12, 12)
+        outer.setSpacing(20)
+        sidebar = QWidget()
+        sidebar.setMinimumWidth(190)
+        sidebar.setMaximumWidth(280)
+        sidebar_layout = QVBoxLayout(sidebar)
+        sidebar_layout.setContentsMargins(0, 0, 0, 0)
+        details = QWidget()
+        layout = QVBoxLayout(details)
+        outer.addWidget(sidebar, 1)
+        outer.addWidget(details, 3)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
 
         title = QLabel("Probe Points")
         title_font = title.font()
         title_font.setBold(True)
         title.setFont(title_font)
-        layout.addWidget(title)
+        sidebar_layout.addWidget(title)
 
         self.overview_label = QLabel(
             "Select an inspection routine to add a probe point."
         )
         self.overview_label.setWordWrap(True)
-        layout.addWidget(self.overview_label)
+        sidebar_layout.addWidget(self.overview_label)
 
         self.selection_label = QLabel(
-            "Selected probe point: none"
+            "Select a probe point"
         )
         selection_font = self.selection_label.font()
         selection_font.setBold(True)
@@ -85,10 +99,10 @@ class SavedProbeControls(QFrame):
         self.points_list.currentRowChanged.connect(
             self._selection_changed
         )
-        layout.addWidget(self.points_list)
+        sidebar_layout.addWidget(self.points_list, 1)
 
         self.delete_button = QPushButton(
-            "Delete Selected Probe Point"
+            "Delete"
         )
         self.delete_button.setEnabled(False)
         self.delete_button.setToolTip(
@@ -98,10 +112,15 @@ class SavedProbeControls(QFrame):
         self.delete_button.clicked.connect(
             self.handle_delete
         )
-        layout.addWidget(self.delete_button)
+        self.point_tools = QHBoxLayout()
+        self.point_tools.addWidget(self.delete_button)
+        sidebar_layout.addLayout(self.point_tools)
+        self.sidebar_layout = sidebar_layout
 
         self.target_distance = QDoubleSpinBox()
         self.target_distance.setDecimals(3)
+        self.target_distance.setSuffix(" m")
+        self.target_distance.setMaximumWidth(125)
         self.target_distance.setRange(0.0, 10.0)
         self.target_distance.setSingleStep(0.005)
         self.target_distance.setEnabled(False)
@@ -109,14 +128,18 @@ class SavedProbeControls(QFrame):
             "Defaults to the selected point’s saved value. "
             "Changes apply only to this movement."
         )
+        movement = QGroupBox("1  ·  Position the probe")
+        movement_layout = QVBoxLayout(movement)
+        movement_layout.setSpacing(8)
+        layout.addWidget(movement)
         self.action_buttons = {}
         for label, operation in (
             (
-                "Move Along Saved Pre-approach Path",
+                "Follow pre-approach path",
                 OperationalIntent.INTENT_MOVE_SAVED_PROBE_ALIGNED_PREAPPROACH,
             ),
             (
-                "Move Close to Wall",
+                "Approach surface",
                 OperationalIntent.INTENT_MOVE_SAVED_PROBE_CLOSE_TO_SURFACE,
             ),
         ):
@@ -129,25 +152,35 @@ class SavedProbeControls(QFrame):
             if operation == OperationalIntent.INTENT_MOVE_SAVED_PROBE_CLOSE_TO_SURFACE:
                 wall_row = QHBoxLayout()
                 wall_row.addWidget(button, 1)
-                wall_row.addWidget(QLabel("Target distance from wall [m]:"))
+                wall_row.addWidget(QLabel("Surface distance:"))
                 wall_row.addWidget(self.target_distance)
-                layout.addLayout(wall_row)
+                movement_layout.addLayout(wall_row)
             else:
-                layout.addWidget(button)
-        self.custom_probe_button = QPushButton("Move to Custom Probe Point")
+                movement_layout.addWidget(button)
+        self.custom_probe_button = QPushButton("Move to probe point")
         self.custom_probe_button.setEnabled(False)
         self.custom_probe_button.clicked.connect(
             lambda: self.handle_motion(
                 OperationalIntent.INTENT_MOVE_SAVED_CUSTOM_PROBE_PATH,
             )
         )
-        layout.addWidget(self.custom_probe_button)
+        movement_layout.addWidget(self.custom_probe_button)
+        self.movement_hint = QLabel("Select a probe point to see its movement options.")
+        self.movement_hint.setWordWrap(True)
+        self.movement_hint.setMinimumHeight(self.movement_hint.fontMetrics().lineSpacing() * 3)
+        movement_layout.addWidget(self.movement_hint)
+        recording = QGroupBox("2  ·  Execute and record")
+        recording_layout = QVBoxLayout(recording)
+        recording_layout.setSpacing(10)
+        layout.addWidget(recording)
         recording_row = QHBoxLayout()
         self.record_duration = QDoubleSpinBox()
+        self.record_duration.setMaximumWidth(125)
         self.record_duration.setRange(0.1, 3600.0)
         self.record_duration.setValue(5.0)
         self.record_duration.setSuffix(" s")
         self.record_retries = QSpinBox()
+        self.record_retries.setMaximumWidth(85)
         self.record_retries.setRange(0, 100)
         self.record_retries.setToolTip(
             "Shared retry budget: return to the last successful goal "
@@ -157,23 +190,36 @@ class SavedProbeControls(QFrame):
         recording_row.addWidget(self.record_duration)
         recording_row.addWidget(QLabel("Retries:"))
         recording_row.addWidget(self.record_retries)
-        layout.addLayout(recording_row)
-        execute_button = QPushButton("Execute Probe Point and Record")
+        recording_row.addStretch()
+        recording_layout.addLayout(recording_row)
+        execute_button = QPushButton("Execute && Record")
         execute_button.setEnabled(False)
         execute_button.clicked.connect(lambda: self.handle_motion(
             OperationalIntent.INTENT_EXECUTE_PROBE_POINT,
         ))
         self.action_buttons[OperationalIntent.INTENT_EXECUTE_PROBE_POINT] = execute_button
-        layout.addWidget(execute_button)
+        execute_button.setMinimumHeight(38)
+        execute_button.setStyleSheet(
+            "QPushButton:enabled { background: palette(highlight); color: palette(highlighted-text); "
+            "font-weight: bold; border: none; border-radius: 4px; padding: 8px 16px; }"
+        )
+        recording_layout.addWidget(execute_button)
         self.status_label = QLabel("Select a saved probe point.")
         self.status_label.setWordWrap(True)
-        layout.addWidget(self.status_label)
+        status = QGroupBox("Execution status")
+        status_layout = QVBoxLayout(status)
+        self.status_label.setMinimumHeight(38)
+        self.status_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        status_layout.addWidget(self.status_label)
+        layout.addWidget(status)
+        layout.addStretch()
 
     def attach_refinement_controls(self, start_button, abort_button):
         """Place the parent's refinement controls below the saved-point actions."""
-        self.layout().addWidget(start_button)
-        self.layout().addWidget(abort_button)
-        self.layout().addStretch()
+        start_button.setText("+ Add")
+        start_button.setToolTip("Add a new probe point")
+        self.point_tools.insertWidget(0, start_button, 1)
+        self.sidebar_layout.addWidget(abort_button)
 
     def apply_setup_state(self, state):
         """Render the authoritative snapshot while preserving selection drafts."""
@@ -209,13 +255,11 @@ class SavedProbeControls(QFrame):
         if not state.selected_routine_id:
             overview = "Select an inspection routine to add a probe point."
         elif state.probe_point_ids:
-            overview = (
-                "Existing probe points: "
-                + ", ".join(state.probe_point_ids)
-            )
+            overview = ""
         else:
             overview = "No probe points are saved for this routine."
         self.overview_label.setText(overview)
+        self.overview_label.setVisible(bool(overview))
 
     def select_after_finalization(self, object_id, routine_id, point_id):
         """Select a completed point when its matching snapshot is rendered."""
@@ -229,9 +273,9 @@ class SavedProbeControls(QFrame):
         current = self.points_list.currentItem()
         self.selection_label.setText(
             (
-                f"Selected probe point: {current.text()}"
+                f"Probe point: {current.text()}"
                 if current is not None
-                else "Selected probe point: none"
+                else "Select a probe point"
             )
         )
         row = self.points_list.currentRow()
@@ -244,6 +288,8 @@ class SavedProbeControls(QFrame):
             )
         else:
             self.target_distance.setValue(0.0)
+        if not self._operation_contexts:
+            self.status_label.setText("Ready to move or execute." if current else "Select a saved probe point.")
         self._refresh_actions()
 
     def _refresh_actions(self):
@@ -277,6 +323,12 @@ class SavedProbeControls(QFrame):
         ]
         surface_button.setEnabled(enabled and not custom)
         self.custom_probe_button.setEnabled(enabled and custom)
+        self.movement_hint.setText(
+            "Custom point: use the saved path. Surface approach is unavailable." if custom else
+            "Surface-relative point: use the surface approach. Custom-path movement is unavailable."
+            if self.points_list.currentItem() is not None else
+            "Select a probe point to enable movement and recording."
+        )
         surface_button.setToolTip("Available for surface-relative probe points.")
         self.custom_probe_button.setToolTip(
             "Available for fully custom probe points; follows the saved final path."
@@ -458,6 +510,14 @@ class SavedProbeControls(QFrame):
             ApplicationCommandState.STATE_STOP_REQUESTED: "Stop requested; awaiting confirmation",
             ApplicationCommandState.STATE_STOP_UNCONFIRMED: "Stop unconfirmed",
         }.get(status.state, "Movement in progress")
+        if detail.startswith("BT executing "):
+            command = detail.removeprefix("BT executing ")
+            detail = {
+                "move_to_tag": "Moving to the saved target…",
+                "move_arm_relative": "Moving the arm…",
+                "execute_probe_point": "Executing probe point and recording…",
+            }.get(command, "Running: " + command.replace("_", " "))
+        self.status_label.setToolTip(status.detail)
         self.status_label.setText(f"{point_id}: {detail}")
         if status.state in {
             ApplicationCommandState.STATE_SUCCEEDED,
