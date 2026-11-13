@@ -1,14 +1,18 @@
-from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
     QButtonGroup,
     QComboBox,
     QCheckBox,
     QHBoxLayout,
+    QVBoxLayout,
+    QGroupBox,
+    QWidget,
+    QListWidget,
+    QToolButton,
+    QMenu,
     QLabel,
     QLineEdit,
     QPushButton,
     QRadioButton,
-    QSizePolicy,
 )
 
 from fault_detector_msgs.msg import (
@@ -17,6 +21,7 @@ from fault_detector_msgs.msg import (
     OperationalIntent,
 )
 from ..shared.control_helper import UIControlHelper
+from ..shared.collapsible_section import CollapsibleSection
 from fault_detector_spot.shared.persistence.basic_settings import startup_settings
 
 
@@ -33,46 +38,81 @@ class NavigationControls(UIControlHelper):
     def init_ros_communication(self):
         return None
 
+    def add_rows(self, layout):
+        for row in self.rows:
+            layout.addLayout(row)
+
     def make_rows(self):
-        rows = [
-            self._load_map_row(),
-            self._make_create_map_row(),
-            self._make_mode_row(),
-            self._make_waypoint_row(),
-            self._make_add_waypoint_row(),
-            self._make_landmark_row()
-        ]
+        workspace = QVBoxLayout()
+        workspace.setSpacing(14)
+        map_group = QGroupBox("Map && mode")
+        map_layout = QVBoxLayout(map_group)
+        map_layout.setSpacing(10)
+        map_layout.addLayout(self._load_map_row())
+        map_layout.addWidget(self.current_map_label)
+        map_layout.addLayout(self._make_mode_row())
+        create_panel = QWidget()
+        create_layout = QVBoxLayout(create_panel)
+        create_layout.setContentsMargins(0, 0, 0, 0)
+        create_layout.addLayout(self._make_create_map_row())
+        map_layout.addWidget(CollapsibleSection("Create map", create_panel))
+        workspace.addWidget(map_group)
+
+        panels = QHBoxLayout()
+        panels.setSpacing(14)
+        waypoint_group = QGroupBox("Waypoints")
+        waypoint_layout = QVBoxLayout(waypoint_group)
+        waypoint_layout.addLayout(self._make_waypoint_row())
+        waypoint_layout.addLayout(self._make_add_waypoint_row())
+        self.waypoint_hint = QLabel("Load a map to use waypoints.")
+        self.waypoint_hint.setWordWrap(True)
+        waypoint_layout.addWidget(self.waypoint_hint)
+        panels.addWidget(waypoint_group, 1)
+
+        landmark_group = QGroupBox("Landmarks")
+        landmark_layout = QVBoxLayout(landmark_group)
+        landmark_layout.addLayout(self._make_landmark_row())
+        landmark_layout.addLayout(self._make_add_landmark_row())
+        self.landmark_hint = QLabel("Load a map to use landmarks.")
+        self.landmark_hint.setWordWrap(True)
+        landmark_layout.addWidget(self.landmark_hint)
+        panels.addWidget(landmark_group, 1)
+        workspace.addLayout(panels)
+        workspace.addStretch(1)
 
         self._apply_map_list()
         self._apply_waypoint_list()
+        self._apply_landmark_list()
+        self.update_tags_dropdown()
+        self._refresh_availability()
+        return [workspace]
 
-        return rows
-
-    # --- Rows ---
-    def _load_map_row(self) -> QHBoxLayout:
+    def _load_map_row(self):
         row = QHBoxLayout()
-        row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(5)
-
-        row.addWidget(QLabel("Select Map:"))
-
+        row.setSpacing(8)
+        row.addWidget(QLabel("Map:"))
         self.map_dropdown = QComboBox()
-        row.addWidget(self.map_dropdown)
-
-        self.confirm_map_button = QPushButton("Load Map")
-        self.confirm_map_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.map_dropdown.setMinimumWidth(220)
+        row.addWidget(self.map_dropdown, 1)
+        self.confirm_map_button = QPushButton("Load")
         self.confirm_map_button.clicked.connect(self.handle_map_confirmed)
         row.addWidget(self.confirm_map_button)
-
-        self.delete_map_button = QPushButton("Delete Map")
-        self.delete_map_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.delete_map_button = QPushButton("Delete map")
         self.delete_map_button.clicked.connect(self.handle_delete_map)
-        row.addWidget(self.delete_map_button)
-
-        self.current_map_label = QLabel("Current Map: None")
-        self.current_map_label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-        self.current_map_label.setWordWrap(False)
-        row.addWidget(self.current_map_label)
+        self.delete_map_button.hide()
+        more = QToolButton()
+        more.setText("⋯")
+        more.setAccessibleName("Map actions")
+        more.setToolTip("Map actions")
+        menu = QMenu(more)
+        delete = menu.addAction("Delete map…")
+        delete.triggered.connect(self.delete_map_button.click)
+        menu.aboutToShow.connect(lambda: delete.setEnabled(self.delete_map_button.isEnabled()))
+        more.setMenu(menu)
+        more.setPopupMode(QToolButton.InstantPopup)
+        row.addWidget(more)
+        row.addStretch()
+        self.current_map_label = QLabel("Current map: None")
         return row
 
     def apply_setup_state(self, state: NavigationSetupState):
@@ -82,7 +122,7 @@ class NavigationControls(UIControlHelper):
         self._cached_waypoint_list = list(state.waypoint_names)
         self._cached_landmark_list = list(state.landmark_names)
         self.current_map_label.setText(
-            f"Current Map: {self.current_map or 'None'}"
+            f"Current map: {self.current_map or 'None'}"
         )
         self._apply_map_list()
         self._apply_waypoint_list()
@@ -108,6 +148,7 @@ class NavigationControls(UIControlHelper):
         self.ui.set_navigation_mode(
             state.mode != NavigationSetupState.MODE_NONE
         )
+        self._refresh_availability()
 
     def _apply_map_list(self):
         self.map_dropdown.clear()
@@ -120,40 +161,21 @@ class NavigationControls(UIControlHelper):
             if active_index >= 0:
                 self.map_dropdown.setCurrentIndex(active_index)
 
+    @staticmethod
+    def _populate_list(widget, names):
+        selected = widget.currentItem().text() if widget.currentItem() else None
+        widget.blockSignals(True)
+        widget.clear()
+        widget.addItems(names)
+        if names:
+            widget.setCurrentRow(names.index(selected) if selected in names else 0)
+        widget.blockSignals(False)
+
     def _apply_waypoint_list(self):
-        self.waypoint_dropdown.clear()
-        if not self._cached_waypoint_list:
-            self.waypoint_dropdown.addItem("no waypoints saved")
-        else:
-            for wp_name in self._cached_waypoint_list:
-                self.waypoint_dropdown.addItem(wp_name)
+        self._populate_list(self.waypoint_list, self._cached_waypoint_list)
 
     def _apply_landmark_list(self):
-        if not self._cached_landmark_list:
-            self.landmark_label.setText("no landmarks saved")
-            self.landmark_label.setStyleSheet("")  # default color
-            self.landmark_dropdown.clear()
-            self.landmark_dropdown.addItem("no landmarks saved")
-            return
-
-        # Build text string, color visible tags green/red
-        text_parts = []
-        for lm_name in self._cached_landmark_list:
-            if lm_name.startswith("Tag_"):
-                tag_id = int(lm_name.split("_")[1])
-                if tag_id in self.ui.visible_tags:
-                    text_parts.append(f'<span style="color: green;">{lm_name}</span>')
-                else:
-                    text_parts.append(f'<span style="color: red;">{lm_name}</span>')
-            else:
-                text_parts.append(lm_name)
-
-        self.landmark_label.setText(", ".join(text_parts))
-
-        # Populate the dropdown with landmarks
-        self.landmark_dropdown.clear()
-        for lm_name in self._cached_landmark_list:
-            self.landmark_dropdown.addItem(lm_name)
+        self._populate_list(self.landmark_list, self._cached_landmark_list)
 
     def _make_create_map_row(self) -> QHBoxLayout:
         row = QHBoxLayout()
@@ -174,7 +196,7 @@ class NavigationControls(UIControlHelper):
         row = QHBoxLayout()
         row.addWidget(QLabel("Mode:"))
 
-        self.mode_none = QRadioButton("None")
+        self.mode_none = QRadioButton("Off")
         self.mode_none.setChecked(True)
 
         self.mode_mapping = QRadioButton("Mapping")
@@ -192,7 +214,7 @@ class NavigationControls(UIControlHelper):
         row.addWidget(self.mode_none)
         row.addWidget(self.mode_mapping)
         row.addWidget(self.mode_localization)
-        self.mapping_rviz = QCheckBox("RViz mapping visualization")
+        self.mapping_rviz = QCheckBox("Show RViz")
         self.mapping_rviz.setChecked(startup_settings().get('mapping_rviz', True))
         self.mapping_rviz.setToolTip(
             "Show or hide RViz without restarting mapping or localization. "
@@ -200,90 +222,105 @@ class NavigationControls(UIControlHelper):
         )
         self.mapping_rviz.toggled.connect(self.handle_mapping_visualization)
         row.addWidget(self.mapping_rviz)
+        row.addStretch()
 
         return row
 
-    def _make_waypoint_row(self) -> QHBoxLayout:
-        row = QHBoxLayout()
-        row.addWidget(QLabel("Waypoints:"))
-
-        # Dropdown for waypoints
-        self.waypoint_dropdown = QComboBox()
-        self.update_waypoint_dropdown()
-        row.addWidget(self.waypoint_dropdown)
-
-        self.delete_waypoint_button = QPushButton("Delete Waypoint")
-        self.delete_waypoint_button.clicked.connect(self.handle_delete_waypoint)
-        row.addWidget(self.delete_waypoint_button)
-
-        # Button to move to selected waypoint
-        self.move_to_waypoint_button = QPushButton("Move to Waypoint")
+    def _make_waypoint_row(self):
+        layout = QVBoxLayout()
+        self.waypoint_list = QListWidget()
+        self.waypoint_list.setMinimumHeight(130)
+        self.waypoint_list.setMaximumHeight(210)
+        self.waypoint_list.setStyleSheet("QListWidget::item { padding: 6px; }")
+        self.waypoint_list.currentRowChanged.connect(self._refresh_availability)
+        layout.addWidget(self.waypoint_list)
+        actions = QHBoxLayout()
+        self.move_to_waypoint_button = QPushButton("Move to waypoint")
+        self.move_to_waypoint_button.setMinimumHeight(34)
+        self.move_to_waypoint_button.setStyleSheet(
+            "QPushButton:enabled { background: palette(highlight); color: palette(highlighted-text); "
+            "font-weight: bold; border: none; border-radius: 4px; padding: 6px 12px; }"
+        )
         self.move_to_waypoint_button.clicked.connect(self.handle_move_to_waypoint)
-        row.addWidget(self.move_to_waypoint_button)
+        actions.addWidget(self.move_to_waypoint_button, 1)
+        self.delete_waypoint_button = QPushButton("Delete")
+        self.delete_waypoint_button.clicked.connect(self.handle_delete_waypoint)
+        actions.addWidget(self.delete_waypoint_button)
+        layout.addLayout(actions)
+        return layout
 
-        return row
-
-    def _make_add_waypoint_row(self) -> QHBoxLayout:
+    def _make_add_waypoint_row(self):
         row = QHBoxLayout()
-
-        # Text field for entering waypoint name
         self.poi_name_field = QLineEdit()
-        self.poi_name_field.setPlaceholderText("Enter waypoint name")
-        self.poi_name_field.setFixedWidth(200)
-        row.addWidget(self.poi_name_field)
-
-        # Button to add current pose as waypoint
-        self.add_waypoint_button = QPushButton("Add current pose as Waypoint")
+        self.poi_name_field.setPlaceholderText("Waypoint name")
+        row.addWidget(self.poi_name_field, 1)
+        self.add_waypoint_button = QPushButton("Add current pose")
         self.add_waypoint_button.clicked.connect(self.handle_add_waypoint)
         row.addWidget(self.add_waypoint_button)
+        return row
 
+    def _make_landmark_row(self):
+        layout = QVBoxLayout()
+        self.landmark_list = QListWidget()
+        self.landmark_list.setMinimumHeight(130)
+        self.landmark_list.setMaximumHeight(210)
+        self.landmark_list.setStyleSheet("QListWidget::item { padding: 6px; }")
+        self.landmark_list.currentRowChanged.connect(self._refresh_availability)
+        layout.addWidget(self.landmark_list)
+        actions = QHBoxLayout()
+        self.landmark_label = QLabel("Saved localization references")
+        actions.addWidget(self.landmark_label, 1)
+        self.delete_landmark_button = QPushButton("Delete")
+        self.delete_landmark_button.setMinimumHeight(34)
+        self.delete_landmark_button.clicked.connect(self.handle_delete_landmark)
+        actions.addWidget(self.delete_landmark_button)
+        layout.addLayout(actions)
+        return layout
+
+    def _make_add_landmark_row(self):
+        row = QHBoxLayout()
         row.addWidget(QLabel("Visible tag:"))
         self.landmark_tag_dropdown = QComboBox()
-        self.landmark_tag_dropdown.setMinimumWidth(100)
+        self.landmark_tag_dropdown.setMinimumWidth(90)
         self.landmark_tag_dropdown.setToolTip("Select a visible tag to save as a landmark.")
-        row.addWidget(self.landmark_tag_dropdown)
-
-        self.add_landmark_button = QPushButton("Add Tag as Landmark")
+        row.addWidget(self.landmark_tag_dropdown, 1)
+        self.add_landmark_button = QPushButton("Add tag")
         self.add_landmark_button.clicked.connect(self.handle_add_landmark)
         row.addWidget(self.add_landmark_button)
-        self.update_tags_dropdown()
-
         return row
 
-    def _make_landmark_row(self) -> QHBoxLayout:
-        row = QHBoxLayout()
-        row.addWidget(QLabel("Landmarks:"))
+    def _refresh_availability(self, *_args):
+        loaded = bool(self.current_map)
+        has_maps = bool(self._cached_map_list)
+        self.confirm_map_button.setEnabled(has_maps)
+        self.delete_map_button.setEnabled(has_maps)
+        self.mode_mapping.setEnabled(loaded)
+        self.mode_localization.setEnabled(loaded)
+        has_waypoint = loaded and self.waypoint_list.currentItem() is not None
+        self.move_to_waypoint_button.setEnabled(has_waypoint)
+        self.delete_waypoint_button.setEnabled(has_waypoint)
+        self.add_waypoint_button.setEnabled(loaded)
+        self.delete_landmark_button.setEnabled(loaded and self.landmark_list.currentItem() is not None)
+        self.add_landmark_button.setEnabled(loaded and bool(self.ui.visible_tags))
+        self.waypoint_hint.setText(
+            "Load a map to use waypoints." if not loaded else
+            "No waypoints saved. Add the current robot pose." if not self._cached_waypoint_list else
+            "Select a waypoint, then move to it."
+        )
+        self.landmark_hint.setText(
+            "Load a map to use landmarks." if not loaded else
+            "No visible tags. A visible tag is required to add a landmark." if not self.ui.visible_tags else
+            "Save a visible tag as a localization reference."
+        )
+        for index in range(self.landmark_list.count()):
+            item = self.landmark_list.item(index)
+            tag = item.text().removeprefix("Tag_")
+            item.setToolTip("Tag visible" if tag.isdigit() and int(tag) in self.ui.visible_tags
+                            else "Tag not currently visible")
 
-        # Label showing all landmarks (rich text for coloring visible tags)
-        self.landmark_label = QLabel("no landmarks saved")
-        self.landmark_label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-        self.landmark_label.setTextFormat(Qt.RichText)
-        row.addWidget(self.landmark_label)
-
-        # Dropdown for deleting a landmark
-        self.landmark_dropdown = QComboBox()
-        row.addWidget(self.landmark_dropdown)
-
-        # Delete landmark button
-        self.delete_landmark_button = QPushButton("Delete Landmark")
-        self.delete_landmark_button.clicked.connect(self.handle_delete_landmark)
-        row.addWidget(self.delete_landmark_button)
-
-        row.addStretch(1)
-        return row
-
-    # --- Dropdown updates ---
     def update_tags_dropdown(self):
         self.ui.update_tags_dropdown(self.landmark_tag_dropdown)
-        self.add_landmark_button.setEnabled(bool(self.ui.visible_tags))
-
-    def update_waypoint_dropdown(self):
-        self.waypoint_dropdown.clear()
-
-        current_map = self.map_dropdown.currentText()
-        if not current_map:
-            self.waypoint_dropdown.addItem("no waypoints saved")
-            return
+        self._refresh_availability()
 
     def handle_map_confirmed(self):
         selected_map = self.map_dropdown.currentText()
@@ -360,7 +397,7 @@ class NavigationControls(UIControlHelper):
         )
 
     def handle_move_to_waypoint(self):
-        selected = self.waypoint_dropdown.currentText()
+        selected = self.waypoint_list.currentItem().text() if self.waypoint_list.currentItem() else ""
         if (
             not self.current_map
             or not selected
@@ -405,7 +442,7 @@ class NavigationControls(UIControlHelper):
         )
 
     def handle_delete_waypoint(self):
-        selected = self.waypoint_dropdown.currentText()
+        selected = self.waypoint_list.currentItem().text() if self.waypoint_list.currentItem() else ""
         if not selected or selected == "no waypoints saved":
             self.show_warning(
                 "No Waypoint Selected",
@@ -419,7 +456,7 @@ class NavigationControls(UIControlHelper):
         )
 
     def handle_delete_landmark(self):
-        selected = self.landmark_dropdown.currentText()
+        selected = self.landmark_list.currentItem().text() if self.landmark_list.currentItem() else ""
         if not selected or selected == "no landmarks saved":
             self.show_warning("No Landmark Selected", "Please select a landmark to delete.")
             return

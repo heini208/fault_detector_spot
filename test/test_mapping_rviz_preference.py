@@ -61,7 +61,7 @@ def test_ui_startup_default_and_session_toggle_are_separate(default):
     assert [intent.mapping_rviz for intent in intents] == [not default, not default]
     assert startup_settings()['mapping_rviz'] is default
     assert BasicSettingsRepository().load()['mapping_rviz'] is default
-    assert row.count() == 5
+    assert row.count() == 6
     assert app is not None
 
 

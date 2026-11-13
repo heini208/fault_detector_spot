@@ -102,3 +102,43 @@ def test_select_map_is_not_a_runtime_navigation_operation():
         NavigationSetupIntent.OPERATION_SELECT_MAP
         not in navigation_setup_api._RUNTIME_OPERATIONS
     )
+
+
+def test_navigation_lists_preserve_selected_destination_and_disable_empty_actions():
+    from PyQt5.QtWidgets import QApplication
+    from fault_detector_msgs.msg import NavigationSetupState
+    from fault_detector_spot.ui.navigation.controls import NavigationControls
+    app = QApplication.instance() or QApplication([])
+    sent = []
+    ui = SimpleNamespace(
+        node=None, visible_tags=[5],
+        update_tags_dropdown=lambda widget: widget.addItem('5'),
+        set_navigation_mode=lambda active: None,
+        execute_operation=sent.append,
+    )
+    controls = NavigationControls(ui)
+    assert not controls.move_to_waypoint_button.isEnabled()
+    assert not controls.add_landmark_button.isEnabled()
+    state = NavigationSetupState()
+    state.active_map = 'plant'
+    state.map_names = ['plant']
+    state.waypoint_names = ['entrance', 'inspection']
+    state.landmark_names = ['Tag_5']
+    state.mode = state.MODE_LOCALIZATION
+    controls.apply_setup_state(state)
+    controls.waypoint_list.setCurrentRow(1)
+    controls.apply_setup_state(state)
+    controls.move_to_waypoint_button.click()
+    assert len(sent) == 1
+    assert sent[0].map_name == 'plant'
+    assert sent[0].waypoint_name == 'inspection'
+    assert controls.add_landmark_button.isEnabled()
+    state.active_map = ''
+    state.waypoint_names = []
+    state.landmark_names = []
+    controls.apply_setup_state(state)
+    assert not controls.move_to_waypoint_button.isEnabled()
+    assert not controls.delete_waypoint_button.isEnabled()
+    assert not controls.delete_landmark_button.isEnabled()
+    assert not controls.add_landmark_button.isEnabled()
+    assert app is not None
