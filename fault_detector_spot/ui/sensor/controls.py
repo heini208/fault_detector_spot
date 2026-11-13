@@ -166,7 +166,7 @@ class SensorControls(QWidget):
         self.active_mount_dropdown.setEnabled(False)
 
         self.select_mount_button = QPushButton("Select Mount")
-        self.clear_attachment_button = QPushButton("Remove Sensor")
+        self.clear_attachment_button = QPushButton("Delete mount")
 
         self.select_mount_button.setEnabled(False)
         self.clear_attachment_button.setEnabled(False)
