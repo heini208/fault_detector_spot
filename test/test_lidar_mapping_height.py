@@ -138,3 +138,21 @@ def test_rtabmap_timing_verbosity_is_scoped_and_can_be_reenabled(launch_file):
         context.launch_configurations["rtabmap_log_level"] = "info"
         assert perform_substitutions(context, logger_level) == "rtabmap:=info"
         context.launch_configurations["rtabmap_log_level"] = "warn"
+
+
+@pytest.mark.parametrize(
+    "incremental_memory,expected_neighbors,expected_iterations",
+    [("true", "1", "20"), ("false", "5", "10")],
+)
+def test_localization_icp_tuning_does_not_change_mapping_parameters(
+    launch_file, incremental_memory, expected_neighbors, expected_iterations,
+):
+    parameters = node_parameters(
+        launch_file, launch_file.make_rtabmap_node(incremental_memory, condition=None),
+    )
+    assert parameters["RGBD/ProximityPathMaxNeighbors"] == expected_neighbors
+    assert parameters["Icp/Iterations"] == expected_iterations
+    assert parameters["RGBD/ProximityGlobalScanMap"] == "false"
+    assert parameters["Icp/VoxelSize"] == "0.10"
+    assert parameters["Icp/PointToPlaneK"] == "20"
+    assert parameters["Icp/MaxCorrespondenceDistance"] == "1.0"

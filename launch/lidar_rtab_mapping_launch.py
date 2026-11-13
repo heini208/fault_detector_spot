@@ -33,8 +33,13 @@ def make_rtabmap_node(incremental_memory, condition):
                 "true" if incremental_memory == "false" else "false"
             ),
 
+            # Keep mapping defaults; reduce the local ICP workload only
+            # when localizing against an existing map.
             "RGBD/ProximityPathMaxNeighbors": (
-                "10" if incremental_memory == "false" else "1"
+                "5" if incremental_memory == "false" else "1"
+            ),
+            "Icp/Iterations": (
+                "10" if incremental_memory == "false" else "20"
             ),
             # Use proximity-path scan matching in localization too. Global
             # scan-map matching showed multi-second updates without matches.
