@@ -104,13 +104,12 @@ class SensorControls(QWidget):
         content_layout.setContentsMargins(12, 10, 12, 12)
         content_layout.setSpacing(10)
 
-        content_layout.addWidget(self._build_header())
         content_layout.addWidget(self._build_attachment_group())
 
         body = QHBoxLayout()
         body.setSpacing(10)
-        body.addWidget(self._build_registry_group(), 5)
-        body.addWidget(self._build_definition_group(), 6)
+        body.addWidget(self._build_registry_group(), 2)
+        body.addWidget(self._build_definition_group(), 3)
         content_layout.addLayout(body)
 
         content_layout.addStretch()
@@ -144,6 +143,7 @@ class SensorControls(QWidget):
         layout.setVerticalSpacing(6)
 
         self.attachment_name_value = QLabel("—")
+        self.attachment_name_value.setStyleSheet("font-weight: bold;")
         self.attachment_status_value = QLabel("Waiting for state")
         self.attachment_probe_frame_value = QLabel("—")
         self.head_connection_value = QLabel("Waiting for state")
@@ -154,9 +154,9 @@ class SensorControls(QWidget):
         layout.addWidget(QLabel("Status:"), 0, 2)
         layout.addWidget(self.attachment_status_value, 0, 3)
         layout.addWidget(QLabel("Probe frame:"), 1, 0)
-        layout.addWidget(self.attachment_probe_frame_value, 1, 1, 1, 3)
-        layout.addWidget(QLabel("Sensor head:"), 2, 0)
-        layout.addWidget(self.head_connection_value, 2, 1, 1, 3)
+        layout.addWidget(self.attachment_probe_frame_value, 1, 1)
+        layout.addWidget(QLabel("Sensor head:"), 1, 2)
+        layout.addWidget(self.head_connection_value, 1, 3)
 
         self.active_mount_dropdown = QComboBox()
         self.active_mount_dropdown.addItem(
@@ -176,14 +176,14 @@ class SensorControls(QWidget):
         action_row.addWidget(self.select_mount_button)
         action_row.addWidget(self.clear_attachment_button)
 
-        layout.addLayout(action_row, 3, 0, 1, 4)
+        layout.addLayout(action_row, 2, 0, 1, 4)
 
         layout.setColumnStretch(1, 1)
         layout.setColumnStretch(3, 1)
         return group
 
     def _build_registry_group(self) -> QGroupBox:
-        group = QGroupBox("Registered sensor mounts")
+        group = QGroupBox("Saved mounts")
         layout = QVBoxLayout(group)
 
         self.mount_table = QTableWidget(0, 4)
@@ -195,7 +195,14 @@ class SensorControls(QWidget):
                 "Transform source",
             )
         )
-        self.mount_table.horizontalHeader().setStretchLastSection(True)
+        self.mount_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.mount_table.setColumnHidden(1, True)
+        self.mount_table.setColumnHidden(2, True)
+        self.mount_table.verticalHeader().hide()
+        self.mount_table.setShowGrid(False)
+        self.mount_table.setAlternatingRowColors(True)
+        self.mount_table.verticalHeader().setDefaultSectionSize(34)
+        self.mount_table.setToolTip("Select a mount to edit it. Hover a row for its ID and probe frame.")
         self.mount_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.mount_table.setSelectionMode(QTableWidget.SingleSelection)
         self.mount_table.setEditTriggers(QTableWidget.NoEditTriggers)
@@ -207,8 +214,8 @@ class SensorControls(QWidget):
         self.empty_registry_label.setAlignment(Qt.AlignCenter)
         self.empty_registry_label.setStyleSheet("color: palette(mid);")
 
-        self.edit_mount_button = QPushButton("Edit Sensor")
-        self.delete_mount_button = QPushButton("Delete Selected")
+        self.edit_mount_button = QPushButton("Edit mount")
+        self.delete_mount_button = QPushButton("Delete")
         self.edit_mount_button.setEnabled(False)
         self.delete_mount_button.setEnabled(False)
 
@@ -223,7 +230,7 @@ class SensorControls(QWidget):
         return group
 
     def _build_definition_group(self) -> QGroupBox:
-        group = QGroupBox("Sensor mount definition")
+        group = QGroupBox("Mount definition")
         outer = QVBoxLayout(group)
 
         form = QFormLayout()
@@ -265,7 +272,10 @@ class SensorControls(QWidget):
             "Import the sensor-tip transform and collision geometry "
             "from a .sensorhead file."
         )
-        form.addRow(self.import_mount_button)
+        import_row = QHBoxLayout()
+        import_row.addWidget(self.import_mount_button)
+        import_row.addStretch()
+        outer.addLayout(import_row)
 
         self.collision_geometry_status = QLabel()
         self.collision_geometry_status.setWordWrap(True)
@@ -274,7 +284,8 @@ class SensorControls(QWidget):
             "Save the sensor mount to store imported geometry. "
             "Path-planning integration is not yet available."
         )
-        form.addRow(self.collision_geometry_status)
+        outer.addWidget(self.collision_geometry_status)
+        outer.addLayout(form)
 
         translation = self._vector_fields(
             ("X", "Y", "Z"),
@@ -287,16 +298,24 @@ class SensorControls(QWidget):
         self.translation_fields = translation[0]
         self.rotation_fields = rotation[0]
 
-        form.addRow("Hand → probe translation:", translation[1])
-        form.addRow("Hand → probe rotation:", rotation[1])
+        transform_group = QGroupBox("Hand → probe transform")
+        transform_form = QFormLayout(transform_group)
+        transform_form.addRow("Position:", translation[1])
+        transform_form.addRow("Rotation:", rotation[1])
 
         self.transform_status_value = QLabel(
             "Manual transform. Enter a new mount ID and save."
         )
         self.transform_status_value.setWordWrap(True)
-        form.addRow("Transform status:", self.transform_status_value)
+        transform_form.addRow(self.transform_status_value)
+        outer.addWidget(transform_group)
 
-        self.save_mount_button = QPushButton("Save Sensor Mount")
+        self.save_mount_button = QPushButton("Save mount")
+        self.save_mount_button.setMinimumHeight(34)
+        self.save_mount_button.setStyleSheet(
+            "QPushButton:enabled { background: palette(highlight); color: palette(highlighted-text); "
+            "font-weight: bold; border: none; border-radius: 4px; padding: 6px 12px; }"
+        )
         self.discard_mount_button = QPushButton("Discard Changes")
 
         actions = QHBoxLayout()
@@ -304,7 +323,6 @@ class SensorControls(QWidget):
         actions.addWidget(self.discard_mount_button)
         actions.addWidget(self.save_mount_button)
 
-        outer.addLayout(form)
         outer.addWidget(self._build_channels_group())
         outer.addItem(
             QSpacerItem(
@@ -1273,11 +1291,12 @@ class SensorControls(QWidget):
             if definition.sensor_id == DEFAULT_HAND_SENSOR_ID else "Manual",
         )
         for column, value in enumerate(values):
-            self.mount_table.setItem(
-                row,
-                column,
-                QTableWidgetItem(value),
+            item = QTableWidgetItem(value)
+            item.setToolTip(
+                f"{definition.display_name}\nMount ID: {definition.sensor_id}"
+                f"\nProbe frame: {definition.probe_frame}\nTransform source: {values[3]}"
             )
+            self.mount_table.setItem(row, column, item)
 
     @staticmethod
     def _field_value(field: QLineEdit) -> float:
