@@ -73,7 +73,7 @@ class MappingSafetyMonitor:
             if self.runtime._call_service("/rtabmap/pause", timeout_sec=3.0):
                 self.tracker.pause_confirmed(process)
                 self.node.get_logger().error(
-                    "RTAB-Map mapping paused: localization/tracking evidence lost"
+                    f"RTAB-Map mapping paused: {self.tracker.snapshot()[1]}"
                 )
                 return
             self.node.get_logger().error(

@@ -35,12 +35,14 @@ class LocalizationStateTracker:
     def __init__(
         self, ros_clock_ns, *, steady_clock=time.monotonic,
         required_matches=3, maximum_age_sec=1.5, stream_timeout_sec=3.0,
+        startup_timeout_sec=30.0,
     ):
         self._ros_clock_ns = ros_clock_ns
         self._steady_clock = steady_clock
         self.required_matches = required_matches
         self.maximum_age_sec = maximum_age_sec
         self.stream_timeout_sec = stream_timeout_sec
+        self.startup_timeout_sec = startup_timeout_sec
         self._quality = LocalizationQualityConfig(maximum_age_sec=maximum_age_sec)
         # Mapping covariance accumulates along the graph; do not apply the
         # much tighter localization-admission uncertainty threshold to mapping.
@@ -70,6 +72,7 @@ class LocalizationStateTracker:
             self._accepted_matches = 0
             self._last_accepted_at = 0.0
             self._mapping_since = 0.0
+            self._mapping_starting = False
             self._mapping_pose_boundary = 0.0
             self._mapping_info_boundary = 0.0
             self._paused = False
@@ -107,7 +110,9 @@ class LocalizationStateTracker:
                 self.process = process
                 self.state = LocalizationState.UNLOCALIZED
                 self.reason = "Creating a new map, no prior global alignment"
+                self._minimum_stamp = self._now_ns()
             self.mode = "mapping"
+            self._mapping_starting = not existing_map
             self._mapping_since = self._steady_clock()
             self._mapping_pose_boundary = self._pose_at
             self._mapping_info_boundary = self._info_at
@@ -202,6 +207,19 @@ class LocalizationStateTracker:
                 self.state = LocalizationState.LOST
                 self.reason = "Accepted lidar-to-map registration stream is stale"
         if self.mode == "mapping" and not self._paused:
+            # A newly launched ROS process needs time for node initialization,
+            # discovery and the first processed scan. Once both streams arrive,
+            # use the normal tracking timeout for the rest of this session.
+            if self._mapping_starting:
+                if (self._pose_at > self._mapping_pose_boundary
+                        and self._info_at > self._mapping_info_boundary):
+                    self._mapping_starting = False
+                elif now - self._mapping_since < self.startup_timeout_sec:
+                    return
+                else:
+                    self.state = LocalizationState.LOST
+                    self.reason = "RTAB-Map startup timed out awaiting pose and processed-scan streams"
+                    return
             if now - self._mapping_since < self.stream_timeout_sec:
                 return
             if (self._pose_at <= self._mapping_pose_boundary

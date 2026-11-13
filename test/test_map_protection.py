@@ -172,7 +172,7 @@ def test_watchdog_requests_pause_after_tracking_loss(runtime):
     manager, launches, stops = runtime
     manager.start_mapping("new_map")
     tracker = manager._safety.tracker
-    tracker._mapping_since -= 10.0
+    tracker._mapping_since -= tracker.startup_timeout_sec + 1.0
     monitor = manager._safety
     monitor.tick()
     assert monitor._pause_future is not None
@@ -215,3 +215,36 @@ def test_map_extension_rejects_pose_older_than_quality_limit():
     now[0] = 15
     steady[0] = 15.0
     assert not tracker.can_extend("plant", process)[0]
+
+
+def test_new_map_allows_process_startup_then_enforces_tracking_timeout():
+    tracker, process, now, steady, sample = harness()
+    tracker.begin_mapping("new", process, existing_map=False)
+    steady[0] = 15.0  # RTAB-Map can still be initializing after five seconds.
+    assert not tracker.requires_pause(process)
+    sample(16, accepted=False)
+    assert not tracker.requires_pause(process)
+    assert tracker.snapshot()[0] == LocalizationState.UNLOCALIZED
+    steady[0] = 20.0  # Loss after startup must not get another startup window.
+    assert tracker.requires_pause(process)
+
+
+@pytest.mark.parametrize("stream", [None, "pose", "info"])
+def test_new_map_startup_timeout_requires_both_streams(stream):
+    tracker, process, now, steady, sample = harness()
+    tracker.begin_mapping("new", process, existing_map=False)
+    now[0] = 41
+    steady[0] = 41.0
+    if stream == "pose":
+        tracker.observe_pose(pose(41))
+    elif stream == "info":
+        tracker.observe_info(registration(41, accepted=False))
+    assert tracker.requires_pause(process)
+    assert "startup timed out" in tracker.snapshot()[1]
+
+
+def test_new_map_seed_during_startup_still_requires_immediate_pause():
+    tracker, process, now, steady, sample = harness()
+    tracker.begin_mapping("new", process, existing_map=False)
+    tracker.observe_seed(pose(11))
+    assert tracker.requires_pause(process)
