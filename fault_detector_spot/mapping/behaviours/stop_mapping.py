@@ -23,6 +23,7 @@ class StopMapping(py_trees.behaviour.Behaviour):
             if not (
                 self.helper.is_running()
                 or self.helper.nav2_runtime.is_running()
+                or self.helper.visualization_runtime.is_running()
                 or self.helper.has_pending_operation()
                 or self.helper.nav2_runtime.has_pending_operation()
             ):
@@ -71,6 +72,7 @@ class StopMapping(py_trees.behaviour.Behaviour):
             result is False
             or self.helper.is_running()
             or self.helper.nav2_runtime.is_running()
+            or self.helper.visualization_runtime.is_running()
         ):
             self.feedback_message = (
                 "Mapping runtime stop failed or a process is still alive"

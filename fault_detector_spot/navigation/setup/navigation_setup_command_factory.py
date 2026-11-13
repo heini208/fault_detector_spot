@@ -13,6 +13,7 @@ class NavigationSetupCommandFactory:
         CommandID.START_SLAM,
         CommandID.START_LOCALIZATION,
         CommandID.STOP_MAPPING,
+        CommandID.SET_MAPPING_VISUALIZATION,
         CommandID.SWAP_MAP,
     })
 

@@ -75,6 +75,7 @@ from fault_detector_spot.mapping.behaviours.enable_localization import (
 )
 from fault_detector_spot.mapping.behaviours.enable_slam import EnableSLAM
 from fault_detector_spot.mapping.behaviours.stop_mapping import StopMapping
+from fault_detector_spot.mapping.behaviours.set_mapping_visualization import SetMappingVisualization
 from fault_detector_spot.mapping.behaviours.swap_map import SwapMap
 from fault_detector_spot.navigation.behaviours.landmark_relocalizer import (
     LandmarkRelocalizer,
@@ -489,6 +490,10 @@ def build_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
         (
             CommandID.SWAP_MAP,
             lambda n: SwapMap(rtabmap_runtime),
+        ),
+        (
+            CommandID.SET_MAPPING_VISUALIZATION,
+            lambda n: SetMappingVisualization(rtabmap_runtime),
         ),
         (
             CommandID.STOP_MAPPING,

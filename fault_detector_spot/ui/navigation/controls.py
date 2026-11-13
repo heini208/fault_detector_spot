@@ -195,9 +195,10 @@ class NavigationControls(UIControlHelper):
         self.mapping_rviz = QCheckBox("RViz mapping visualization")
         self.mapping_rviz.setChecked(startup_settings().get('mapping_rviz', True))
         self.mapping_rviz.setToolTip(
-            "Show RViz on the next mapping or localization launch. "
-            "Changing this does not affect a running session."
+            "Show or hide RViz without restarting mapping or localization. "
+            "Also applies to the next launch."
         )
+        self.mapping_rviz.toggled.connect(self.handle_mapping_visualization)
         row.addWidget(self.mapping_rviz)
 
         return row
@@ -294,6 +295,13 @@ class NavigationControls(UIControlHelper):
             NavigationSetupIntent.OPERATION_SELECT_MAP,
             map_name=selected_map,
         )
+
+    def handle_mapping_visualization(self, checked: bool):
+        if self.mode_mapping.isChecked() or self.mode_localization.isChecked():
+            return self._submit_setup(
+                NavigationSetupIntent.OPERATION_SET_MAPPING_VISUALIZATION,
+                map_name=self.current_map,
+            )
 
     def handle_mode_none(self, checked: bool):
         if checked:

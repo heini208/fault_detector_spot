@@ -63,3 +63,51 @@ def test_ui_startup_default_and_session_toggle_are_separate(default):
     assert BasicSettingsRepository().load()['mapping_rviz'] is default
     assert row.count() == 5
     assert app is not None
+
+
+@pytest.mark.parametrize('mode', ['mode_mapping', 'mode_localization'])
+def test_live_checkbox_submits_only_visualization_intent(mode):
+    app = QApplication.instance() or QApplication([])
+    controls = NavigationControls.__new__(NavigationControls)
+    controls.current_map = 'plant'
+    intents = []
+    controls.ui = SimpleNamespace(execute_navigation_setup=intents.append)
+    controls._make_mode_row()
+    button = getattr(controls, mode)
+    button.blockSignals(True)
+    controls.mode_none.blockSignals(True)
+    button.setChecked(True)
+    controls.mapping_rviz.setChecked(False)
+    controls.mapping_rviz.setChecked(True)
+    assert [intent.operation for intent in intents] == [
+        NavigationSetupIntent.OPERATION_SET_MAPPING_VISUALIZATION,
+        NavigationSetupIntent.OPERATION_SET_MAPPING_VISUALIZATION,
+    ]
+    assert [intent.mapping_rviz for intent in intents] == [False, True]
+    assert app is not None
+
+
+@pytest.mark.parametrize('enabled', [False, True])
+def test_live_toggle_reaches_visualization_leaf(tmp_path, enabled):
+    from fault_detector_spot.mapping.behaviours.set_mapping_visualization import SetMappingVisualization
+    navigation, boundary = coordinator(tmp_path)
+    context = navigation.open_context('ui').context
+    navigation.submit_runtime_operation(
+        context, NavigationSetupIntent.OPERATION_SET_MAPPING_VISUALIZATION,
+        CommandID.SET_MAPPING_VISUALIZATION, mapping_rviz=enabled,
+    )
+    command = semantic_command_from_message(semantic_command_to_message(boundary.submitted[-1].command))
+    execution = CommandSubscriber._map_command(SimpleNamespace(_create_command_stamp=lambda: None), command)
+    calls = []
+    def begin(name, callback, *args):
+        callback(*args)
+        return True
+    runtime = SimpleNamespace(begin_runtime_operation=begin,
+                              set_visualization=calls.append,
+                              poll_runtime_operation=lambda name: True)
+    behavior = SetMappingVisualization(runtime)
+    behavior.blackboard = SimpleNamespace(last_command=execution)
+    behavior.initialise()
+    assert behavior.update() == py_trees.common.Status.RUNNING
+    assert behavior.update() == py_trees.common.Status.SUCCESS
+    assert calls == [enabled]

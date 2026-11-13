@@ -129,6 +129,7 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
             CommandID.STOP_MAPPING: self._simple_command,
             CommandID.WAIT_TIME: self._wait_command,
             CommandID.START_SLAM: self._map_command,
+            CommandID.SET_MAPPING_VISUALIZATION: self._map_command,
             CommandID.START_LOCALIZATION: self._map_command,
             CommandID.SWAP_MAP: self._map_command,
             CommandID.MOVE_TO_WAYPOINT: self._waypoint_command,

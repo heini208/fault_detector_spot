@@ -18,6 +18,7 @@ class _AsyncHelper:
     def __init__(self):
         self.rtab_running = True
         self.mapping = False
+        self.visualization_runtime = SimpleNamespace(is_running=lambda: False)
         self.localization = True
         self.nav2_runtime = SimpleNamespace(is_running=lambda: True)
         self._operation = None

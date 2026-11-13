@@ -17,6 +17,16 @@ from fault_detector_spot.shared.ros.runtime_manager import RuntimeManager
 from fault_detector_spot.shared.ros.qos_profiles import LATCHED_QOS
 
 
+class MappingVisualizationRuntime(RuntimeManager):
+    """Own only the mapping RViz process group."""
+
+    PROCESS_KEY = "mapping_rviz_process"
+    RUNTIME_NAME = "Mapping RViz"
+
+    def start(self):
+        return self._launch("mapping_rviz_launch.py")
+
+
 class RtabmapRuntimeManager(RuntimeManager):
     """Manage RTAB-Map and Nav2 runtime processes."""
 
@@ -38,6 +48,7 @@ class RtabmapRuntimeManager(RuntimeManager):
         raw_lidar_topic=None,
     ):
         super().__init__(node, blackboard)
+        self.visualization_runtime = MappingVisualizationRuntime(node, blackboard)
         self.launch_file = launch_file
         self.raw_lidar_topic = raw_lidar_topic
         self._localization_frame = None
@@ -172,8 +183,11 @@ class RtabmapRuntimeManager(RuntimeManager):
             try:
                 stopped = self._stop_rtabmap(save)
             finally:
-                nav2_stopped = self.nav2_runtime.stop()
-            return stopped and nav2_stopped
+                try:
+                    nav2_stopped = self.nav2_runtime.stop()
+                finally:
+                    visualization_stopped = self.visualization_runtime.stop()
+            return stopped and nav2_stopped and visualization_stopped
 
     def _stop_for_close(self):
         with self._process_lock:
@@ -182,7 +196,10 @@ class RtabmapRuntimeManager(RuntimeManager):
             finally:
                 # Close drains Nav2's worker and stops its process once. Calling
                 # stop() first would repeat the entire timeout on failure.
-                self.nav2_runtime.close()
+                try:
+                    self.nav2_runtime.close()
+                finally:
+                    self.visualization_runtime.close()
 
     def _call_service(
         self,
@@ -245,6 +262,7 @@ class RtabmapRuntimeManager(RuntimeManager):
                 raise RuntimeError("Refusing to overwrite an existing saved map")
             if (self.is_mapping_running() and target == self.bb.active_map_name
                     and not delete_db):
+                self.set_visualization(rviz)
                 return self.process
             if existing:
                 allowed, detail = self._safety.tracker.can_extend(target, self.process)
@@ -256,6 +274,7 @@ class RtabmapRuntimeManager(RuntimeManager):
                 if not self.nav2_runtime.stop():
                     raise RuntimeError("Could not stop Nav2 before mapping")
                 self.set_mode_mapping()
+                self.set_visualization(rviz)
                 return self.process
             return self._start_rtabmap(
                 target, extend_map=True, delete_db=delete_db, rviz=rviz,
@@ -302,13 +321,13 @@ class RtabmapRuntimeManager(RuntimeManager):
 
         extend_map_str = "true" if extend_map else "false"
         delete_db_str = "true" if delete_db else "false"
-        rviz_str = "true" if rviz else "false"
+        # RViz has its own process group so toggles cannot restart navigation.
 
         args = [
             f"db_path:={db_path}",
             f"delete_db:={delete_db_str}",
             f"extend_map:={extend_map_str}",
-            f"rviz:={rviz_str}",
+            "rviz:=false",
             f"frame_id:={localization_frame}",
             "ground_max_height:=" + (
                 "0.05" if localization_frame == "feet_center" else "0.12"
@@ -335,7 +354,22 @@ class RtabmapRuntimeManager(RuntimeManager):
             f"with DB: {db_path}"
         )
 
+        self.set_visualization(rviz)
         return proc
+
+    def set_visualization(self, enabled):
+        """Change only visualization; never stop or restart navigation."""
+        with self._process_lock:
+            if type(enabled) is not bool:
+                raise TypeError("Mapping visualization must be a boolean")
+            if enabled:
+                if not self.is_running():
+                    raise RuntimeError("Start mapping or localization before showing RViz")
+                self.visualization_runtime.start()
+                return True
+            if not self.visualization_runtime.stop():
+                raise RuntimeError("Mapping visualization did not stop")
+            return True
 
     def start_localization(
         self,
@@ -350,6 +384,7 @@ class RtabmapRuntimeManager(RuntimeManager):
         if not self.nav2_runtime.is_running():
             self.nav2_runtime.start()
 
+        self.set_visualization(rviz)
         return self.bb.slam_launch_process
 
     def set_mode_localization(self):
@@ -434,10 +469,11 @@ class RtabmapRuntimeManager(RuntimeManager):
             f"in {current_mode} mode..."
         )
 
+        rviz = self.visualization_runtime.is_running()
         if current_mode == self.MODE_MAPPING:
-            self.start_mapping(map_name)
+            self.start_mapping(map_name, rviz=rviz)
         else:
-            self.start_localization(map_name)
+            self.start_localization(map_name, rviz=rviz)
 
         message = (
             f"Changed to map '{map_name}' "

@@ -31,6 +31,7 @@ class CommandID(str, Enum):
     START_SLAM = "start_slam"
     START_LOCALIZATION = "start_localization"
     STOP_MAPPING = "stop_mapping"
+    SET_MAPPING_VISUALIZATION = "set_mapping_visualization"
     SWAP_MAP = "swap_map"
     MOVE_TO_WAYPOINT = "move_to_waypoint"
     MOVE_BASE_TO_TAG = "move_base_to_tag"

@@ -36,13 +36,16 @@ def runtime(monkeypatch, tmp_path):
 
     def launch(args, **kwargs):
         assert kwargs == {"start_new_session": True}
-        process = SimpleNamespace(pid=100 + len(processes), alive=True)
+        process = SimpleNamespace(pid=100 + len(processes), alive=True, argv=args)
         processes.append(process)
-        launches.append(args)
+        # Existing lifecycle assertions count navigation launches only.
+        if "mapping_rviz_launch.py" not in args:
+            launches.append(args)
         return process
 
     def stop(process, **kwargs):
-        stops.append((process, kwargs))
+        if "mapping_rviz_launch.py" not in process.argv:
+            stops.append((process, kwargs))
         process.alive = False
         return True
 
@@ -496,12 +499,15 @@ def test_mode_switch_failure_preserves_previous_mode(runtime):
     assert not manager.nav2_runtime.is_running()
 
 
-@pytest.mark.parametrize("failed_runtime", ["rtab", "nav2"])
+@pytest.mark.parametrize("failed_runtime", ["rtab", "nav2", "rviz"])
 def test_system_close_attempts_each_process_once_and_keeps_failed_owner(runtime, monkeypatch, failed_runtime):
     manager, launches, stops = runtime
     rtab = manager.start_mapping("plant")
     nav2 = manager.nav2_runtime.start()
-    failed_process = rtab if failed_runtime == "rtab" else nav2
+    visual = manager.visualization_runtime.process
+    owner = {"rtab": manager, "nav2": manager.nav2_runtime,
+             "rviz": manager.visualization_runtime}[failed_runtime]
+    failed_process = owner.process
     attempts = []
     original = runtime_module.terminate_process_group
 
@@ -514,15 +520,14 @@ def test_system_close_attempts_each_process_once_and_keeps_failed_owner(runtime,
     monkeypatch.setattr(runtime_module, "terminate_process_group", stop)
     with pytest.raises(RuntimeError, match="did not terminate"):
         manager.close()
-    assert [process for process, _ in attempts] == [rtab, nav2]
+    assert [process for process, _ in attempts] == [rtab, nav2, visual]
     assert attempts[0][1] == dict(interrupt_timeout_sec=2.0, terminate_timeout_sec=1.0, kill_timeout_sec=1.0)
     assert attempts[1][1] == dict(interrupt_timeout_sec=5.0, terminate_timeout_sec=2.0, kill_timeout_sec=1.0)
     assert not manager._closed
-    owner = manager if failed_runtime == "rtab" else manager.nav2_runtime
     assert owner.process is failed_process
     monkeypatch.setattr(runtime_module, "terminate_process_group", original)
     assert manager.close()
-    assert manager.process is manager.nav2_runtime.process is None
+    assert manager.process is manager.nav2_runtime.process is manager.visualization_runtime.process is None
 
 
 @pytest.mark.parametrize("mode", ["mapping", "localization"])
@@ -639,3 +644,51 @@ def test_runtime_status_reports_unexpected_exit_and_partial_localization(runtime
     timer = manager._status_timer
     manager.close()
     manager.node.destroy_timer.assert_called_once_with(timer)
+
+
+@pytest.mark.parametrize('mode', ['mapping', 'localization'])
+def test_live_visualization_toggles_only_its_own_process(runtime, tmp_path, mode):
+    manager, launches, stops = runtime
+    if mode == 'localization':
+        (tmp_path / 'plant.db').touch()
+    getattr(manager, f'start_{mode}')('plant', rviz=False)
+    main = manager.process
+    nav2 = manager.nav2_runtime.process
+    original_launches = list(launches)
+    manager._call_service.reset_mock()
+    assert manager.set_visualization(True)
+    visual = manager.visualization_runtime.process
+    assert 'rviz:=false' in main.argv
+    assert 'mapping_rviz_launch.py' in visual.argv
+    assert visual.alive
+    assert manager.set_visualization(True)
+    assert manager.visualization_runtime.process is visual
+    assert manager.set_visualization(False)
+    assert not visual.alive
+    assert manager.set_visualization(False)
+    assert manager.process is main and main.alive
+    assert manager.nav2_runtime.process is nav2
+    assert launches == original_launches
+    assert stops == []
+    manager._call_service.assert_not_called()
+    assert manager.set_visualization(True)
+    assert manager.visualization_runtime.process is not visual
+    visual = manager.visualization_runtime.process
+    manager.close()
+    assert not visual.alive
+    assert manager.visualization_runtime._closed
+
+
+def test_visualization_stop_failure_retains_ownership_and_navigation(runtime, monkeypatch):
+    manager, _, _ = runtime
+    main = manager.start_mapping('plant')
+    visual = manager.visualization_runtime.process
+    original_stop = runtime_module.terminate_process_group
+    monkeypatch.setattr(runtime_module, 'terminate_process_group',
+                        lambda process, **kwargs: False if process is visual else original_stop(process, **kwargs))
+    with pytest.raises(RuntimeError, match='visualization did not stop'):
+        manager.set_visualization(False)
+    assert manager.visualization_runtime.process is visual
+    assert visual.alive and main.alive
+    monkeypatch.setattr(runtime_module, 'terminate_process_group', original_stop)
+    assert manager.set_visualization(False)

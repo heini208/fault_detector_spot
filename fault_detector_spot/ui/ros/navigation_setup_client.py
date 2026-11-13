@@ -24,6 +24,7 @@ _RUNTIME_OPERATIONS = frozenset({
     NavigationSetupIntent.OPERATION_START_MAPPING,
     NavigationSetupIntent.OPERATION_START_LOCALIZATION,
     NavigationSetupIntent.OPERATION_STOP_MAPPING,
+    NavigationSetupIntent.OPERATION_SET_MAPPING_VISUALIZATION,
 })
 
 class NavigationSetupClient(QObject):
