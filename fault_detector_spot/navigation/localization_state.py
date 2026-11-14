@@ -34,9 +34,11 @@ class LocalizationStateTracker:
     def __init__(
         self, ros_clock_ns, *, steady_clock=time.monotonic,
         required_matches=3, maximum_age_sec=1.5, stream_timeout_sec=3.0,
+        scan_only_registration=False,
     ):
         self._ros_clock_ns = ros_clock_ns
         self._steady_clock = steady_clock
+        self.scan_only_registration = scan_only_registration
         self.required_matches = required_matches
         self.maximum_age_sec = maximum_age_sec
         self.stream_timeout_sec = stream_timeout_sec
@@ -145,7 +147,8 @@ class LocalizationStateTracker:
         self._last_checked_stamp = self._pose_stamp
         error = self._pose_error()
         if (not error and self._info.header.frame_id == "map"
-                and accepted_lidar_localization(self._info)):
+                and accepted_lidar_localization(
+                    self._info, scan_only_registration=self.scan_only_registration)):
             now = self._steady_clock()
             if self._last_accepted_at and now - self._last_accepted_at > self.stream_timeout_sec:
                 self._accepted_matches = 0

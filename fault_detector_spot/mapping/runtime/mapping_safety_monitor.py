@@ -14,6 +14,8 @@ class MappingSafetyMonitor:
         self.runtime = runtime
         self.tracker = LocalizationStateTracker(
             lambda: node.get_clock().now().nanoseconds,
+            # The managed lidar launch enforces ICP-only registration.
+            scan_only_registration=(runtime.launch_file == "lidar_rtab_mapping_launch.py"),
         )
         self._subscriptions = [
             node.create_subscription(

@@ -95,7 +95,8 @@ def test_runtime_rejects_saved_map_without_localization(runtime, tmp_path):
     assert len(launches) == 2
 
 
-def test_runtime_enters_mapping_after_three_accepted_matching_scans(runtime, tmp_path):
+@pytest.mark.parametrize("single_node", [False, True])
+def test_runtime_enters_mapping_after_three_accepted_matching_scans(runtime, tmp_path, single_node):
     manager, launches, stops = runtime
     (tmp_path / "plant.db").touch()
     process = manager.start_localization("plant")
@@ -104,7 +105,12 @@ def test_runtime_enters_mapping_after_three_accepted_matching_scans(runtime, tmp
             stamp * 1_000_000_000
         )
         manager._safety.tracker.observe_pose(pose(stamp))
-        manager._safety.tracker.observe_info(registration(stamp))
+        info = registration(stamp)
+        if single_node:
+            info.stats_values = [0.0, 0.0, 0.0]
+            info.stats_keys.append("Proximity/Space_detections_added_visually/")
+            info.stats_values.append(1.0)
+        manager._safety.tracker.observe_info(info)
     assert manager.start_mapping("plant") is process
     assert manager.is_mapping_running()
     assert not manager.nav2_runtime.is_running()

@@ -119,3 +119,23 @@ def test_requires_existing_localization_evidence_contract(malformation):
         info.stats_keys = [GLOBAL_ICP, MULTI_ICP]
         info.stats_values = [1.0, 0.0]
     assert not accepted_lidar_localization(info)
+
+
+@pytest.mark.parametrize("scan_only", [False, True])
+@pytest.mark.parametrize("rejected", [False, True])
+def test_single_node_proximity_requires_scan_only_runtime_and_acceptance(scan_only, rejected):
+    info = lidar_info(0.0, 0.0)
+    info.stats_keys.append("Proximity/Space_detections_added_visually/")
+    info.stats_values.append(1.0)
+    info.stats_values[0] = float(rejected)
+    assert accepted_lidar_localization(
+        info, scan_only_registration=scan_only,
+    ) is (scan_only and not rejected)
+
+
+@pytest.mark.parametrize("value", [0.0, -1.0, float("nan"), float("inf")])
+def test_scan_only_runtime_still_requires_valid_single_node_match(value):
+    info = lidar_info(0.0, 0.0)
+    info.stats_keys.append("Proximity/Space_detections_added_visually/")
+    info.stats_values.append(value)
+    assert not accepted_lidar_localization(info, scan_only_registration=True)

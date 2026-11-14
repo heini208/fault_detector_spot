@@ -142,7 +142,7 @@ def accepted_localization(info) -> bool:
         return False
 
 
-def accepted_lidar_localization(info) -> bool:
+def accepted_lidar_localization(info, *, scan_only_registration=False) -> bool:
     """Whether this result includes an accepted LiDAR-to-map registration.
 
     RTAB-Map publishes both proximity ICP counters in each extended result,
@@ -150,6 +150,10 @@ def accepted_lidar_localization(info) -> bool:
     remain positive if subsequent optimization rejects the added links. The
     proximity ID and rejection flag must therefore also confirm acceptance.
     NeighborLinkRefining ICP statistics describe odometry, not a map match.
+
+    With a runtime guaranteed to use Reg/Strategy=1, the single-node path
+    also proves ICP: RTAB-Map counts computeTransform() successes under the
+    legacy "visually" counter regardless of the registration strategy.
 
     Callers still need matching capture timestamps, localization quality and
     seed provenance checks; an accepted ICP match is not independent truth.
@@ -171,7 +175,16 @@ def accepted_lidar_localization(info) -> bool:
             if isinstance(value, bool) or not math.isfinite(value) or value < 0:
                 return False
             counters.append(value)
-        return any(value > 0 for value in counters)
+        if any(value > 0 for value in counters):
+            return True
+        if scan_only_registration:
+            key = "Proximity/Space_detections_added_visually/"
+            if keys.count(key) != 1:
+                return False
+            value = info.stats_values[keys.index(key)]
+            return (not isinstance(value, bool)
+                    and math.isfinite(value) and value > 0)
+        return False
     except (AttributeError, TypeError, ValueError, OverflowError):
         return False
 

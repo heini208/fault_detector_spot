@@ -76,6 +76,8 @@ def test_scan_only_proximity_registration_has_an_odometry_guess(launch_file, inc
     parameters = node_parameters(launch_file, node)
     assert parameters["subscribe_scan_cloud"] is True
     assert parameters["Reg/Strategy"] == "1"
+    # Admission must remain sound even if a custom parameter file changes it.
+    assert node["parameters"][1]["Reg/Strategy"] == "1"
     assert parameters["RGBD/ProximityBySpace"] == "true"
     assert parameters["RGBD/ProximityOdomGuess"] == "true"
 

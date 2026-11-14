@@ -28,6 +28,9 @@ def make_rtabmap_node(incremental_memory, condition):
             "database_path": LaunchConfiguration("db_path"),
             "delete_db_on_start": LaunchConfiguration("delete_db"),
 
+            # Mapping admission interprets the single-node proximity counter
+            # as ICP evidence; enforce that contract even with a custom YAML.
+            "Reg/Strategy": "1",
             "Mem/IncrementalMemory": incremental_memory,
             "Mem/InitWMWithAllNodes": (
                 "true" if incremental_memory == "false" else "false"
