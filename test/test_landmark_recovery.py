@@ -595,3 +595,79 @@ def test_recovery_reports_rejected_observations_without_seeding(rig, case, expec
     assert expected in rig.statuses.publish.call_args.args[0].data
     assert "Map: map_a" in rig.statuses.publish.call_args.args[0].data
     rig.publisher.publish.assert_not_called()
+
+
+@pytest.mark.parametrize("interruption", ["tf_delay", "stale", "absent"])
+def test_recovery_accumulates_fresh_captures_across_temporary_gaps(rig, interruption):
+    rig.behavior.config = LandmarkRecoveryConfig()
+    lookup = rig.buffer.lookup_transform
+
+    def pending_capture_tf(target, source, stamp, **kwargs):
+        if stamp.nanoseconds:
+            raise TransformException("capture TF has not arrived yet")
+        return lookup(target, source, stamp, **kwargs)
+    for index in range(3):
+        rig.sample(seconds=1.1)
+        if index == 2:
+            break
+        assert rig.behavior._windows[7].sample_count == index + 1
+        if interruption == "tf_delay":
+            rig.advance(0.1)
+            rig.bb["visible_tags"] = {7: tag(rig.clock[0])}
+            rig.buffer.lookup_transform = pending_capture_tf
+        elif interruption == "stale":
+            rig.advance(1.6)
+        else:
+            rig.advance(0.1)
+            rig.bb["visible_tags"] = {}
+        rig.bb["last_pose_estimation"] = localization(rig.clock[0], variance=9999.0)
+        rig.tick()
+        assert rig.behavior._windows[7].sample_count == index + 1
+        rig.publisher.publish.assert_not_called()
+        rig.buffer.lookup_transform = lookup
+    rig.publisher.publish.assert_called_once()
+
+
+def test_qualified_window_never_seeds_without_current_observation_and_tf(rig):
+    rig.bb["command_tree_status"] = py_trees.common.Status.RUNNING
+    for _ in range(5):
+        rig.sample()
+    assert rig.behavior._windows[7].sample_count == 3
+    rig.bb["command_tree_status"] = py_trees.common.Status.SUCCESS
+    rig.bb["visible_tags"] = {}
+    rig.advance(0.1)
+    rig.tick()
+    rig.publisher.publish.assert_not_called()
+    rig.buffer.unavailable = True
+    rig.sample()
+    rig.publisher.publish.assert_not_called()
+    assert rig.behavior._windows[7].sample_count == 3
+
+
+def test_retained_captures_expire_during_a_gap(rig):
+    rig.sample()
+    rig.sample()
+    rig.bb["visible_tags"] = {}
+    rig.advance(rig.behavior.config.maximum_sample_span_sec + 0.1)
+    rig.bb["last_pose_estimation"] = localization(rig.clock[0], variance=9999.0)
+    rig.tick()
+    assert not rig.behavior._windows
+    assert not rig.behavior._window_origins
+    rig.sample()
+    assert rig.behavior._windows[7].sample_count == 1
+    rig.publisher.publish.assert_not_called()
+
+
+def test_contradictory_capture_still_restarts_retained_window(rig):
+    rig.sample()
+    rig.sample()
+    rig.bb["visible_tags"] = {}
+    rig.advance(0.1)
+    rig.tick()
+    rig.advance(0.1)
+    rig.bb["visible_tags"] = {7: tag(rig.clock[0], x=1.0)}
+    rig.bb["last_pose_estimation"] = localization(rig.clock[0], variance=9999.0)
+    rig.tick()
+    assert rig.behavior._windows[7].sample_count == 1
+    assert "unstable" in rig.behavior.feedback_message
+    rig.publisher.publish.assert_not_called()

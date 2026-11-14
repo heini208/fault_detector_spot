@@ -52,6 +52,13 @@ class LandmarkPoseWindow:
         self._source_frame = None
         self.detail = "Waiting for distinct stable landmark observations"
 
+    def expire(self, now_ns: int):
+        """Discard captures outside the window even while no new sample arrives."""
+        while self._samples and now_ns - self._samples[0][0] > self.maximum_sample_span_ns:
+            self._samples.popleft()
+        if not self._samples:
+            self.clear()
+
     def add(self, stamp_ns: int, pose: PoseData, source_frame: str = ""):
         try:
             if type(stamp_ns) is not int or stamp_ns <= 0:

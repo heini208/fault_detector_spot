@@ -68,8 +68,11 @@
     # Acquisition delay on arrival is bounded separately.
     navigation.landmark_recovery.maximum_localization_delay_sec: 5.0
     navigation.landmark_recovery.maximum_localization_gap_sec: 5.0
-    navigation.landmark_recovery.required_samples: 5
-    navigation.landmark_recovery.maximum_sample_span_sec: 6.0
+    # Recover from intermittent camera/TF delivery: keep three consistent
+    # captures for up to ten seconds across gaps. A correction still needs a
+    # fresh observation with capture-time TF and fresh stationary odometry.
+    navigation.landmark_recovery.required_samples: 3
+    navigation.landmark_recovery.maximum_sample_span_sec: 10.0
     navigation.landmark_recovery.maximum_position_spread_m: 0.20
     navigation.landmark_recovery.maximum_rotation_spread_rad: 0.17453292519943295  # 10 deg
     navigation.landmark_recovery.maximum_tag_age_sec: 1.5

@@ -36,8 +36,8 @@ from fault_detector_spot.shared.ros.tf_transforms import transform_to_pose_data
 @dataclass(frozen=True)
 class LandmarkRecoveryConfig:
     enabled: bool = True
-    required_samples: int = 5
-    maximum_sample_span_sec: float = 6.0
+    required_samples: int = 3
+    maximum_sample_span_sec: float = 10.0
     maximum_position_spread_m: float = 0.20
     maximum_rotation_spread_rad: float = math.radians(10.0)
     maximum_tag_age_sec: float = 1.5
@@ -337,7 +337,14 @@ class LandmarkRelocalizer(py_trees.behaviour.Behaviour):
         visible = self._read("visible_tags") or {}
         candidates = []
         details = []
-        active_ids = set()
+        # A missing image or briefly unavailable capture-time TF is not a
+        # contradictory measurement. Retain bounded evidence, but only a fresh
+        # observation with valid TF below can produce a correction candidate.
+        for tag_id, window in list(self._windows.items()):
+            window.expire(now_ns)
+            if not window.sample_count:
+                self._windows.pop(tag_id)
+                self._window_origins.pop(tag_id, None)
         boundary = max(self._minimum_stamp_ns, self._last_request_ns)
         for tag_id, tag in visible.items():
             if tag_id not in self.landmark_map:
@@ -349,8 +356,11 @@ class LandmarkRelocalizer(py_trees.behaviour.Behaviour):
                 age = (now_ns - stamp_ns) / 1e9
                 if stamp_ns <= boundary:
                     raise ValueError("waiting for a capture after the map change or last correction")
-                if not 0 <= age <= self.config.maximum_tag_age_sec:
-                    raise ValueError(f"observation stale or future-dated (maximum age {self.config.maximum_tag_age_sec:g} s)")
+                if age > self.config.maximum_tag_age_sec:
+                    details.append(f"Tag {tag_id}: observation stale (maximum age {self.config.maximum_tag_age_sec:g} s); waiting for a fresh capture")
+                    continue
+                if age < 0:
+                    raise ValueError("observation is future-dated")
                 if not frame or frame in (self.map_frame, self.odom_frame):
                     raise ValueError(f"observation frame {frame!r} is not robot-relative")
                 progress = self._tag_progress.get(tag_id)
@@ -376,7 +386,6 @@ class LandmarkRelocalizer(py_trees.behaviour.Behaviour):
                 if window.sample_count == 0:
                     self._window_origins[tag_id] = odom_to_sensor
                 origin = self._window_origins[tag_id]
-                active_ids.add(tag_id)
                 # Express corrections at a nearby, fixed reference. Comparing
                 # map<-odom translations at a distant origin amplifies yaw noise.
                 stable = window.add(stamp_ns, pose_to_pose_data(matrix_to_pose(map_to_odom @ origin)), frame)
@@ -384,11 +393,23 @@ class LandmarkRelocalizer(py_trees.behaviour.Behaviour):
                     details.append(f"Tag {tag_id}: {window.detail}")
                 if stable is not None:
                     candidates.append((distance, tag_id, pose_to_matrix(pose_data_to_pose(stable)) @ np.linalg.inv(origin)))
-            except (tf2_ros.TransformException, TypeError, ValueError, np.linalg.LinAlgError) as exception:
+            except tf2_ros.TransformException as exception:
+                details.append(f"Tag {tag_id}: waiting for capture-time TF: {exception}")
+            except (TypeError, ValueError, np.linalg.LinAlgError) as exception:
+                # Invalid geometry, frames and regressed/replayed data must not
+                # inherit an earlier qualified window.
+                self._windows.pop(tag_id, None)
+                self._window_origins.pop(tag_id, None)
                 details.append(f"Tag {tag_id}: observation/TF unavailable: {exception}")
-                continue
-        self._windows = {key: value for key, value in self._windows.items() if key in active_ids}
-        self._window_origins = {key: value for key, value in self._window_origins.items() if key in active_ids}
+        retained = [
+            f"Tag {tag_id}: retaining {window.sample_count}/{self.config.required_samples} "
+            f"valid captures within {self.config.maximum_sample_span_sec:g} s"
+            for tag_id, window in sorted(self._windows.items())
+            if not any(candidate[1] == tag_id for candidate in candidates)
+        ]
+        if not visible:
+            details.append("No saved landmark currently detected")
+        details.extend(retained)
         self._candidate_detail = "\n".join(details) if details else "No saved landmark currently detected"
         return sorted(candidates, key=lambda item: (item[0], item[1]))
 
