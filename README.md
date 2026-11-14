@@ -1642,6 +1642,13 @@ its Nav2 runtime manager. The current API is `start_mapping()`,
 Both expose `begin_runtime_operation()` and `poll_runtime_operation()` for
 behavior-tree callers. Slow process termination does not hold the polling lock.
 
+To continue mapping a saved map, start **Localization** for that same map and
+wait for verified lidar-map matches before selecting **Mapping**. A saved
+database cannot enter mapping from **Off** (`none`), including after the
+localization process exits. The setup coordinator rejects this request before
+dispatch, and the runtime checks the live mode again before switching. Empty
+map definitions without a `.db` file can still start mapping directly from Off.
+
 Inspection's Routine Navigation shows the saved map's runtime status next to its
 name: correct localization map, different localization map, no running map, or
 mapping in progress. Unavailable runtime reports are shown separately so an old

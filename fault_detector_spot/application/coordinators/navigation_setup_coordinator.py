@@ -544,6 +544,13 @@ class NavigationSetupCoordinator:
             CommandID.START_LOCALIZATION,
         }:
             normalized_map = self._require_active_map(normalized_map)
+        if (command_id == CommandID.START_SLAM
+                and self.map_artifacts.has_database(normalized_map)
+                and self._mode not in {MODE_LOCALIZATION, MODE_MAPPING}):
+            raise RuntimeError(
+                f"Cannot extend existing map '{normalized_map}': "
+                "start localization for this map before switching to mapping."
+            )
         if command_id == CommandID.SWAP_MAP:
             map_id = self._map_id(normalized_map)
             if not self.map_repository.exists(map_id):

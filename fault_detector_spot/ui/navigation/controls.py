@@ -200,6 +200,11 @@ class NavigationControls(UIControlHelper):
         self.mode_none.setChecked(True)
 
         self.mode_mapping = QRadioButton("Mapping")
+        self.mode_mapping.setToolTip(
+            "Existing maps require active localization with verified lidar-map "
+            "matches before switching to Mapping. Only new maps can start "
+            "mapping directly from Off."
+        )
         self.mode_localization = QRadioButton("Localization")
 
         self.mode_group = QButtonGroup()

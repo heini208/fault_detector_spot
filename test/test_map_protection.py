@@ -112,6 +112,66 @@ def test_runtime_enters_mapping_after_three_accepted_matching_scans(runtime, tmp
     manager._call_service.assert_called_with("/rtabmap/set_mode_mapping")
 
 
+@pytest.mark.parametrize("entrypoint", ["start_mapping", "set_mode_mapping"])
+def test_stopped_localization_cannot_reuse_verified_evidence(runtime, tmp_path, entrypoint):
+    manager, launches, stops = runtime
+    database = tmp_path / "plant.db"
+    database.write_bytes(b"saved map")
+    process = manager.start_localization("plant")
+    for stamp in (11, 12, 13):
+        manager.node.get_clock.return_value.now.return_value.nanoseconds = (
+            stamp * 1_000_000_000
+        )
+        manager._safety.tracker.observe_pose(pose(stamp))
+        manager._safety.tracker.observe_info(registration(stamp))
+    assert manager._safety.tracker.can_extend("plant", process)[0]
+
+    # An unexpected exit retains the process reference and localization evidence.
+    process.alive = False
+    assert manager.get_running_mode() == manager.MODE_NONE
+    manager._call_service.reset_mock()
+    with pytest.raises(RuntimeError, match="start localization for this map"):
+        getattr(manager, entrypoint)()
+
+    manager._call_service.assert_not_called()
+    assert manager.nav2_runtime.is_running()
+    assert len(launches) == 2
+    assert stops == []
+    assert database.read_bytes() == b"saved map"
+
+
+def test_existing_map_requires_localization_of_the_same_active_map(runtime, tmp_path):
+    manager, launches, stops = runtime
+    (tmp_path / "plant.db").touch()
+    (tmp_path / "other.db").touch()
+    process = manager.start_localization("other")
+    manager._call_service.reset_mock()
+
+    with pytest.raises(RuntimeError, match="start localization for this map"):
+        manager.start_mapping("plant")
+
+    manager._call_service.assert_not_called()
+    assert manager.process is process
+    assert manager.is_localization_running()
+    assert len(launches) == 2
+    assert stops == []
+
+
+def test_repeated_start_mapping_preserves_the_active_saved_map(runtime, tmp_path):
+    manager, launches, stops = runtime
+    process = manager.start_mapping("plant")
+    (tmp_path / "plant.db").touch()
+    manager._call_service.reset_mock()
+
+    assert manager.start_mapping("plant") is process
+    manager.set_mode_mapping()
+
+    manager._call_service.assert_not_called()
+    assert manager.is_mapping_running()
+    assert len(launches) == 1
+    assert stops == []
+
+
 def test_runtime_never_deletes_saved_database_through_start_mapping(runtime, tmp_path):
     manager, launches, stops = runtime
     (tmp_path / "plant.db").touch()

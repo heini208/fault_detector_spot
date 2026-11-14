@@ -265,12 +265,7 @@ class RtabmapRuntimeManager(RuntimeManager):
                 self.set_visualization(rviz)
                 return self.process
             if existing:
-                allowed, detail = self._safety.tracker.can_extend(target, self.process)
-                if not allowed:
-                    raise RuntimeError(
-                        f"Cannot extend existing map '{target}': {detail}. "
-                        "Start localization and wait for verified lidar-map matches."
-                    )
+                self._require_localized_map(target)
                 if not self.nav2_runtime.stop():
                     raise RuntimeError("Could not stop Nav2 before mapping")
                 self.set_mode_mapping()
@@ -278,6 +273,21 @@ class RtabmapRuntimeManager(RuntimeManager):
                 return self.process
             return self._start_rtabmap(
                 target, extend_map=True, delete_db=delete_db, rviz=rviz,
+            )
+
+    def _require_localized_map(self, map_name):
+        """Require a live localization runtime before consulting its evidence."""
+        if (self.get_running_mode() != self.MODE_LOCALIZATION
+                or map_name != self.bb.active_map_name):
+            raise RuntimeError(
+                f"Cannot extend existing map '{map_name}': "
+                "start localization for this map before switching to mapping."
+            )
+        allowed, detail = self._safety.tracker.can_extend(map_name, self.process)
+        if not allowed:
+            raise RuntimeError(
+                f"Cannot extend existing map '{map_name}': {detail}. "
+                "Start localization and wait for verified lidar-map matches."
             )
 
     def _start_rtabmap(
@@ -401,11 +411,11 @@ class RtabmapRuntimeManager(RuntimeManager):
             if self.is_mapping_running():
                 return
             target = self.bb.active_map_name
+            if not target:
+                raise RuntimeError("No active map selected")
             existing = os.path.exists(self._db_path(target))
             if existing:
-                allowed, detail = self._safety.tracker.can_extend(target, self.process)
-                if not allowed:
-                    raise RuntimeError(f"Cannot enable mapping: {detail}")
+                self._require_localized_map(target)
             if not self._call_service("/rtabmap/set_mode_mapping"):
                 raise RuntimeError(
                     "Could not switch RTAB-Map to mapping mode"

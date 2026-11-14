@@ -15,6 +15,11 @@ class MapArtifactStore:
     def __init__(self, maps_dir: Union[str, Path]):
         self.maps_dir = Path(maps_dir).expanduser()
 
+    def has_database(self, map_id: str) -> bool:
+        """Distinguish a saved map from an empty metadata definition."""
+        validate_storage_name(map_id, "map ID")
+        return (self.maps_dir / f"{map_id}.db").exists()
+
     def paths(self, map_id: str) -> Iterable[Path]:
         """Return existing artifacts belonging to one validated map ID."""
         validate_storage_name(map_id, "map ID")

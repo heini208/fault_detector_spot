@@ -25,7 +25,9 @@ from fault_detector_spot.mapping.repository.map_artifact_store import (
 )
 from fault_detector_spot.mapping.repository.map_repository import MapRepository
 from fault_detector_spot.application.coordinators.navigation_setup_coordinator import (
+    MODE_LOCALIZATION,
     MODE_MAPPING,
+    MODE_NONE,
     NavigationSetupCoordinator,
 )
 
@@ -166,6 +168,36 @@ def test_runtime_operation_uses_semantic_nonrecordable_command(tmp_path):
 
     assert statuses[-1].snapshot.mode == MODE_MAPPING
     assert statuses[-1].detail == "Mapping started"
+
+
+@pytest.mark.parametrize("mode", [MODE_NONE, MODE_LOCALIZATION, MODE_MAPPING])
+@pytest.mark.parametrize("saved_database", [False, True])
+def test_mapping_admission_requires_localization_for_saved_maps(
+    tmp_path, mode, saved_database,
+):
+    navigation, boundary = coordinator(tmp_path)
+    context = navigation.open_context("navigation-ui").context
+    navigation.create_and_select_map(context, "plant")
+    if saved_database:
+        (tmp_path / "plant.db").write_bytes(b"saved map")
+    navigation.observe_runtime(mode, "plant")
+    context = navigation.context(context.context_id, context.client_id)
+
+    if saved_database and mode == MODE_NONE:
+        with pytest.raises(RuntimeError, match="start localization for this map"):
+            navigation.submit_runtime_operation(context, 5, CommandID.START_SLAM, "plant")
+        assert boundary.submitted == []
+        assert navigation.snapshot(context).mode == MODE_NONE
+        assert (tmp_path / "plant.db").read_bytes() == b"saved map"
+        # Rejection must not reserve the operation lane needed to localize.
+        operation = navigation.submit_runtime_operation(
+            context, 6, CommandID.START_LOCALIZATION, "plant",
+        )
+    else:
+        operation = navigation.submit_runtime_operation(
+            context, 5, CommandID.START_SLAM, "plant",
+        )
+    assert boundary.submitted == [operation.request]
 
 
 def test_pose_authoring_requires_active_runtime_mode(tmp_path):
