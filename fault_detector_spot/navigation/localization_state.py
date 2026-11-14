@@ -1,7 +1,7 @@
-"""Map-alignment evidence for existing-map admission.
+"""Localization diagnostics and pose-quality admission for existing maps.
 
-Process liveness and pose covariance alone are not proof of map alignment.
-Only fresh, matched, accepted lidar registrations establish LOCALIZED.
+Registration evidence drives diagnostic state; mapping admission requires an
+active matching localization session and a fresh, confident pose estimate.
 """
 from enum import Enum
 from threading import RLock
@@ -191,13 +191,13 @@ class LocalizationStateTracker:
             return self.state, self.reason, False
 
     def can_extend(self, map_name, process):
+        """Admit mapping using session identity and current pose confidence only."""
         with self._lock:
-            self._refresh()
             if (self.mode != "localization" or self.process is not process
                     or self.map_name != map_name):
                 return False, "matching active localization session required"
-            if self.state != LocalizationState.LOCALIZED:
-                return False, self.reason
+            if self._pose is not None and self._pose_stamp <= self._minimum_stamp:
+                return False, "Awaiting a localization estimate after pose reset"
             error = self._pose_error()
             if error:
                 return False, error

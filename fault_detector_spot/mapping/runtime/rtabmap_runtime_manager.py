@@ -252,7 +252,7 @@ class RtabmapRuntimeManager(RuntimeManager):
                 pass
 
     def start_mapping(self, map_name=None, delete_db=False, rviz=True):
-        """Existing databases require fresh verified localization in this session."""
+        """Existing databases require active localization with a fresh, confident pose."""
         with self._process_lock:
             target = map_name if map_name is not None else self.bb.active_map_name
             if not target:
@@ -287,7 +287,7 @@ class RtabmapRuntimeManager(RuntimeManager):
         if not allowed:
             raise RuntimeError(
                 f"Cannot extend existing map '{map_name}': {detail}. "
-                "Start localization and wait for verified lidar-map matches."
+                "Start localization and wait for a fresh, confident pose estimate."
             )
 
     def _start_rtabmap(
@@ -307,7 +307,7 @@ class RtabmapRuntimeManager(RuntimeManager):
         db_path = self._db_path(map_name)
         if extend_map and os.path.exists(db_path):
             raise RuntimeError(
-                "Existing maps must be localized and verified before mapping"
+                "Existing maps require active localization and a confident pose before mapping"
             )
         # A new active map may only get its database when mapping is saved.
         saving_target_map = (

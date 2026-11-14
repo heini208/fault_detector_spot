@@ -55,19 +55,17 @@ def harness():
     return tracker, process, now, steady, sample
 
 
-def test_initial_pose_and_process_liveness_are_not_mapping_permission():
+def test_mapping_requires_matching_session_and_one_confident_pose():
     tracker, process, now, steady, sample = harness()
     assert not tracker.can_extend("plant", process)[0]
-    sample(11)
-    sample(12)
-    assert not tracker.can_extend("plant", process)[0]
-    sample(13)
+    now[0] = 11
+    tracker.observe_pose(pose(11))
     assert tracker.can_extend("plant", process)[0]
     assert not tracker.can_extend("another_map", process)[0]
     assert not tracker.can_extend("plant", object())[0]
 
 
-def test_seed_and_loss_of_accepted_registrations_revoke_permission():
+def test_seed_and_stale_pose_revoke_permission():
     tracker, process, now, steady, sample = harness()
     for second in (11, 12, 13):
         sample(second)
@@ -78,6 +76,7 @@ def test_seed_and_loss_of_accepted_registrations_revoke_permission():
         sample(second)
     assert tracker.can_extend("plant", process)[0]
     steady[0] = 20.0
+    now[0] = 20
     assert tracker.snapshot()[0] == LocalizationState.LOST
     assert not tracker.can_extend("plant", process)[0]
 
@@ -95,22 +94,15 @@ def test_runtime_rejects_saved_map_without_localization(runtime, tmp_path):
     assert len(launches) == 2
 
 
-@pytest.mark.parametrize("single_node", [False, True])
-def test_runtime_enters_mapping_after_three_accepted_matching_scans(runtime, tmp_path, single_node):
+@pytest.mark.parametrize("registration_result", ["missing", "rejected"])
+def test_runtime_enters_mapping_with_confident_pose_without_registration(runtime, tmp_path, registration_result):
     manager, launches, stops = runtime
     (tmp_path / "plant.db").touch()
     process = manager.start_localization("plant")
-    for stamp in (11, 12, 13):
-        manager.node.get_clock.return_value.now.return_value.nanoseconds = (
-            stamp * 1_000_000_000
-        )
-        manager._safety.tracker.observe_pose(pose(stamp))
-        info = registration(stamp)
-        if single_node:
-            info.stats_values = [0.0, 0.0, 0.0]
-            info.stats_keys.append("Proximity/Space_detections_added_visually/")
-            info.stats_values.append(1.0)
-        manager._safety.tracker.observe_info(info)
+    manager.node.get_clock.return_value.now.return_value.nanoseconds = 11_000_000_000
+    manager._safety.tracker.observe_pose(pose(11))
+    if registration_result == "rejected":
+        manager._safety.tracker.observe_info(registration(11, accepted=False))
     assert manager.start_mapping("plant") is process
     assert manager.is_mapping_running()
     assert not manager.nav2_runtime.is_running()
@@ -193,12 +185,12 @@ def test_new_map_remains_creatable_without_prior_localization(runtime):
     assert "extend_map:=true" in launches[0]
 
 
-def test_rejected_lidar_registration_never_confirms_alignment():
+def test_rejected_registration_diagnostic_does_not_block_confident_pose():
     tracker, process, now, steady, sample = harness()
     for second in (11, 12, 13, 14):
         sample(second, accepted=False)
     assert tracker.snapshot()[0] == LocalizationState.LOCALIZING
-    assert not tracker.can_extend("plant", process)[0]
+    assert tracker.can_extend("plant", process)[0]
 
 
 def test_seed_during_mapping_invalidates_alignment():
@@ -253,3 +245,13 @@ def test_mapping_observations_never_pause_or_stop_runtime(runtime, observation):
     assert manager.is_mapping_running()
     assert not stops
     assert not tracker.snapshot()[2]
+
+
+@pytest.mark.parametrize("covariance", [0.0, 9999.0, float("nan"), 0.10])
+def test_mapping_rejects_uncertain_or_invalid_pose_without_registration(covariance):
+    tracker, process, now, steady, sample = harness()
+    now[0] = 11
+    message = pose(11)
+    message.pose.covariance[0] = covariance
+    tracker.observe_pose(message)
+    assert not tracker.can_extend("plant", process)[0]
