@@ -11,6 +11,10 @@ rtabmap:
     subscribe_scan: false
     subscribe_scan_cloud: true
     subscribe_odom: false
+    # Rebuild from saved node grids in both modes. The cached global 2D map
+    # can lag behind an extended graph; loading it marks all saved nodes as
+    # already assembled and leaves their missing free space/walls hidden.
+    use_saved_map: false
     pub_loc_pose_only_when_localizing: false
     approx_sync: false
     qos: 1

@@ -71,6 +71,17 @@ def test_planar_lidar_mapping_preserves_height_and_uses_local_height_limits(
 
 
 @pytest.mark.parametrize("incremental_memory", ["true", "false"])
+def test_map_reopening_rebuilds_grid_from_saved_nodes(launch_file, incremental_memory):
+    node = launch_file.make_rtabmap_node(incremental_memory, condition=None)
+    parameters = node_parameters(launch_file, node)
+    # A cached global grid may predate extension nodes in the same database.
+    # Localization must assemble those nodes too, before switching to mapping.
+    assert parameters["use_saved_map"] is False
+    assert parameters["RGBD/CreateOccupancyGrid"] == "true"
+    assert parameters["GridGlobal/MaxNodes"] == "0"
+
+
+@pytest.mark.parametrize("incremental_memory", ["true", "false"])
 def test_scan_only_proximity_registration_has_an_odometry_guess(launch_file, incremental_memory):
     node = launch_file.make_rtabmap_node(incremental_memory, condition=None)
     parameters = node_parameters(launch_file, node)
