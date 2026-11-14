@@ -1643,10 +1643,13 @@ Both expose `begin_runtime_operation()` and `poll_runtime_operation()` for
 behavior-tree callers. Slow process termination does not hold the polling lock.
 
 To continue mapping a saved map, start **Localization** for that same map and
-wait for a fresh pose estimate with acceptable uncertainty before selecting
-**Mapping** (at most 1.5 seconds old, position standard deviation at most 0.30 m,
-and yaw standard deviation at most 10 degrees). Registration counters and
-repeated accepted matches are not required for this transition. A saved
+wait for a pose estimate with acceptable uncertainty before selecting
+**Mapping** (position standard deviation at most 0.30 m and yaw standard
+deviation at most 10 degrees). The latest estimate is checked regardless of
+age; a newer low-confidence estimate or pose reset invalidates it. Registration
+counters and repeated accepted matches are not required for this transition.
+If the transition fails after stopping Nav2, navigation is restarted for the
+retained localization session. A saved
 database cannot enter mapping from **Off** (`none`), including after the
 localization process exits. The setup coordinator rejects this request before
 dispatch, and the runtime checks the live mode again before switching. Empty

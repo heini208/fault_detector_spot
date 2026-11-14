@@ -1,7 +1,7 @@
 """Localization diagnostics and pose-quality admission for existing maps.
 
 Registration evidence drives diagnostic state; mapping admission requires an
-active matching localization session and a fresh, confident pose estimate.
+active matching localization session and a confident latest pose estimate.
 """
 from enum import Enum
 from threading import RLock
@@ -128,13 +128,13 @@ class LocalizationStateTracker:
             self._info = message
             self._check_registration()
 
-    def _pose_error(self):
+    def _pose_error(self, *, require_fresh=True):
         if self._pose is None:
             return "No localization pose"
         try:
             return assess_localization_quality(
                 self._pose, self._now_ns(),
-                self._quality,
+                self._quality, require_fresh=require_fresh,
             ).detail
         except (TypeError, ValueError, OverflowError):
             return "Localization clock is invalid"
@@ -191,14 +191,14 @@ class LocalizationStateTracker:
             return self.state, self.reason, False
 
     def can_extend(self, map_name, process):
-        """Admit mapping using session identity and current pose confidence only."""
+        """Admit mapping using session identity and latest pose confidence, not age."""
         with self._lock:
             if (self.mode != "localization" or self.process is not process
                     or self.map_name != map_name):
                 return False, "matching active localization session required"
             if self._pose is not None and self._pose_stamp <= self._minimum_stamp:
                 return False, "Awaiting a localization estimate after pose reset"
-            error = self._pose_error()
+            error = self._pose_error(require_fresh=False)
             if error:
                 return False, error
             return True, ""

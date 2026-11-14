@@ -52,8 +52,12 @@ class LocalizationAssessment:
 
 def assess_localization_quality(
     message, now_ns: int, config: LocalizationQualityConfig,
+    *, require_fresh: bool = True,
 ) -> LocalizationAssessment:
     """Classify a fresh estimate without treating a data fault as uncertainty.
+
+    Map extension may assess the latest estimate without requiring freshness.
+    Other consumers retain timestamp-age validation by default.
 
     This checks the planar marginal covariance, including cross terms. A
     positive covariance is required: RTAB-Map's unknown (9999) covariance and
@@ -73,7 +77,7 @@ def assess_localization_quality(
         age_ns = now_ns - stamp_ns
         if age_ns < 0:
             return LocalizationAssessment("Localization estimate is future-dated")
-        if age_ns > config.maximum_age_sec * 1_000_000_000:
+        if require_fresh and age_ns > config.maximum_age_sec * 1_000_000_000:
             return LocalizationAssessment("Localization estimate is stale")
         pose_to_matrix(message.pose.pose)
         covariance = np.asarray(message.pose.covariance, dtype=float)

@@ -252,7 +252,7 @@ class RtabmapRuntimeManager(RuntimeManager):
                 pass
 
     def start_mapping(self, map_name=None, delete_db=False, rviz=True):
-        """Existing databases require active localization with a fresh, confident pose."""
+        """Existing databases require active localization with a confident latest pose."""
         with self._process_lock:
             target = map_name if map_name is not None else self.bb.active_map_name
             if not target:
@@ -266,9 +266,17 @@ class RtabmapRuntimeManager(RuntimeManager):
                 return self.process
             if existing:
                 self._require_localized_map(target)
+                nav2_was_running = self.nav2_runtime.is_running()
                 if not self.nav2_runtime.stop():
                     raise RuntimeError("Could not stop Nav2 before mapping")
-                self.set_mode_mapping()
+                try:
+                    self.set_mode_mapping()
+                except Exception:
+                    # A new low-confidence estimate, pose reset or service
+                    # failure must not leave localization without navigation.
+                    if nav2_was_running:
+                        self.nav2_runtime.start()
+                    raise
                 self.set_visualization(rviz)
                 return self.process
             return self._start_rtabmap(
@@ -287,7 +295,7 @@ class RtabmapRuntimeManager(RuntimeManager):
         if not allowed:
             raise RuntimeError(
                 f"Cannot extend existing map '{map_name}': {detail}. "
-                "Start localization and wait for a fresh, confident pose estimate."
+                "Start localization and wait for a confident pose estimate."
             )
 
     def _start_rtabmap(

@@ -208,8 +208,8 @@ class NavigationControls(UIControlHelper):
 
         self.mode_mapping = QRadioButton("Mapping")
         self.mode_mapping.setToolTip(
-            "Existing maps require active localization with verified lidar-map "
-            "matches before switching to Mapping. Only new maps can start "
+            "Existing maps require active localization with a high-confidence latest "
+            "pose before switching to Mapping. Only new maps can start "
             "mapping directly from Off."
         )
         self.mode_localization = QRadioButton("Localization")
