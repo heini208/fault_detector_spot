@@ -18,6 +18,8 @@ class EnableSLAM(py_trees.behaviour.Behaviour):
             "last_command",
             access=py_trees.common.Access.READ,
         )
+        for key in ("command_failure_request_id", "command_failure_detail"):
+            self.blackboard.register_key(key, access=py_trees.common.Access.WRITE)
         self._operation_name = f"enable_slam:{name}"
         self._launch_requested = False
         self._launch_map_name = ""
@@ -27,6 +29,18 @@ class EnableSLAM(py_trees.behaviour.Behaviour):
         # runtime drains any preempted worker, rather than poll its result.
         self._launch_requested = False
         self._launch_map_name = ""
+        self._record_failure("")
+
+    def _record_failure(self, detail):
+        command = getattr(self.blackboard, "last_command", None)
+        self.blackboard.command_failure_request_id = str(
+            getattr(command, "request_id", "") or ""
+        )
+        self.blackboard.command_failure_detail = detail
+
+    def _failure(self):
+        self._record_failure(self.feedback_message)
+        return py_trees.common.Status.FAILURE
 
     def _requested_map(self):
         command = getattr(self.blackboard, "last_command", None)
@@ -54,7 +68,7 @@ class EnableSLAM(py_trees.behaviour.Behaviour):
                 self.feedback_message = (
                     "No active map set, cannot enable SLAM"
                 )
-                return py_trees.common.Status.FAILURE
+                return self._failure()
 
             try:
                 started = self.rtabmap_runtime.begin_runtime_operation(
@@ -67,7 +81,7 @@ class EnableSLAM(py_trees.behaviour.Behaviour):
                 self.feedback_message = (
                     f"Failed to launch mapping: {exception}"
                 )
-                return py_trees.common.Status.FAILURE
+                return self._failure()
 
             if not started:
                 self.feedback_message = (
@@ -89,7 +103,7 @@ class EnableSLAM(py_trees.behaviour.Behaviour):
             self.feedback_message = (
                 f"Failed to launch mapping: {exception}"
             )
-            return py_trees.common.Status.FAILURE
+            return self._failure()
 
         if result is None:
             self.feedback_message = "Launching Mapping"
@@ -100,7 +114,7 @@ class EnableSLAM(py_trees.behaviour.Behaviour):
             self.feedback_message = (
                 f"Mapping completed without selecting '{self._launch_map_name}'"
             )
-            return py_trees.common.Status.FAILURE
+            return self._failure()
         if self.rtabmap_runtime.is_mapping_running():
             self.feedback_message = "Mapping enabled"
             return py_trees.common.Status.SUCCESS
@@ -108,4 +122,4 @@ class EnableSLAM(py_trees.behaviour.Behaviour):
         self.feedback_message = (
             "Mapping launch process stopped before becoming active"
         )
-        return py_trees.common.Status.FAILURE
+        return self._failure()

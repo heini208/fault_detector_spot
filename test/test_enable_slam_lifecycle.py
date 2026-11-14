@@ -113,3 +113,23 @@ def test_mapping_start_fails_if_process_dies_after_launch():
 
     assert behavior.update() == py_trees.common.Status.FAILURE
     assert "stopped before becoming active" in behavior.feedback_message
+
+
+def test_mapping_guard_failure_is_reported_for_the_current_request():
+    helper = FakeHelper()
+    behavior = _behavior(helper)
+    behavior.blackboard.last_command.request_id = "mapping-request"
+    detail = "Cannot extend existing map 'plant': Localization estimate is stale"
+
+    def reject_mapping(*args, **kwargs):
+        raise RuntimeError(detail)
+
+    helper.start_mapping = reject_mapping
+    behavior.initialise()
+    assert behavior.update() == py_trees.common.Status.RUNNING
+    assert behavior.update() == py_trees.common.Status.FAILURE
+    assert behavior.blackboard.command_failure_request_id == "mapping-request"
+    assert behavior.blackboard.command_failure_detail == f"Failed to launch mapping: {detail}"
+
+    behavior.initialise()
+    assert behavior.blackboard.command_failure_detail == ""
