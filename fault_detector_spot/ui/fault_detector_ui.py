@@ -896,6 +896,9 @@ class Fault_Detector_UI(QWidget):
         self.navigation_setup_client.request_uncertain.connect(
             self._process_setup_uncertain
         )
+        self.navigation_setup_client.landmark_status_received.connect(
+            self.landmark_feedback_label.show_status, Qt.QueuedConnection,
+        )
         self.navigation_setup_client.landmark_feedback_received.connect(
             self.landmark_feedback_label.show_event, Qt.QueuedConnection,
         )

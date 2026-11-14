@@ -218,3 +218,54 @@ def test_feedback_disclosure_is_available_during_navigation_without_growing_layo
     assert label.isHidden()
     assert not label._popup.isVisible()
     panel.close()
+
+
+def test_current_status_reaches_open_dropdown_and_preserves_last_event(application, client):
+    from std_msgs.msg import String
+    from fault_detector_spot.navigation.ros.landmark_feedback import LANDMARK_STATUS_TOPIC
+
+    label = LandmarkFeedbackLabel()
+    label.show_event(event("confirmed"))
+    client.landmark_status_received.connect(label.show_status, Qt.QueuedConnection)
+    subscription = client._landmark_status_subscription
+    assert subscription.topic == LANDMARK_STATUS_TOPIC
+    label._toggle_details()
+    subscription.callback(String(data="Map: plant\nTag 7: missing capture transform"))
+    application.processEvents()
+    message = label._message_view.toPlainText()
+    assert "missing capture transform" in message
+    assert "relocalization confirmed" in message
+    subscription.callback(String(data="Localization healthy; landmark recovery not needed"))
+    application.processEvents()
+    assert "missing capture transform" not in label._message_view.toPlainText()
+    client.destroy()
+    client.node.destroy_subscription.assert_any_call(subscription)
+    subscription.callback(String(data="late callback"))
+    application.processEvents()
+    assert "late callback" not in label._message()
+    label.close()
+
+
+def test_current_status_publisher_deduplicates_and_retries_transport_failure():
+    from std_msgs.msg import String
+    from fault_detector_spot.navigation.ros.landmark_feedback import (
+        LANDMARK_STATUS_TOPIC, LandmarkStatusPublisher,
+    )
+
+    node = Mock()
+    publisher = LandmarkStatusPublisher(node)
+    node.create_publisher.assert_called_once_with(String, LANDMARK_STATUS_TOPIC, LATCHED_QOS)
+    transport = node.create_publisher.return_value
+    publisher.publish("Waiting for stationary odometry")
+    publisher.publish("Waiting for stationary odometry")
+    transport.publish.assert_called_once()
+    transport.publish.side_effect = RuntimeError("context unavailable")
+    publisher.publish("Healthy")
+    publisher.publish("Healthy")
+    node.get_logger.return_value.warning.assert_called_once()
+    transport.publish.side_effect = None
+    publisher.publish("Healthy")
+    assert transport.publish.call_args.args[0].data == "Healthy"
+    publisher.close()
+    publisher.close()
+    node.destroy_publisher.assert_called_once()

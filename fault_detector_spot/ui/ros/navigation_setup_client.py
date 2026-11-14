@@ -6,6 +6,7 @@ from uuid import uuid4
 
 from PyQt5.QtCore import QObject, pyqtSignal
 from diagnostic_msgs.msg import DiagnosticStatus
+from std_msgs.msg import String
 
 from fault_detector_msgs.action import ExecuteNavigationSetup
 from fault_detector_msgs.msg import NavigationSetupIntent, NavigationSetupState
@@ -13,7 +14,7 @@ from fault_detector_msgs.srv import CloseSetup
 from rclpy.action import ActionClient
 
 from fault_detector_spot.navigation.ros.landmark_feedback import (
-    LANDMARK_FEEDBACK_TOPIC, LandmarkFeedbackEvent,
+    LANDMARK_FEEDBACK_TOPIC, LANDMARK_STATUS_TOPIC, LandmarkFeedbackEvent,
 )
 from fault_detector_spot.shared.ros.qos_profiles import APPLICATION_STATE_QOS, LATCHED_QOS
 from fault_detector_spot.ui.ros.setup_state_order import SetupStateOrder
@@ -35,6 +36,7 @@ class NavigationSetupClient(QObject):
     request_uncertain = pyqtSignal(str)
     close_finished = pyqtSignal(bool, str)
     landmark_feedback_received = pyqtSignal(object)
+    landmark_status_received = pyqtSignal(str)
 
     def __init__(self, node, client_id: str):
         super().__init__()
@@ -70,6 +72,14 @@ class NavigationSetupClient(QObject):
             DiagnosticStatus, LANDMARK_FEEDBACK_TOPIC,
             self._receive_landmark_feedback, LATCHED_QOS,
         )
+
+        self._landmark_status_subscription = node.create_subscription(
+            String, LANDMARK_STATUS_TOPIC, self._receive_landmark_status, LATCHED_QOS,
+        )
+
+    def _receive_landmark_status(self, message):
+        if not self._destroyed:
+            self.landmark_status_received.emit(message.data)
 
     def _receive_landmark_feedback(self, message):
         if self._destroyed:
@@ -272,6 +282,7 @@ class NavigationSetupClient(QObject):
         self.node.destroy_client(self._close_client)
         self.node.destroy_subscription(self._state_subscription)
         self.node.destroy_subscription(self._landmark_subscription)
+        self.node.destroy_subscription(self._landmark_status_subscription)
         self._goal_handles.clear()
         self._action_request_ids.clear()
 

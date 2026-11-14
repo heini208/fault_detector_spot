@@ -130,7 +130,8 @@ def rig(tmp_path, request):
     node.get_clock.return_value.now.side_effect = lambda: Time(seconds=clock[0])
     publisher = Mock()
     events = Mock()
-    node.create_publisher.side_effect = lambda _type, topic, _qos: publisher if topic == "/initialpose" else events
+    statuses = Mock()
+    node.create_publisher.side_effect = lambda _type, topic, _qos: publisher if topic == "/initialpose" else (statuses if topic.endswith("landmark_status") else events)
     runtime = SimpleNamespace(
         process=None, get_running_mode=lambda: "localization", maps_dir=tmp_path,
         localization_frame="feet_center",
@@ -192,7 +193,7 @@ def rig(tmp_path, request):
     yield SimpleNamespace(
         behavior=behavior, bb=blackboard.values, clock=clock, steady=steady,
         runtime=runtime, repo=repository, buffer=buffer, node=node,
-        publisher=publisher, events=events, advance=advance, tick=tick, sample=sample, trigger=trigger,
+        publisher=publisher, events=events, statuses=statuses, advance=advance, tick=tick, sample=sample, trigger=trigger,
     )
     behavior.shutdown()
 
@@ -565,3 +566,32 @@ def test_running_command_defers_correction_while_monitoring_continues(rig):
     assert rig.behavior._windows[7].sample_count == rig.behavior.config.required_samples
     rig.bb["command_tree_status"] = py_trees.common.Status.FAILURE
     rig.trigger()
+
+
+@pytest.mark.parametrize("case,expected", [
+    ("tf", "missing capture transform"),
+    ("stale", "observation stale"),
+    ("range", "beyond 3 m"),
+    ("frame", "not robot-relative"),
+    ("unsaved", "not saved in the active map"),
+    ("absent", "No saved landmark currently detected"),
+])
+def test_recovery_reports_rejected_observations_without_seeding(rig, case, expected):
+    rig.advance(2.0)
+    now = rig.clock[0]
+    observation = tag(now)
+    if case == "tf":
+        rig.buffer.unavailable = True
+    elif case == "stale":
+        observation = tag(now - 1.6)
+    elif case == "range":
+        observation = tag(now, x=4.0)
+    elif case == "frame":
+        observation = tag(now, frame="map")
+    rig.bb["visible_tags"] = {} if case == "absent" else {8 if case == "unsaved" else 7: observation}
+    rig.bb["last_pose_estimation"] = localization(now, variance=9999.0)
+    rig.tick()
+    assert expected in rig.behavior.feedback_message
+    assert expected in rig.statuses.publish.call_args.args[0].data
+    assert "Map: map_a" in rig.statuses.publish.call_args.args[0].data
+    rig.publisher.publish.assert_not_called()

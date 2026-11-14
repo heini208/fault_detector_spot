@@ -22,7 +22,9 @@ from fault_detector_spot.navigation.localization_quality import (
     accepted_localization, assess_localization_quality, lidar_localization_result,
     localization_quality_error,
 )
-from fault_detector_spot.navigation.ros.landmark_feedback import LandmarkFeedbackPublisher
+from fault_detector_spot.navigation.ros.landmark_feedback import (
+    LandmarkFeedbackPublisher, LandmarkStatusPublisher,
+)
 from fault_detector_spot.shared.geometry.transforms import (
     matrix_to_pose, pose_data_to_pose, pose_to_matrix, pose_to_pose_data,
 )
@@ -117,6 +119,7 @@ class LandmarkRelocalizer(py_trees.behaviour.Behaviour):
         self.initialpose_pub = None
         self.initialpose_sub = None
         self._event_publisher = None
+        self._status_publisher = None
         self.landmark_map = {}
         self._landmarks = {}
         self._refiner = None
@@ -152,6 +155,7 @@ class LandmarkRelocalizer(py_trees.behaviour.Behaviour):
             PoseWithCovarianceStamped, "/initialpose", INITIALPOSE_QOS,
         )
         self._event_publisher = LandmarkFeedbackPublisher(self.node, wall_clock=self._wall_clock)
+        self._status_publisher = LandmarkStatusPublisher(self.node)
         if self.refinement_config.enabled:
             # Volatile pose seeds sent before subscription cannot be audited.
             self._unobserved_process = self.rtabmap_runtime.process
@@ -165,6 +169,9 @@ class LandmarkRelocalizer(py_trees.behaviour.Behaviour):
             )
 
     def shutdown(self):
+        if self._status_publisher is not None:
+            self._status_publisher.close()
+            self._status_publisher = None
         if self._event_publisher is not None:
             self._event_publisher.close()
             self._event_publisher = None
@@ -294,6 +301,7 @@ class LandmarkRelocalizer(py_trees.behaviour.Behaviour):
 
     def _observe_odometry(self, now_ns, steady_now):
         """Require measured stationarity; RTAB-Map applies seeds at its next scan."""
+        self._odometry_detail = ""
         try:
             matrix, stamp = self._lookup(self.odom_frame, self.base_frame, Time())
             stamp_ns = self._stamp_ns(stamp)
@@ -319,7 +327,8 @@ class LandmarkRelocalizer(py_trees.behaviour.Behaviour):
                 stamp_ns - self._stationary_reference[1] >= self.config.stationary_duration_sec * 1e9
             )
             return matrix, stamp
-        except (tf2_ros.TransformException, TypeError, ValueError):
+        except (tf2_ros.TransformException, TypeError, ValueError) as exception:
+            self._odometry_detail = str(exception)
             self._stationary_reference = None
             self._stationary = False
             return None, None
@@ -327,29 +336,33 @@ class LandmarkRelocalizer(py_trees.behaviour.Behaviour):
     def _candidates(self, now_ns, steady_now):
         visible = self._read("visible_tags") or {}
         candidates = []
+        details = []
         active_ids = set()
         boundary = max(self._minimum_stamp_ns, self._last_request_ns)
         for tag_id, tag in visible.items():
             if tag_id not in self.landmark_map:
+                details.append(f"Tag {tag_id}: not saved in the active map")
                 continue
             try:
                 stamp_ns = self._stamp_ns(tag.pose.header.stamp)
                 frame = tag.pose.header.frame_id
                 age = (now_ns - stamp_ns) / 1e9
-                if stamp_ns <= boundary or not 0 <= age <= self.config.maximum_tag_age_sec:
-                    continue
+                if stamp_ns <= boundary:
+                    raise ValueError("waiting for a capture after the map change or last correction")
+                if not 0 <= age <= self.config.maximum_tag_age_sec:
+                    raise ValueError(f"observation stale or future-dated (maximum age {self.config.maximum_tag_age_sec:g} s)")
                 if not frame or frame in (self.map_frame, self.odom_frame):
-                    continue  # Recovery requires a robot-relative observation.
+                    raise ValueError(f"observation frame {frame!r} is not robot-relative")
                 progress = self._tag_progress.get(tag_id)
                 if progress is None or progress[:2] != (stamp_ns, frame):
                     progress = (stamp_ns, frame, steady_now)
                     self._tag_progress[tag_id] = progress
                 if steady_now - progress[2] > self.config.maximum_tag_age_sec:
-                    continue
+                    raise ValueError("no advancing tag observations")
                 observation = pose_to_matrix(tag.pose.pose)
                 distance = float(np.linalg.norm(observation[:3, 3]))
                 if distance > self.config.maximum_tag_distance_m:
-                    continue
+                    raise ValueError(f"tag beyond {self.config.maximum_tag_distance_m:g} m recovery range")
                 odom_to_sensor, _ = self._lookup(self.odom_frame, frame, Time.from_msg(tag.pose.header.stamp))
                 # A fixed map<-odom correction is comparable across captures
                 # even while the robot moves. Never average historical base poses.
@@ -367,12 +380,16 @@ class LandmarkRelocalizer(py_trees.behaviour.Behaviour):
                 # Express corrections at a nearby, fixed reference. Comparing
                 # map<-odom translations at a distant origin amplifies yaw noise.
                 stable = window.add(stamp_ns, pose_to_pose_data(matrix_to_pose(map_to_odom @ origin)), frame)
+                if stable is None:
+                    details.append(f"Tag {tag_id}: {window.detail}")
                 if stable is not None:
                     candidates.append((distance, tag_id, pose_to_matrix(pose_data_to_pose(stable)) @ np.linalg.inv(origin)))
-            except (tf2_ros.TransformException, TypeError, ValueError, np.linalg.LinAlgError):
+            except (tf2_ros.TransformException, TypeError, ValueError, np.linalg.LinAlgError) as exception:
+                details.append(f"Tag {tag_id}: observation/TF unavailable: {exception}")
                 continue
         self._windows = {key: value for key, value in self._windows.items() if key in active_ids}
         self._window_origins = {key: value for key, value in self._window_origins.items() if key in active_ids}
+        self._candidate_detail = "\n".join(details) if details else "No saved landmark currently detected"
         return sorted(candidates, key=lambda item: (item[0], item[1]))
 
     def _quality_error(self, pose, now_ns, steady_now):
@@ -482,6 +499,9 @@ class LandmarkRelocalizer(py_trees.behaviour.Behaviour):
 
     def update(self):
         self._update_recovery()
+        if self._status_publisher is not None:
+            map_name = self._read("active_map_name") or "none"
+            self._status_publisher.publish(f"Map: {map_name}\n{self.feedback_message}")
         # Supervision itself never fails or blocks the command tree. The command
         # manager owns a brief normal-dispatch pause after a reset is published.
         return py_trees.common.Status.SUCCESS
@@ -670,6 +690,7 @@ class LandmarkRelocalizer(py_trees.behaviour.Behaviour):
                 else failure_detail if exhausted
                 else "Waiting for fresh, distinct, stable landmark observations"
             )
+            self.feedback_message += "\n" + self._candidate_detail
             return
         _, tag_id, map_to_odom = candidates[0]
         for _, other_id, other in candidates[1:]:
@@ -740,6 +761,8 @@ class LandmarkRelocalizer(py_trees.behaviour.Behaviour):
             return
         if odom_now is None or not self._stationary:
             self.feedback_message = "Landmark recovery pending; waiting for fresh, stationary odometry"
+            if self._odometry_detail:
+                self.feedback_message += f"\n{self._odometry_detail}"
             return
         try:
             corrected = matrix_to_pose(map_to_odom @ odom_now)

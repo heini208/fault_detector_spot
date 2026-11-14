@@ -1,4 +1,4 @@
-"""ROS transport for discrete landmark recovery and refinement events."""
+"""ROS transport for current landmark status and discrete historical events."""
 
 from dataclasses import dataclass
 import math
@@ -6,6 +6,7 @@ import time
 from uuid import uuid4
 
 from diagnostic_msgs.msg import DiagnosticStatus, KeyValue
+from std_msgs.msg import String
 
 from fault_detector_spot.shared.ros.qos_profiles import LATCHED_QOS
 
@@ -95,6 +96,37 @@ class LandmarkFeedbackPublisher:
             return False
         self._failure_reported = False
         return True
+
+    def close(self):
+        if self._publisher is not None:
+            self.node.destroy_publisher(self._publisher)
+            self._publisher = None
+
+
+LANDMARK_STATUS_TOPIC = "fault_detector/navigation_landmark_status"
+
+
+class LandmarkStatusPublisher:
+    """Publish current supervision detail separately from historical events."""
+
+    def __init__(self, node):
+        self.node = node
+        self._publisher = node.create_publisher(String, LANDMARK_STATUS_TOPIC, LATCHED_QOS)
+        self._last_detail = None
+        self._failure_reported = False
+
+    def publish(self, detail):
+        if self._publisher is None or detail == self._last_detail:
+            return
+        try:
+            self._publisher.publish(String(data=detail))
+        except RuntimeError as exception:
+            if not self._failure_reported:
+                self.node.get_logger().warning(f"Could not publish landmark status: {exception}")
+                self._failure_reported = True
+            return
+        self._last_detail = detail
+        self._failure_reported = False
 
     def close(self):
         if self._publisher is not None:

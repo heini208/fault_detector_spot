@@ -1,4 +1,4 @@
-"""Compact disclosure of the latest historical landmark event."""
+"""Compact disclosure of current recovery status and the last landmark event."""
 
 from datetime import datetime
 
@@ -10,12 +10,26 @@ from fault_detector_spot.ui.shared.expandable_status_label import ExpandableStat
 
 class LandmarkFeedbackLabel(ExpandableStatusLabel):
     def __init__(self, parent=None):
+        self._current_status = ""
         super().__init__("Last landmark event: none reported", parent)
         self.setFixedWidth(20)
         self.setAlignment(Qt.AlignCenter)
         self.setAccessibleDescription(
-            "Click or press Enter to show and copy the last landmark event."
+            "Click or press Enter to show and copy current landmark status and the last event."
         )
+
+    @pyqtSlot(str)
+    def show_status(self, detail):
+        self._current_status = detail
+        self._refresh_tooltip()
+        if self._popup is not None and self._popup.isVisible():
+            self._message_view.setPlainText(self._message())
+
+    def _message(self):
+        historical = super()._message()
+        if self._current_status:
+            return f"Current landmark status:\n{self._current_status}\n\n{historical}"
+        return historical
 
     def sizeHint(self):
         return QSize(20, super().sizeHint().height())
@@ -46,3 +60,5 @@ class LandmarkFeedbackLabel(ExpandableStatusLabel):
         )
         self.setToolTip(event.detail)
         self.setStyleSheet("color: #b35c00;" if event.event == "failed" else "")
+        if self._popup is not None and self._popup.isVisible():
+            self._message_view.setPlainText(self._message())
