@@ -92,6 +92,12 @@ class WaypointNavigationExecutor:
         return self._phase is not None
 
     @property
+    def accepts_navigation_velocity(self):
+        """Keep residual Nav2 output from overriding waypoint preparation."""
+        return (self._phase in {_Phase.WAITING_FOR_GOAL, _Phase.NAVIGATING}
+                or (self.cancelling and self._send_future is not None))
+
+    @property
     def execution_idle(self):
         with self._lock:
             return (not self.active and not self._submission_uncertain
@@ -140,9 +146,9 @@ class WaypointNavigationExecutor:
         label = "Arm stow" if arm else "Walking height"
         if update.outcome is outcomes.RUNNING:
             return self._running(f"{label}: {update.detail}")
-        self._owned_preparation = None
         if update.outcome is not outcomes.SUCCESS:
             return self._failure(f"{label} failed: {update.detail}")
+        self._owned_preparation = None
         if arm:
             self._phase = _Phase.PREPARING_BASE
             return self._start_preparation(
@@ -259,7 +265,10 @@ class WaypointNavigationExecutor:
             self._start_monitor()
             if (self._owned_preparation is not None
                     and not getattr(self._owned_preparation, "_shutdown_started", False)):
-                self._owned_preparation.cancel()
+                if self._owned_preparation is self.base_executor:
+                    self.base_executor.begin_stop_confirmation()
+                else:
+                    self._owned_preparation.cancel()
             if self._cancel_terminal:
                 return
             if self._send_future is None:
@@ -362,6 +371,10 @@ class WaypointNavigationExecutor:
                     preparation.poll()
                 return self._running("Waiting for preparation to stop")
             try:
+                if preparation is self.base_executor:
+                    confirmed, detail = preparation.poll_stop_confirmation()
+                    if not confirmed:
+                        return self._running(f"{self._cancel_detail}; {detail}")
                 if not self._cancel_terminal:
                     if self._result_future is None or not self._result_future.done():
                         return self._running(self._cancel_detail)

@@ -252,7 +252,7 @@ def test_velocity_stream_requires_quiet_period_even_when_zero_and_no_nav2_goal()
 
 def navigation_velocity_resources(monkeypatch):
     resources = RobotCommandResources()
-    navigation = SimpleNamespace(active=False, close_admission=Mock(), request_cancel=Mock(), cancel=Mock())
+    navigation = SimpleNamespace(active=False, accepts_navigation_velocity=False, close_admission=Mock(), request_cancel=Mock(), cancel=Mock())
     resources._waypoint_executor = navigation
     monkeypatch.setattr(resources, "get_arm_movement_executor", Mock())
     monkeypatch.setattr(resources, "get_base_movement_executor", Mock())
@@ -275,11 +275,13 @@ def test_nav2_lifecycle_output_is_silent_but_owned_velocity_and_final_zero_are_f
     # Navigation retains active ownership through velocity release and fresh
     # stationary-base confirmation, so its final zero still reaches the driver.
     navigation.active = True
+    navigation.accepts_navigation_velocity = True
     receive(velocity)
     receive(Twist())
     assert publisher.publish.call_args_list == [call(velocity), call(Twist())]
     assert resources._last_velocity_command[1] is False
     navigation.active = False
+    navigation.accepts_navigation_velocity = False
     receive(velocity)
     assert publisher.publish.call_count == 2
 
@@ -287,6 +289,7 @@ def test_nav2_lifecycle_output_is_silent_but_owned_velocity_and_final_zero_are_f
 def test_nav2_queued_output_is_dropped_on_shutdown_while_operator_stop_still_publishes_zero(monkeypatch):
     resources, navigation, publisher, receive = navigation_velocity_resources(monkeypatch)
     navigation.active = True
+    navigation.accepts_navigation_velocity = True
     velocity = Twist()
     velocity.linear.x = 0.2
     receive(velocity)
@@ -304,6 +307,7 @@ def test_nav2_queued_output_is_dropped_on_shutdown_while_operator_stop_still_pub
 def test_nav2_shutdown_waits_only_for_inflight_publish_and_then_drops_queued_callbacks(monkeypatch):
     resources, navigation, publisher, receive = navigation_velocity_resources(monkeypatch)
     navigation.active = True
+    navigation.accepts_navigation_velocity = True
     publishing, release, closed = Event(), Event(), Event()
     publisher.publish.side_effect = lambda _message: (publishing.set(), release.wait(2.0))
     sender = Thread(target=receive, args=(Twist(),))

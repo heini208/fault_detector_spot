@@ -147,6 +147,8 @@ class NavigationSetupClient(QObject):
             self.request_rejected.emit("Navigation setup is closing")
             return None
         if not self._action_client.server_is_ready():
+            if intent.operation != NavigationSetupIntent.OPERATION_OPEN:
+                self.request_rejected.emit("Navigation setup service is unavailable; retry when connected")
             return None
         goal = ExecuteNavigationSetup.Goal()
         goal.client_id = self.client_id

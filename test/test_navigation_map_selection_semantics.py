@@ -142,3 +142,50 @@ def test_navigation_lists_preserve_selected_destination_and_disable_empty_action
     assert not controls.delete_landmark_button.isEnabled()
     assert not controls.add_landmark_button.isEnabled()
     assert app is not None
+
+
+def test_add_current_pose_click_submits_and_keeps_save_feedback_visible():
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtTest import QTest
+    from PyQt5.QtWidgets import QApplication, QVBoxLayout, QWidget
+    from unittest.mock import Mock
+    from fault_detector_msgs.msg import NavigationSetupState
+    from fault_detector_spot.ui.navigation.controls import NavigationControls
+
+    app = QApplication.instance() or QApplication([])
+    submit = Mock(return_value='request')
+    ui = SimpleNamespace(
+        node=None, visible_tags=[],
+        update_tags_dropdown=lambda widget: None,
+        set_navigation_mode=lambda active: None,
+        execute_navigation_setup=submit,
+    )
+    controls = NavigationControls(ui)
+    widget = QWidget()
+    controls.add_rows(QVBoxLayout(widget))
+    state = NavigationSetupState(
+        active_map='plant', map_names=['plant'],
+        mode=NavigationSetupState.MODE_LOCALIZATION,
+    )
+    controls.apply_setup_state(state)
+    controls.poi_name_field.setText(' motor_front ')
+    widget.show()
+    app.processEvents()
+    QTest.mouseClick(controls.add_waypoint_button, Qt.LeftButton)
+    intent = submit.call_args.args[0]
+    assert intent.operation == NavigationSetupIntent.OPERATION_ADD_CURRENT_WAYPOINT
+    assert intent.map_name == 'plant'
+    assert intent.waypoint_name == 'motor_front'
+    assert 'Submitting' in controls.waypoint_save_status.text()
+
+    state.operation = intent.operation
+    state.state = state.STATE_FAILED
+    state.detail = 'Localization estimate is stale'
+    controls.apply_setup_state(state)
+    controls.update_tags_dropdown()
+    assert controls.waypoint_save_status.text() == state.detail
+
+    submit.return_value = None
+    QTest.mouseClick(controls.add_waypoint_button, Qt.LeftButton)
+    assert 'not submitted' in controls.waypoint_save_status.text()
+    widget.close()

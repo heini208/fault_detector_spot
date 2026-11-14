@@ -29,6 +29,7 @@ class Preparation:
         self.next = outcomes.RUNNING
         self.finish_outcome = outcomes.RUNNING
         self.cancel_calls = 0
+        self.stop_confirmed = True
         self.state = ArmStowState.STOWED
         self.arm_state_source = SimpleNamespace(stow_state=lambda: self.state)
 
@@ -56,6 +57,12 @@ class Preparation:
     def cancel(self):
         self.cancel_calls += 1
         self.active = False
+
+    def begin_stop_confirmation(self):
+        self.cancel()
+
+    def poll_stop_confirmation(self):
+        return self.stop_confirmed, "Waiting for fresh stationary base feedback"
 
 
 def rig():
@@ -446,6 +453,49 @@ def test_success_stops_forwarding_navigation_velocity_without_sending_hold():
     resources._velocity_publisher.publish.assert_called_once()
     assert "finish_walking" not in events
     assert executor.execution_idle
+
+
+def test_buffered_waypoint_preparation_does_not_forward_previous_nav2_output():
+    from fault_detector_spot.application.behaviour_tree.behaviours.robot_command_resources import RobotCommandResources
+
+    executor, arm, base, _, _, clock, pose, _ = completed_nav2()
+    resources = RobotCommandResources(monotonic_clock=clock)
+    resources._waypoint_executor = executor
+    resources._velocity_publisher = Mock()
+    assert executor.poll().outcome is Outcome.SUCCESS
+    arm.next = ArmOutcome.RUNNING
+    base.next = BaseOutcome.RUNNING
+    executor.navigate(pose)
+    resources._forward_navigation_velocity(Twist())
+    arm.next = ArmOutcome.SUCCESS
+    executor.poll()
+    resources._forward_navigation_velocity(Twist())
+    resources._velocity_publisher.publish.assert_not_called()
+    base.next = BaseOutcome.SUCCESS
+    executor.poll()
+    resources._forward_navigation_velocity(Twist())
+    resources._velocity_publisher.publish.assert_called_once()
+
+
+def test_failed_height_preparation_retains_owner_until_base_stop_is_confirmed():
+    executor, arm, base, client, _, _, pose, _ = rig()
+    arm.next = ArmOutcome.SUCCESS
+    base.next = BaseOutcome.MOTION_FAILED
+    base.stop_confirmed = False
+    update = executor.navigate(pose)
+    assert update.outcome is Outcome.RUNNING
+    assert "Walking height failed" in update.detail
+    assert not executor.execution_idle
+    assert executor.navigate(pose).outcome is Outcome.BUSY
+    assert executor.poll().outcome is Outcome.RUNNING
+    client.send_goal_async.assert_not_called()
+    base.stop_confirmed = True
+    update = executor.poll()
+    assert update.outcome is Outcome.FAILURE
+    assert "Walking height failed" in update.detail
+    assert executor.execution_idle
+    base.next = BaseOutcome.SUCCESS
+    assert executor.navigate(pose).outcome is Outcome.RUNNING
 
 
 def test_cancel_after_success_does_not_start_base_completion():

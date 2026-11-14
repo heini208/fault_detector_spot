@@ -58,3 +58,27 @@ def test_state_fingerprint_contains_visible_navigation_state():
     assert "state.runtime_error" in source
     assert "tuple(state.waypoint_names)" in source
     assert "tuple(state.landmark_names)" in source
+
+
+def test_unavailable_server_reports_save_rejection_but_open_retries_quietly(monkeypatch):
+    from unittest.mock import Mock
+    import fault_detector_spot.ui.ros.navigation_setup_client as module
+
+    action = Mock()
+    action.server_is_ready.return_value = False
+    monkeypatch.setattr(module, 'ActionClient', Mock(return_value=action))
+    client = NavigationSetupClient(Mock(), 'ui')
+    rejected = []
+    client.request_rejected.connect(rejected.append)
+    assert client.open() is None
+    assert rejected == []
+
+    client.context_id = 'context'
+    intent = NavigationSetupIntent(
+        operation=NavigationSetupIntent.OPERATION_ADD_CURRENT_WAYPOINT,
+        map_name='plant', waypoint_name='motor_front',
+    )
+    assert client.execute(intent) is None
+    assert len(rejected) == 1
+    assert 'unavailable' in rejected[0]
+    action.send_goal_async.assert_not_called()

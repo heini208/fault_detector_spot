@@ -266,7 +266,7 @@ class RobotCommandResources:
         with self._submission_lock:
             navigation = self._waypoint_executor
             if (self._closing or self._software_stop.is_set()
-                    or navigation is None or not navigation.active
+                    or navigation is None or not navigation.accepts_navigation_velocity
                     or self._velocity_publisher is None):
                 return
             self._velocity_publisher.publish(message)

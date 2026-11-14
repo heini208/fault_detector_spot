@@ -67,6 +67,9 @@ class NavigationControls(UIControlHelper):
         self.waypoint_hint = QLabel("Load a map to use waypoints.")
         self.waypoint_hint.setWordWrap(True)
         waypoint_layout.addWidget(self.waypoint_hint)
+        self.waypoint_save_status = QLabel()
+        self.waypoint_save_status.setWordWrap(True)
+        waypoint_layout.addWidget(self.waypoint_save_status)
         panels.addWidget(waypoint_group, 1)
 
         landmark_group = QGroupBox("Landmarks")
@@ -117,6 +120,10 @@ class NavigationControls(UIControlHelper):
 
     def apply_setup_state(self, state: NavigationSetupState):
         """Render one authoritative navigation setup snapshot."""
+        if state.active_map != self.current_map:
+            self.waypoint_save_status.clear()
+        if state.operation == NavigationSetupIntent.OPERATION_ADD_CURRENT_WAYPOINT:
+            self.waypoint_save_status.setText(state.detail)
         self.current_map = state.active_map
         self._cached_map_list = list(state.map_names)
         self._cached_waypoint_list = list(state.waypoint_names)
@@ -381,11 +388,17 @@ class NavigationControls(UIControlHelper):
 
         if not self._check_current_map_selected():
             return
-        return self._submit_setup(
+        self.waypoint_save_status.setText("Submitting waypoint save…")
+        request_id = self._submit_setup(
             NavigationSetupIntent.OPERATION_ADD_CURRENT_WAYPOINT,
             map_name=self.current_map,
             waypoint_name=name,
         )
+        if request_id is None:
+            self.waypoint_save_status.setText(
+                "Waypoint save was not submitted. Check the connection status and retry."
+            )
+        return request_id
 
     def handle_add_landmark(self):
         selected = self.landmark_tag_dropdown.currentText()
