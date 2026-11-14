@@ -22,8 +22,11 @@ class LandmarkFeedbackLabel(ExpandableStatusLabel):
     def show_status(self, detail):
         self._current_status = detail
         self._refresh_tooltip()
-        if self._popup is not None and self._popup.isVisible():
-            self._message_view.setPlainText(self._message())
+
+    def _toggle_details(self):
+        super()._toggle_details()
+        if self._popup is not None:
+            self._popup.setWindowTitle("Landmark status snapshot (reopen to refresh)")
 
     def _message(self):
         historical = super()._message()
@@ -60,5 +63,3 @@ class LandmarkFeedbackLabel(ExpandableStatusLabel):
         )
         self.setToolTip(event.detail)
         self.setStyleSheet("color: #b35c00;" if event.event == "failed" else "")
-        if self._popup is not None and self._popup.isVisible():
-            self._message_view.setPlainText(self._message())

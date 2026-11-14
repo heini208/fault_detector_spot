@@ -220,7 +220,7 @@ def test_feedback_disclosure_is_available_during_navigation_without_growing_layo
     panel.close()
 
 
-def test_current_status_reaches_open_dropdown_and_preserves_last_event(application, client):
+def test_current_status_snapshot_stays_readable_until_reopened(application, client):
     from std_msgs.msg import String
     from fault_detector_spot.navigation.ros.landmark_feedback import LANDMARK_STATUS_TOPIC
 
@@ -229,15 +229,21 @@ def test_current_status_reaches_open_dropdown_and_preserves_last_event(applicati
     client.landmark_status_received.connect(label.show_status, Qt.QueuedConnection)
     subscription = client._landmark_status_subscription
     assert subscription.topic == LANDMARK_STATUS_TOPIC
-    label._toggle_details()
     subscription.callback(String(data="Map: plant\nTag 7: missing capture transform"))
     application.processEvents()
+    label._toggle_details()
     message = label._message_view.toPlainText()
     assert "missing capture transform" in message
     assert "relocalization confirmed" in message
     subscription.callback(String(data="Localization healthy; landmark recovery not needed"))
     application.processEvents()
+    label.show_event(event("requested", event_id="event-2"))
+    assert label._message_view.toPlainText() == message
+    label._toggle_details()
+    label._toggle_details()
     assert "missing capture transform" not in label._message_view.toPlainText()
+    assert "Localization healthy" in label._message_view.toPlainText()
+    assert "awaiting confirmation" in label._message_view.toPlainText()
     client.destroy()
     client.node.destroy_subscription.assert_any_call(subscription)
     subscription.callback(String(data="late callback"))

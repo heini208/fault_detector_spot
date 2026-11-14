@@ -671,3 +671,32 @@ def test_contradictory_capture_still_restarts_retained_window(rig):
     assert rig.behavior._windows[7].sample_count == 1
     assert "unstable" in rig.behavior.feedback_message
     rig.publisher.publish.assert_not_called()
+
+
+def test_latest_odometry_arriving_during_tick_is_not_mistaken_for_future_data(rig):
+    original_lookup = rig.buffer.lookup_transform
+
+    def lookup_after_processing_delay(target, source, stamp, **kwargs):
+        if stamp.nanoseconds == 0:
+            # Model time spent earlier in a tick while the TF thread advances.
+            rig.advance(0.08)
+        return original_lookup(target, source, stamp, **kwargs)
+
+    rig.buffer.lookup_transform = lookup_after_processing_delay
+    rig.trigger()
+    assert rig.behavior._odometry_detail == ""
+    rig.publisher.publish.assert_called_once()
+
+
+@pytest.mark.parametrize("delta,detail", [
+    (-0.6, "age 0.600 s exceeds 0.250 s limit"),
+    (0.1, "future-dated by 0.100 s"),
+])
+def test_odometry_diagnostic_distinguishes_delay_from_clock_skew(rig, delta, detail):
+    rig.advance(1.0)
+    rig.buffer.latest_stamp_delta = delta
+    matrix, stamp = rig.behavior._observe_odometry()
+    assert matrix is None and stamp is None
+    assert "odom <- feet_center" in rig.behavior._odometry_detail
+    assert detail in rig.behavior._odometry_detail
+    assert not rig.behavior._stationary

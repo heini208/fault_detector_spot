@@ -299,15 +299,28 @@ class LandmarkRelocalizer(py_trees.behaviour.Behaviour):
             raise ValueError("TF does not match the requested acquisition timestamp")
         return pose_to_matrix(pose_data_to_pose(transform_to_pose_data(transform))), transform.header.stamp
 
-    def _observe_odometry(self, now_ns, steady_now):
+    def _observe_odometry(self):
         """Require measured stationarity; RTAB-Map applies seeds at its next scan."""
         self._odometry_detail = ""
         try:
             matrix, stamp = self._lookup(self.odom_frame, self.base_frame, Time())
+            # TF may advance on its listener thread after this tree tick began.
+            # Compare the returned latest transform with the clock at lookup,
+            # not the older tick-start time.
+            now_ns = self.node.get_clock().now().nanoseconds
+            steady_now = self._monotonic_clock()
             stamp_ns = self._stamp_ns(stamp)
             age = (now_ns - stamp_ns) / 1e9
-            if stamp_ns <= self._minimum_stamp_ns or not 0 <= age <= self.config.maximum_odometry_age_sec:
-                raise ValueError("Current odometry is stale or future-dated")
+            frame = f"{self.odom_frame} <- {self.base_frame}"
+            if stamp_ns <= self._minimum_stamp_ns:
+                raise ValueError(f"Odometry {frame} predates the map/runtime change")
+            if age < 0:
+                raise ValueError(f"Odometry {frame} is future-dated by {-age:.3f} s")
+            if age > self.config.maximum_odometry_age_sec:
+                raise ValueError(
+                    f"Odometry {frame} is stale: age {age:.3f} s exceeds "
+                    f"{self.config.maximum_odometry_age_sec:.3f} s limit"
+                )
             previous_stamp, received_at = self._odometry_progress
             if stamp_ns > previous_stamp:
                 received_at = steady_now
@@ -577,7 +590,7 @@ class LandmarkRelocalizer(py_trees.behaviour.Behaviour):
             if (last_odometry_at is None or steady_now - last_odometry_at
                     > self.refinement_config.sample_interval_sec * 1.5):
                 self._stationary_reference = None
-            self._observe_odometry(now_ns, steady_now)
+            self._observe_odometry()
             if not self._stationary:
                 self._refiner.reset_observations()
                 return False
@@ -692,7 +705,7 @@ class LandmarkRelocalizer(py_trees.behaviour.Behaviour):
             self._healthy_count = 0
             self.feedback_message = self._recovery_wait_reason
             return
-        odom_now, odom_stamp = self._observe_odometry(now_ns, steady_now)
+        odom_now, odom_stamp = self._observe_odometry()
         elapsed = float("inf") if self._last_request_at is None else steady_now - self._last_request_at
         exhausted = self.attempts >= self.config.maximum_attempts and elapsed >= self.config.retry_interval_sec
         failure_detail = (
