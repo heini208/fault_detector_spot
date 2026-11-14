@@ -220,7 +220,7 @@ def test_feedback_disclosure_is_available_during_navigation_without_growing_layo
     panel.close()
 
 
-def test_current_status_snapshot_stays_readable_until_reopened(application, client):
+def test_current_status_shows_two_previous_messages_while_open(application, client):
     from std_msgs.msg import String
     from fault_detector_spot.navigation.ros.landmark_feedback import LANDMARK_STATUS_TOPIC
 
@@ -238,12 +238,22 @@ def test_current_status_snapshot_stays_readable_until_reopened(application, clie
     subscription.callback(String(data="Localization healthy; landmark recovery not needed"))
     application.processEvents()
     label.show_event(event("requested", event_id="event-2"))
-    assert label._message_view.toPlainText() == message
-    label._toggle_details()
-    label._toggle_details()
-    assert "missing capture transform" not in label._message_view.toPlainText()
+    assert "Previous status 1:" in label._message_view.toPlainText()
+    assert "missing capture transform" in label._message_view.toPlainText()
     assert "Localization healthy" in label._message_view.toPlainText()
     assert "awaiting confirmation" in label._message_view.toPlainText()
+    subscription.callback(String(data="Waiting for stationary odometry"))
+    subscription.callback(String(data="Waiting for stationary odometry"))
+    application.processEvents()
+    assert len(label._previous_statuses) == 2
+    assert list(label._previous_statuses) == [
+        "Localization healthy; landmark recovery not needed",
+        "Map: plant\nTag 7: missing capture transform",
+    ]
+    subscription.callback(String(data="Recovery requested"))
+    application.processEvents()
+    assert "missing capture transform" not in label._message_view.toPlainText()
+    assert "Previous status 2:" in label._message_view.toPlainText()
     client.destroy()
     client.node.destroy_subscription.assert_any_call(subscription)
     subscription.callback(String(data="late callback"))

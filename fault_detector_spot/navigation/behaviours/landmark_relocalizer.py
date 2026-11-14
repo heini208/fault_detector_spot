@@ -42,7 +42,7 @@ class LandmarkRecoveryConfig:
     maximum_rotation_spread_rad: float = math.radians(10.0)
     maximum_tag_age_sec: float = 1.5
     maximum_tag_distance_m: float = 3.0
-    maximum_odometry_age_sec: float = 0.25
+    maximum_odometry_age_sec: float = 1.0
     stationary_duration_sec: float = 1.0
     stationary_position_tolerance_m: float = 0.03
     stationary_yaw_tolerance_rad: float = math.radians(3.0)

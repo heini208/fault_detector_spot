@@ -77,7 +77,9 @@
     navigation.landmark_recovery.maximum_rotation_spread_rad: 0.17453292519943295  # 10 deg
     navigation.landmark_recovery.maximum_tag_age_sec: 1.5
     navigation.landmark_recovery.maximum_tag_distance_m: 3.0
-    navigation.landmark_recovery.maximum_odometry_age_sec: 0.25
+    # Recovery can tolerate sub-second TF delivery lag while idle. Still
+    # require advancing measured odometry and the full stationary interval.
+    navigation.landmark_recovery.maximum_odometry_age_sec: 1.0
     navigation.landmark_recovery.stationary_duration_sec: 1.0
     navigation.landmark_recovery.stationary_position_tolerance_m: 0.03
     navigation.landmark_recovery.stationary_yaw_tolerance_rad: 0.05235987755982989  # 3 deg

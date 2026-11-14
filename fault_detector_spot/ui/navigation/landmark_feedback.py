@@ -1,5 +1,6 @@
 """Compact disclosure of current recovery status and the last landmark event."""
 
+from collections import deque
 from datetime import datetime
 
 from PyQt5.QtCore import QSize, Qt, pyqtSlot
@@ -11,6 +12,7 @@ from fault_detector_spot.ui.shared.expandable_status_label import ExpandableStat
 class LandmarkFeedbackLabel(ExpandableStatusLabel):
     def __init__(self, parent=None):
         self._current_status = ""
+        self._previous_statuses = deque(maxlen=2)
         super().__init__("Last landmark event: none reported", parent)
         self.setFixedWidth(20)
         self.setAlignment(Qt.AlignCenter)
@@ -20,18 +22,32 @@ class LandmarkFeedbackLabel(ExpandableStatusLabel):
 
     @pyqtSlot(str)
     def show_status(self, detail):
+        if detail == self._current_status:
+            return
+        if self._current_status:
+            self._previous_statuses.appendleft(self._current_status)
         self._current_status = detail
         self._refresh_tooltip()
+        self._refresh_open_message()
 
     def _toggle_details(self):
         super()._toggle_details()
         if self._popup is not None:
-            self._popup.setWindowTitle("Landmark status snapshot (reopen to refresh)")
+            self._popup.setWindowTitle("Landmark status and recent messages")
+
+    def _refresh_open_message(self):
+        if self._popup is not None and self._popup.isVisible():
+            self._message_view.setPlainText(self._message())
 
     def _message(self):
         historical = super()._message()
         if self._current_status:
-            return f"Current landmark status:\n{self._current_status}\n\n{historical}"
+            sections = [f"Current landmark status:\n{self._current_status}"]
+            sections.extend(
+                f"Previous status {index}:\n{detail}"
+                for index, detail in enumerate(self._previous_statuses, 1)
+            )
+            return "\n\n".join([*sections, historical])
         return historical
 
     def sizeHint(self):
@@ -63,3 +79,4 @@ class LandmarkFeedbackLabel(ExpandableStatusLabel):
         )
         self.setToolTip(event.detail)
         self.setStyleSheet("color: #b35c00;" if event.event == "failed" else "")
+        self._refresh_open_message()

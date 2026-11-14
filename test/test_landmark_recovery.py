@@ -514,7 +514,7 @@ def test_invalid_observation_or_capture_tf_never_requests_correction(rig, fault)
     rig.publisher.publish.assert_not_called()
 
 
-@pytest.mark.parametrize("stamp_delta", [-1.0, 0.1])
+@pytest.mark.parametrize("stamp_delta", [-1.5, 0.1])
 def test_stale_or_future_current_odometry_withholds_correction(rig, stamp_delta):
     rig.buffer.latest_stamp_delta = stamp_delta
     for _ in range(8):
@@ -689,14 +689,43 @@ def test_latest_odometry_arriving_during_tick_is_not_mistaken_for_future_data(ri
 
 
 @pytest.mark.parametrize("delta,detail", [
-    (-0.6, "age 0.600 s exceeds 0.250 s limit"),
+    (-1.2, "age 1.200 s exceeds 1.000 s limit"),
     (0.1, "future-dated by 0.100 s"),
 ])
 def test_odometry_diagnostic_distinguishes_delay_from_clock_skew(rig, delta, detail):
-    rig.advance(1.0)
+    rig.advance(2.0)
     rig.buffer.latest_stamp_delta = delta
     matrix, stamp = rig.behavior._observe_odometry()
     assert matrix is None and stamp is None
     assert "odom <- feet_center" in rig.behavior._odometry_detail
     assert detail in rig.behavior._odometry_detail
     assert not rig.behavior._stationary
+
+
+
+def test_subsecond_delayed_advancing_odometry_can_recover(rig):
+    rig.buffer.latest_stamp_delta = -0.744
+    rig.trigger()
+    assert rig.behavior._stationary
+    rig.publisher.publish.assert_called_once()
+
+
+def test_delayed_odometry_still_withholds_recovery_while_moving(rig):
+    rig.buffer.latest_stamp_delta = -0.744
+    for _ in range(12):
+        rig.sample(move=0.1)
+    assert not rig.behavior._stationary
+    rig.publisher.publish.assert_not_called()
+
+
+def test_frozen_odometry_cannot_establish_stationarity_with_longer_age_limit(rig):
+    rig.advance(1.0)
+    frozen_stamp = rig.clock[0]
+    for _ in range(12):
+        rig.advance(0.1)
+        rig.buffer.latest_stamp_delta = frozen_stamp - rig.clock[0]
+        rig.bb["visible_tags"] = {7: tag(rig.clock[0])}
+        rig.bb["last_pose_estimation"] = localization(rig.clock[0], variance=9999.0)
+        rig.tick()
+    assert not rig.behavior._stationary
+    rig.publisher.publish.assert_not_called()
