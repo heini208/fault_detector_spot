@@ -128,7 +128,9 @@ def test_slow_accepted_results_confirm_recovery_without_another_seed(recovery_ri
     rig = recovery_rig
     rig.trigger(variance=9999.0)
     rig.behavior.config = LandmarkRecoveryConfig()
-    for gap in REPORTED_GAPS[:3]:
+    # Healthy confirmation only examines geometry for new accepted results.
+    # Three rebuild the post-seed tag window; two more complete confirmation.
+    for gap in REPORTED_GAPS:
         tick_visible_tag(rig, gap)
         rig.bb["last_localization_info"] = registration(rig.clock[0])
         receive_pose(rig, recovery_localization(rig.clock[0]))

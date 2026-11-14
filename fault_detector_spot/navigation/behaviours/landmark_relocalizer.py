@@ -33,6 +33,9 @@ from fault_detector_spot.shared.ros.qos_profiles import INITIALPOSE_QOS
 from fault_detector_spot.shared.ros.tf_transforms import transform_to_pose_data
 
 
+CONFIRMATION_PENDING = "Localized; awaiting independent confirmation"
+
+
 @dataclass(frozen=True)
 class LandmarkRecoveryConfig:
     enabled: bool = True
@@ -218,6 +221,7 @@ class LandmarkRelocalizer(py_trees.behaviour.Behaviour):
         self._healthy_count = 0
         self._reset_uncertainty()
         self._recovery_wait_reason = ""
+        self._last_confirmation_stamp_ns = 0
         self._last_health_stamp_ns = 0
         self._last_health_at = None
         self._localization_progress = (0, None, None)
@@ -705,8 +709,26 @@ class LandmarkRelocalizer(py_trees.behaviour.Behaviour):
             self._healthy_count = 0
             self.feedback_message = self._recovery_wait_reason
             return
-        odom_now, odom_stamp = self._observe_odometry()
         elapsed = float("inf") if self._last_request_at is None else steady_now - self._last_request_at
+        if quality.healthy:
+            self.feedback_message = CONFIRMATION_PENDING
+            info = self._read("last_localization_info")
+            # Pose and Info arrive independently. Do not consume a pose until
+            # its matching report arrives, and never redo geometry for the
+            # same report on every tree tick.
+            if info is None or info.header.stamp != pose.header.stamp:
+                return
+            stamp_ns = self._stamp_ns(pose.header.stamp)
+            if stamp_ns <= self._last_confirmation_stamp_ns:
+                return
+            if not self._registration_matches(pose):
+                self._healthy_count = 0
+                self._last_confirmation_stamp_ns = stamp_ns
+                return
+            if stamp_ns <= self._last_request_ns or elapsed < self.config.settle_time_sec:
+                return
+            self._last_confirmation_stamp_ns = stamp_ns
+        odom_now, odom_stamp = self._observe_odometry()
         exhausted = self.attempts >= self.config.maximum_attempts and elapsed >= self.config.retry_interval_sec
         failure_detail = (
             f"Landmark recovery failed after {self.attempts} attempts; automatic corrections paused "
@@ -720,11 +742,12 @@ class LandmarkRelocalizer(py_trees.behaviour.Behaviour):
         if not candidates:
             self._healthy_count = 0
             self.feedback_message = (
-                "Localization confident; waiting for landmark recovery confirmation" if quality.healthy
+                CONFIRMATION_PENDING if quality.healthy
                 else failure_detail if exhausted
                 else "Waiting for fresh, distinct, stable landmark observations"
             )
-            self.feedback_message += "\n" + self._candidate_detail
+            if not quality.healthy:
+                self.feedback_message += "\n" + self._candidate_detail
             return
         _, tag_id, map_to_odom = candidates[0]
         for _, other_id, other in candidates[1:]:
@@ -751,7 +774,7 @@ class LandmarkRelocalizer(py_trees.behaviour.Behaviour):
             if info is None or info.header.stamp != pose.header.stamp:
                 # Separate callbacks can interleave. A missing acknowledgement
                 # never turns a confident pose into permission for another seed.
-                self.feedback_message = "Localization confident; waiting for matching registration evidence"
+                self.feedback_message = CONFIRMATION_PENDING
                 return
             if not self._registration_matches(pose):
                 self._healthy_count = 0
@@ -769,11 +792,11 @@ class LandmarkRelocalizer(py_trees.behaviour.Behaviour):
                     self._failed = False
                     self.feedback_message = f"Localization healthy and agrees with landmark {tag_id}"
                     return
-                self.feedback_message = f"Confirming localization recovery ({self._healthy_count}/{self.config.healthy_samples})"
+                self.feedback_message = CONFIRMATION_PENDING
                 return
         self._healthy_count = 0
         if quality.healthy:
-            self.feedback_message = "Localization confident; further landmark resets withheld pending confirmation"
+            self.feedback_message = CONFIRMATION_PENDING
             return
         if not uncertain:
             self.feedback_message = (
@@ -831,6 +854,7 @@ class LandmarkRelocalizer(py_trees.behaviour.Behaviour):
         # Each retry must be justified by fresh post-seed uncertainty evidence.
         self._persistent_uncertainty(LocalizationAssessment(), None, steady_now)
         self._healthy_count = 0
+        self._last_confirmation_stamp_ns = 0
         self._last_health_stamp_ns = 0
         self._last_health_at = None
         self._windows.clear()

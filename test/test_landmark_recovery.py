@@ -331,11 +331,13 @@ def test_retries_require_new_post_request_tag_captures_and_stop_at_limit(rig):
 
 def test_only_matching_accepted_post_correction_estimates_confirm_recovery(rig):
     rig.trigger()
-    # Rebuild the observation window using fresh images after the correction.
+    # Rejected reports cannot confirm or trigger landmark geometry work.
     for _ in range(3):
         rig.sample(variance=0.01, info=False)
     assert rig.behavior.attempts == 1
     assert rig.behavior._healthy_count == 0
+    for _ in range(2):
+        rig.sample(variance=0.01, info=True)
     for expected in (1, 2, 3):
         rig.sample(variance=0.01, info=True)
         assert rig.behavior._healthy_count == expected
@@ -374,7 +376,7 @@ def test_confident_localization_suppresses_retries_even_without_confirmation(rig
                    mismatch=1.0 if evidence == "disagreement" else 0.0)
     rig.publisher.publish.assert_called_once()
     assert rig.behavior.attempts == 1
-    assert "confident" in rig.behavior.feedback_message.lower()
+    assert rig.behavior.feedback_message == "Localized; awaiting independent confirmation"
     rig.node.get_logger.return_value.warning.assert_not_called()
 
 
@@ -729,3 +731,52 @@ def test_frozen_odometry_cannot_establish_stationarity_with_longer_age_limit(rig
         rig.tick()
     assert not rig.behavior._stationary
     rig.publisher.publish.assert_not_called()
+
+
+@pytest.mark.parametrize("evidence", ["missing", "rejected", "mismatched"])
+def test_confident_pending_recovery_skips_geometry_without_accepted_evidence(rig, evidence):
+    rig.trigger()
+    rig.behavior._candidates = Mock(wraps=rig.behavior._candidates)
+    rig.behavior._observe_odometry = Mock(wraps=rig.behavior._observe_odometry)
+    rig.buffer.lookup_transform = Mock(wraps=rig.buffer.lookup_transform)
+    if evidence == "mismatched":
+        rig.bb["last_localization_info"] = registration(rig.clock[0] - 0.1)
+    for _ in range(12):
+        rig.sample(variance=0.01, info=False if evidence == "rejected" else None)
+        assert rig.behavior.feedback_message == "Localized; awaiting independent confirmation"
+    rig.behavior._candidates.assert_not_called()
+    rig.behavior._observe_odometry.assert_not_called()
+    rig.buffer.lookup_transform.assert_not_called()
+    rig.publisher.publish.assert_called_once()
+
+
+def test_confirmation_geometry_runs_once_per_matching_accepted_result(rig):
+    rig.trigger()
+    rig.behavior._candidates = Mock(wraps=rig.behavior._candidates)
+    rig.behavior._observe_odometry = Mock(wraps=rig.behavior._observe_odometry)
+    rig.sample(variance=0.01)
+    rig.behavior._candidates.assert_not_called()
+    rig.bb["last_localization_info"] = registration(rig.clock[0])
+    rig.tick()
+    rig.behavior._candidates.assert_called_once()
+    rig.behavior._observe_odometry.assert_called_once()
+    for _ in range(10):
+        rig.advance(0.01)
+        rig.bb["visible_tags"] = {7: tag(rig.clock[0])}
+        rig.tick()
+    rig.behavior._candidates.assert_called_once()
+    rig.behavior._observe_odometry.assert_called_once()
+    assert rig.behavior.feedback_message == "Localized; awaiting independent confirmation"
+    rig.sample(variance=0.01, info=True)
+    assert rig.behavior._candidates.call_count == 2
+    rig.publisher.publish.assert_called_once()
+
+
+def test_confirmation_gate_does_not_delay_return_to_uncertain_recovery(rig):
+    rig.trigger()
+    rig.sample(variance=0.01, info=True)
+    rig.behavior._candidates = Mock(wraps=rig.behavior._candidates)
+    rig.sample(variance=9999.0)
+    rig.behavior._candidates.assert_called_once()
+    rig.trigger(variance=9999.0)
+    assert rig.publisher.publish.call_count == 2
