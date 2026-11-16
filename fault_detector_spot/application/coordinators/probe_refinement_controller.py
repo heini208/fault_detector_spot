@@ -244,6 +244,7 @@ class ProbeRefinementController:
         if (
             motion.kind is ProbeMotionKind.MOVE_SAFE_APPROACH
             and not refinement.safe_approach_ready_seeded
+            and not motion.retract_path
         ):
             target = self.current_probe_pose(draft, attachment)
             command = self.motion_command_factory.ready_safe_approach()
@@ -340,6 +341,7 @@ class ProbeRefinementController:
                 seeds_safe_approach_from_ready
             ),
             previous_motion_state=previous_alignment_motion_state,
+            retract_path=motion.retract_path,
         )
         refinement.begin_motion(pending_motion)
         self._operations.register(
@@ -546,6 +548,10 @@ class ProbeRefinementController:
                         RefinementMotionState.NOT_TESTED
                     )
                     refinement.alignment_candidate_reached = False
+                elif motion.retract_path:
+                    refinement.complete_motion_without_pose_capture(
+                        status.operation.request_id
+                    )
                 elif motion.kind is ProbeMotionKind.ORIENT_SENSOR_TIP_TO_SURFACE:
                     refinement.complete_motion(
                         status.operation.request_id,

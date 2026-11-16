@@ -296,3 +296,54 @@ def test_tag_forward_adjustment_dispatches_toward_tag_normal(tmp_path, kind):
     assert command.offset.frame_id == "filtered_fiducial_7"
     assert command.offset.position.x == pytest.approx(0.0, abs=1e-12)
     assert command.offset.position.z == pytest.approx(-.01)
+
+
+@pytest.mark.parametrize("previous_state", [
+    RefinementMotionState.NOT_TESTED, RefinementMotionState.FAILED,
+    RefinementMotionState.REACHED,
+])
+def test_retraction_reverses_paths_without_reached_or_pose_capture_gate(tmp_path, previous_state):
+    from unittest.mock import Mock
+
+    probe, commands, state = begin_custom(tmp_path)
+    state, _ = move(probe, commands, state, ProbeMotionKind.MOVE_SAFE_APPROACH)
+    for x in (.6, .7):
+        probe.motion_state_source.pose = pose(x)
+        state = probe.add_pathing_point(state.context, str(x), .01, .5)
+    probe.motion_state_source.pose = pose(.8)
+    state = probe.approve_aligned_pose(state.context, .01, .5)
+    for x in (.9, 1.):
+        probe.motion_state_source.pose = pose(x)
+        state = probe.add_pathing_point(state.context, str(x), .01, .2, "probe")
+    probe.motion_state_source.pose = pose(1.1)
+    state = probe.approve_probe_pose(state.context, .01, .2)
+    draft = probe._selected_draft(state.context)
+    for stage in RefinementStage:
+        draft.refinement.motion_states[stage] = previous_state
+    draft.refinement.safe_approach_ready_seeded = False
+    probe.refinement_controller.current_probe_pose = Mock(
+        side_effect=AssertionError("Retraction must not sample endpoint accuracy"))
+    request_id = "9b361339-3d85-4a2e-a5c3-88cf9a6d4872"
+    state = probe.begin_finalization(state.context, request_id, False)
+    factory = probe.refinement_controller.motion_command_factory
+    factory.absolute = Mock(wraps=factory.absolute)
+    for kind, reverse_x, target_x in (
+        (ProbeMotionKind.MOVE_ALIGNED_PREAPPROACH, (1., .9), .8),
+        (ProbeMotionKind.MOVE_SAFE_APPROACH, (.7, .6), .8),
+    ):
+        factory.absolute.reset_mock()
+        operation = probe.prepare_motion(
+            state.context, ProbeMotionRequest(kind, retract_path=True),
+            finalization_request_id=request_id)
+        command = operation.request.command
+        targets = [call.args[0].position.x for call in factory.absolute.call_args_list]
+        assert targets == [target_x, target_x, *reverse_x]
+        assert not command.precision_mode
+        probe.submit_motion(operation)
+        commands.succeed(operation.request)
+        state = latest(probe, state)
+        assert state.refinement.pending_motion is None
+        stage = RefinementStage.ALIGNMENT if kind is ProbeMotionKind.MOVE_ALIGNED_PREAPPROACH else RefinementStage.SAFE_APPROACH
+        assert state.refinement.motion_states[stage] is RefinementMotionState.REACHED
+    state = probe.complete_finalization(state.context, request_id)
+    assert state.refinement is None

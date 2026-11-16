@@ -55,6 +55,7 @@ class PendingRefinementMotion:
     preserve_reached_state: bool = False
     seeds_safe_approach_from_ready: bool = False
     previous_motion_state: Optional[RefinementMotionState] = None
+    retract_path: bool = False
 
 
 @dataclass
@@ -311,7 +312,8 @@ class ProbeRefinementSession:
         elif not self.calculated_setup.fully_custom or motion.verify_achieved_pose:
             raise ValueError("This movement requires an explicit target pose")
         if (
-            motion.stage == RefinementStage.ALIGNMENT
+            not motion.retract_path
+            and motion.stage == RefinementStage.ALIGNMENT
             and self.motion_states[RefinementStage.SAFE_APPROACH]
             != RefinementMotionState.REACHED
         ):
@@ -319,7 +321,8 @@ class ProbeRefinementSession:
                 "Reach the safe approach during this workflow first"
             )
         if (
-            motion.stage == RefinementStage.PROBE
+            not motion.retract_path
+            and motion.stage == RefinementStage.PROBE
             and self.motion_states[RefinementStage.ALIGNMENT]
             != RefinementMotionState.REACHED
         ):
