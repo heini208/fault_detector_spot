@@ -86,7 +86,7 @@ def test_default_freshness_accepts_one_hz_spot_observation():
         observation_source="base",
     )
 
-    assert LiveObjectPoseResolver().maximum_age_sec == 1.5
+    assert LiveObjectPoseResolver().maximum_age_sec == 3.0
     assert result.state == ObjectPoseState.LIVE
     assert math.isclose(result.observation_age_sec, 1.1)
 

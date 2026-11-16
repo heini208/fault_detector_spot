@@ -11,7 +11,7 @@ from fault_detector_spot.shared.ros.qos_profiles import TAG_STATE_QOS
 from fault_detector_spot.shared.runtime_source import RuntimeSource
 
 
-DEFAULT_TAG_STATE_STALE_AFTER_SEC = 1.5
+DEFAULT_TAG_STATE_STALE_AFTER_SEC = 3.0
 
 
 class TagStateSource(RuntimeSource):

@@ -49,12 +49,12 @@ from fault_detector_spot.inspection.setup.stable_tag_pose import (
 from fault_detector_spot.shared.geometry.transforms import pose_to_pose_data
 
 
-BASE_TAG_MAXIMUM_AGE_SEC = 1.5
+BASE_TAG_MAXIMUM_AGE_SEC = 3.0
 BASE_TAG_STABILIZATION_HISTORY_SEC = 4.0
 BASE_TAG_HISTORY_MAX_SAMPLES = 64
 BASE_TAG_MINIMUM_SPAN_SEC = 0.10
 HAND_DEPTH_HISTORY_MAX_SAMPLES = 32
-MAX_HAND_DEPTH_AGE_SEC = 0.5
+MAX_HAND_DEPTH_AGE_SEC = 3.0
 HAND_DEPTH_SEARCH_RADIUS_PX = 16
 # Keep the same 10 mm near-field margin as live surface measurements.
 MINIMUM_HAND_CAMERA_SURFACE_CLEARANCE_M = 0.210
@@ -390,7 +390,7 @@ class ProbeSetupMotionStateSource:
             if receipt_time + 1e-9 < receipt_not_before:
                 continue
             age_seconds = now_receipt_time - receipt_time
-            if age_seconds < -1e-9 or age_seconds > maximum_age_sec:
+            if age_seconds < -1e-9 or (receipt_not_before <= 0.0 and age_seconds > maximum_age_sec):
                 continue
             recent.append((receipt_time, image))
         return tuple(recent)

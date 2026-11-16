@@ -157,32 +157,39 @@ def test_cached_fit_cannot_bypass_age_or_operation_start(harness):
     assert len(harness.fit_calls) == 1
 
 
-def test_latest_valid_frame_must_remain_fresh_after_processing(harness):
+def test_post_start_frame_survives_slow_processing_and_later_polls(harness):
     harness.receive()
-    harness.fit_delay = 0.6
-    with pytest.raises(ValueError, match="Latest valid.*stale"):
-        harness.sample(maximum_age_sec=6.0, maximum_latest_age_sec=0.5)
-    assert len(harness.source._surface_distance_cache) == 1
+    harness.fit_delay = 4.0
+    options = dict(receipt_not_before=99.9, maximum_latest_age_sec=3.0)
+    assert len(harness.sample(**options)) == 1
+    harness.now += 10.0
+    assert len(harness.sample(**options)) == 1
+    assert len(harness.fit_calls) == 1
+    # The same frame cannot be reused for a subsequent check.
+    with pytest.raises(ValueError, match="post_start=0"):
+        harness.sample(receipt_not_before=104.0)
 
-    # A subsequent poll can reuse the slow fit while adding a newer frame.
-    harness.receive(11)
-    harness.fit_delay = 0.0
-    assert len(harness.sample(maximum_age_sec=6.0, maximum_latest_age_sec=0.5)) == 2
-    assert len(harness.fit_calls) == 2
 
-
-def test_recent_rejected_frame_does_not_refresh_valid_measurement(harness):
+def test_recent_rejected_frame_does_not_expire_prior_post_start_measurement(harness):
     harness.receive()
-    harness.sample()
-    harness.now = 100.6
+    options = dict(receipt_not_before=99.9, maximum_latest_age_sec=3.0)
+    harness.sample(**options)
+    harness.now += 4.0
     harness.receive(11)
     harness.fit_error = "no plane support"
-    with pytest.raises(ValueError, match="Latest valid.*stale") as failure:
-        harness.sample(maximum_age_sec=6.0, maximum_latest_age_sec=0.5)
-    detail = str(failure.value)
-    assert "newest raw frame age=0.000s" in detail
-    assert "valid=1, rejected=1" in detail
-    assert "last rejection: no plane support" in detail
+    assert len(harness.sample(**options)) == 1
+    # Invalid depth never counts toward the required number of samples.
+    with pytest.raises(ValueError, match="valid=1, rejected=1"):
+        harness.sample(minimum_samples=2, **options)
+
+
+def test_stream_timeout_is_checked_before_not_after_fitting(harness):
+    harness.receive()
+    harness.now += 3.0
+    harness.fit_delay = 4.0
+    assert len(harness.sample(maximum_latest_age_sec=3.0)) == 1
+    with pytest.raises(ValueError, match="stream is stale"):
+        harness.sample(maximum_latest_age_sec=3.0)
 
 
 def budgeted_sample(harness, **options):

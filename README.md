@@ -936,16 +936,15 @@ foreground return more than the plane tolerance ahead of the fitted surface
 rejects the measurement. No depth pixels are filled or invented.
 
 After settling, the operation requires five distinct frames spanning one
-second, at most 5 mm distance variation, consistent fitted normals, and a
-newest valid reading no older than 0.5 seconds. Fits are reused only while their
-camera calibration, timestamped TF, target and attachment remain unchanged.
-Sensor-tip sampling fits at most one uncached frame per poll, prioritizing
-new arrivals ahead of retries of older rejected frames, and reuses previously
-validated fits. An unchanged backlog still advances past repeated failures. This
-avoids making the latest sample stale while processing a depth backlog; the
-0.5-second freshness check still applies after processing. Stale-valid errors
-include the newest raw-frame age and rejection details to distinguish missing
-input from fresh images that cannot support the target.
+second, at most 5 mm distance variation, and consistent fitted normals.
+Depth received for the current check remains usable while timestamp-matched TF
+and plane fitting complete; calculation time does not expire it. A check without
+an explicit start boundary requires depth received within three seconds.
+Frames from before the check or before its acquisition/settling cutoff cannot
+satisfy it. Fits are reused only while their camera calibration, timestamped TF,
+target and attachment remain unchanged. Sensor-tip sampling fits at most one
+uncached frame per poll, prioritizing new arrivals ahead of retries of older
+rejected frames. Invalid frames do not count toward the required samples.
 The camera depth must be at least 0.210 m (10 mm above the 0.200 m near limit),
 and the measured axis intersection
 must be 3–500 mm ahead. Measurements anchored to a saved tag target additionally
@@ -955,11 +954,11 @@ correspondence/visibility limits, not promised measurement accuracy.
 The observed plane is stored in odom. Original and returned poses require at
 least three distinct acquisition timestamps spanning 0.3 seconds, with hand,
 tip and body variation within 1 mm and 0.2 degrees. Images must have been
-acquired after settling and be no older than 0.5 seconds; receiving an old
-image recently does not make its pose fresh. Polling an already-consumed
-image does not count another sample or erase the window when that cached
-image ages between camera updates. New stale/invalid poses still invalidate
-the window, and acquisition gaps above 0.5 seconds restart it. Waiting feedback
+acquired after settling. Once selected, they do not expire during TF lookup or
+calculation. Polling an already-consumed image does not count another sample or
+erase the window between camera updates; a stream stall above three seconds
+invalidates the window. Invalid poses and acquisition gaps above three seconds
+also restart it. Waiting feedback
 reports the stability limits and the last reset's pose variation or sample gap.
 After an excursion, the arm
 returns with collision checking and verifies hand and tip errors within 10 mm
@@ -978,15 +977,16 @@ target above 1 mm or 0.2 degrees discards the trajectory and repeats planning
 and force-baseline acquisition, at most twice. Missing or stale transforms
 prohibit dispatch. If Spot's latest synchronized TF stamp is slightly ahead of
 the host clock, execution uses buffered interpolation at the current ROS time.
-The existing 250 ms bound still applies; missing interpolation history or an
-out-of-range timestamp prevents dispatch. This does not continuously compensate
+The input age bound is three seconds; future-clock interpolation remains limited
+to a 250 ms lead. Missing interpolation history or an out-of-range timestamp
+prevents dispatch. This does not continuously compensate
 body movement during
 joint trajectory execution. Return diagnostics report hand, tip and body
 displacements by odom axis. Missing transforms, changed reference/attachment,
 contact/failure during return, or non-improving corrections prevent further
 correction. The whole operation has a 120-second deadline to accommodate the
-slower excursion, return and bounded corrections; individual sampling timeouts
-and freshness limits remain unchanged.
+slower excursion, return and bounded corrections; individual sampling deadlines
+still bound missing or invalid evidence.
 
 Tag and relative movements offer **Normal / Precision** selection in the main
 manipulator tab. Aligned and custom final probe poses, and each path waypoint,

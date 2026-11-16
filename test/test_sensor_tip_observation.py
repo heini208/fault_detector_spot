@@ -199,10 +199,10 @@ def test_target_samples_preserve_receipt_freshness_and_count_contract(source):
         source.source.sensor_tip_distance_samples(PoseData.identity(), 0.25, receipt_not_before=100.1)
     with pytest.raises(ValueError, match="at least 2 fresh"):
         source.source.sensor_tip_distance_samples(PoseData.identity(), 0.25, minimum_samples=2)
-    source.now += 0.6
+    source.now += 3.1
     with pytest.raises(ValueError, match="within_age=0"):
         source.source.sensor_tip_distance_samples(PoseData.identity(), 0.25)
-    with pytest.raises(ValueError, match="Latest valid.*stale"):
+    with pytest.raises(ValueError, match="stream is stale"):
         source.source.sensor_tip_distance_samples(
             PoseData.identity(), 0.25, maximum_age_sec=6.0, maximum_latest_age_sec=0.5,
         )
@@ -284,27 +284,28 @@ def test_pose_sample_exposes_acquisition_identity_for_all_three_transforms(sourc
 
 
 @pytest.mark.parametrize("ros_now,match", [
-    (10.6, "acquisition is stale"),
     (9.99, "timestamp is in the future"),
 ])
-def test_pose_sample_rejects_stale_or_future_acquisition_before_tf(source, ros_now, match):
+def test_pose_sample_rejects_future_acquisition_before_tf(source, ros_now, match):
     source.ros_now = ros_now
     with pytest.raises(ValueError, match=match):
         source.source.sensor_tip_pose_sample("test_sensor")
     assert source.poses == []
 
 
-def test_pose_sample_freshness_is_rechecked_after_tf_resolution(source):
+def test_pose_sample_survives_slow_timestamped_tf_resolution(source):
     lookup = source.source._lookup_pose
 
     def delayed_lookup(*args, **kwargs):
         result = lookup(*args, **kwargs)
-        source.ros_now += .2
+        source.ros_now += 2.0
+        source.now += 2.0
         return result
 
     source.source._lookup_pose = delayed_lookup
-    with pytest.raises(ValueError, match="acquisition is stale"):
-        source.source.sensor_tip_pose_sample("test_sensor")
+    sample = source.source.sensor_tip_pose_sample("test_sensor")
+    assert sample.stamp_seconds == 10.0
+    assert source.now == 106.0
     assert len(source.poses) == 3
 
 
@@ -364,16 +365,19 @@ def test_consumed_pose_frame_aging_between_updates_is_no_new_evidence(source):
     assert len(source.poses) == 3
 
 
-def test_unseen_stale_pose_frame_remains_invalid(source):
+def test_delayed_post_start_pose_frame_remains_usable(source):
     source.now += 0.7
     source.ros_now += 0.7
     image, _ = target_image()
     image.header.stamp.nanosec = 100_000_000
     source.source._receive_hand_depth(image)
-    with pytest.raises(ValueError, match="acquisition is stale") as failure:
-        source.source.sensor_tip_pose_sample("test_sensor", after_stamp_seconds=10.0)
-    assert not isinstance(failure.value, NoNewSensorTipPoseSample)
-    assert source.poses == []
+    source.now += 10.0
+    source.ros_now += 10.0
+    sample = source.source.sensor_tip_pose_sample(
+        "test_sensor", receipt_not_before=100.5,
+        acquisition_not_before=10.05, after_stamp_seconds=10.0)
+    assert sample.stamp_seconds == pytest.approx(10.1)
+    assert len(source.poses) == 3
 
 
 @pytest.mark.parametrize("threshold", [-0.1, float("nan"), float("inf")])
@@ -397,3 +401,27 @@ def test_pose_cutoff_rejects_invalid_delays(source, delay):
 def test_pose_sample_rejects_invalid_acquisition_threshold(source, threshold):
     with pytest.raises(ValueError, match="threshold must be finite and nonnegative"):
         source.source.sensor_tip_pose_sample("test_sensor", acquisition_not_before=threshold)
+
+
+def test_observation_view_survives_slow_calculation(source, monkeypatch):
+    measure = probe_surface_source.measure_sensor_tip_distance
+
+    def slow_measure(*args, **kwargs):
+        source.now += 5.0
+        source.ros_now += 5.0
+        return measure(*args, **kwargs)
+
+    monkeypatch.setattr(probe_surface_source, "measure_sensor_tip_distance", slow_measure)
+    view = source.source.observation_view(PoseData.identity(), receipt_not_before=99.9)
+    assert view.visible
+    assert source.now == 105.0
+
+
+def test_consumed_depth_only_reports_stall_after_three_seconds(source):
+    accepted = source.source.sensor_tip_pose_sample("test_sensor")
+    source.now += 3.0
+    with pytest.raises(NoNewSensorTipPoseSample):
+        source.source.sensor_tip_pose_sample("test_sensor", after_stamp_seconds=accepted.stamp_seconds)
+    source.now += 0.001
+    with pytest.raises(ValueError, match="stream stalled"):
+        source.source.sensor_tip_pose_sample("test_sensor", after_stamp_seconds=accepted.stamp_seconds)

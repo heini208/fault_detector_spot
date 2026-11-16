@@ -207,19 +207,14 @@ def test_polling_old_tf_after_it_ages_out_preserves_valid_samples(monkeypatch):
     assert feedback(value, 0.94, acquisition=0.8).outcome is ArmMovementOutcome.SUCCESS
 
 
-def test_new_stale_tf_still_invalidates_the_precision_window(monkeypatch):
+@pytest.mark.parametrize("delay", [0.3, 3.5])
+def test_post_settle_tf_does_not_expire_during_verification(monkeypatch, delay):
     value = precision_rig(monkeypatch)
     finish_motion(value)
     feedback(value, 0.5)
     feedback(value, 0.65)
-    assert feedback(value, 1.1, acquisition=0.8).outcome is ArmMovementOutcome.RUNNING
-    window = value.executor._tag_accuracy["stability"]
-    assert window.sample_count == 0
-    assert "stale" in window.last_reset_reason
-    # A subsequent fresh acquisition cannot reuse the samples from before
-    # invalid feedback, even though the robot pose did not change.
-    assert feedback(value, 1.2).outcome is ArmMovementOutcome.RUNNING
-    assert window.sample_count == 1
+    assert feedback(value, 0.8 + delay, acquisition=0.8).outcome is ArmMovementOutcome.SUCCESS
+    assert len(value.client.sent_goals) == 1
 
 
 @pytest.mark.parametrize("acquisition", [-10.0, -11.0])
@@ -333,4 +328,19 @@ def test_frozen_future_history_cannot_create_a_stable_precision_window(monkeypat
         assert value.executor.poll().outcome is ArmMovementOutcome.RUNNING
     value.clock.now = 7.0
     assert value.executor.poll().outcome is ArmMovementOutcome.MOTION_FAILED
+    assert len(value.client.sent_goals) == 1
+
+
+def test_precision_duplicate_feedback_reports_stall_only_after_three_seconds(monkeypatch):
+    value = precision_rig(monkeypatch)
+    finish_motion(value)
+    feedback(value, 0.5)
+    feedback(value, 0.65)
+    update = feedback(value, 3.65, acquisition=0.65)
+    assert update.outcome is ArmMovementOutcome.RUNNING
+    assert "distinct, advancing" in update.detail
+    assert value.executor._tag_accuracy["stability"].sample_count == 2
+    update = feedback(value, 3.66, acquisition=0.65)
+    assert "feedback stalled" in update.detail
+    assert value.executor._tag_accuracy["stability"].sample_count == 0
     assert len(value.client.sent_goals) == 1

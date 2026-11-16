@@ -190,14 +190,14 @@ def build_sensing_tree(node: rclpy.node.Node, *, status_ledger=None) -> py_trees
         read_parameter(
             node,
             "tag_sensing.state_timeout_sec",
-            1.5,
+            3.0,
         )
     )
     probe_max_age_sec = float(
         read_parameter(
             node,
             "tag_sensing.probe_max_age_sec",
-            1.5,
+            3.0,
         )
     )
     active_object_id = read_parameter(

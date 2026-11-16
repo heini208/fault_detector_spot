@@ -38,13 +38,13 @@ class TagObservationNode(Node):
             "tag36h11:",
         )
         base_max_age_sec = float(
-            self._parameter("tag_sensing.base_max_age_sec", 1.5)
+            self._parameter("tag_sensing.base_max_age_sec", 3.0)
         )
         hand_max_age_sec = float(
-            self._parameter("tag_sensing.hand_max_age_sec", 1.0)
+            self._parameter("tag_sensing.hand_max_age_sec", 3.0)
         )
         hand_tf_pending_sec = float(
-            self._parameter("tag_sensing.hand_tf_pending_sec", 0.5)
+            self._parameter("tag_sensing.hand_tf_pending_sec", 3.0)
         )
         hand_max_hamming = int(
             self._parameter("tag_sensing.hand_max_hamming", 0)

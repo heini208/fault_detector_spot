@@ -39,7 +39,7 @@ from fault_detector_spot.manipulation.arm_motion_speed import (
     ArmMotionSpeedPolicy,
 )
 from fault_detector_spot.manipulation.arm_movement_executor import (
-    ArmMovementExecutor, PLANNING_FRAME_MAX_AGE_SEC,
+    ArmMovementExecutor,
 )
 from fault_detector_spot.manipulation.arm_movement_result import ArmMovementOutcome
 from fault_detector_spot.manipulation.moveit_arm_planner import (
@@ -75,6 +75,10 @@ from fault_detector_spot.navigation.posture_state_source import (
 from fault_detector_spot.sensing.observations.tag_observation_stability import (
     TagObservationStabilityConfig,
 )
+
+
+# Stop recovery admission is independent of stationary measurement timing.
+RECOVERY_POSE_MAX_AGE_SEC = 0.25
 
 
 class _StopAwareActionClient:
@@ -390,7 +394,7 @@ class RobotCommandResources:
             pose = arm.probe_motion_planner.current_hand_pose(BODY_FRAME_NAME)
             stamp = pose.header.stamp.sec + pose.header.stamp.nanosec * 1e-9
             age = node.get_clock().now().nanoseconds * 1e-9 - stamp
-            if not math.isfinite(age) or not 0.0 <= age <= PLANNING_FRAME_MAX_AGE_SEC:
+            if not math.isfinite(age) or not 0.0 <= age <= RECOVERY_POSE_MAX_AGE_SEC:
                 return False, "Recovery requires a fresh measured arm pose"
             from fault_detector_spot.shared.geometry.transforms import pose_to_pose_data
             pose_to_pose_data(pose.pose).validate()

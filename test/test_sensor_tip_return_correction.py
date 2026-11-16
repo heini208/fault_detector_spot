@@ -391,13 +391,13 @@ def test_unusable_acquisition_stamps_never_authorize_motion_or_success(stage, fi
     assert case.execution.result is None
 
 
-def test_sparse_return_pose_acquisitions_cannot_form_a_stable_window():
+def test_return_pose_acquisitions_more_than_three_seconds_apart_cannot_form_a_stable_window():
     case = harness()
     outcome = returned(case)
     for _ in range(20):
         if outcome is not MeasureSensorTipDistanceOutcome.RUNNING:
             break
-        case.clock.now += 0.6
+        case.clock.now += 3.1
         outcome = case.execution.poll()
     assert outcome is MeasureSensorTipDistanceOutcome.FAILURE
     assert len(case.executor.calls) == 2

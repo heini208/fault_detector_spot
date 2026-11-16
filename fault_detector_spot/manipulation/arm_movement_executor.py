@@ -92,9 +92,10 @@ from fault_detector_spot.manipulation.arm_motion_parameters import (
 )
 
 
-TAG_POSITION_VERIFY_TIMEOUT_SEC = 2.0
+TAG_POSITION_VERIFY_TIMEOUT_SEC = 3.0
 CHECKPOINT_POSITION_TOLERANCE_M = 0.020
-PLANNING_FRAME_MAX_AGE_SEC = 0.25
+PLANNING_FRAME_MAX_AGE_SEC = 3.0
+TF_FUTURE_TOLERANCE_SEC = 0.25
 PLANNING_FRAME_WAIT_TIMEOUT_SEC = 3.0
 PRECISION_SETTLE_SEC = 0.5
 PRECISION_SAMPLE_TIMEOUT_SEC = 6.0
@@ -794,7 +795,7 @@ class ArmMovementExecutor(MovementExecutor):
         current = self._tag_current_pose()
         now = self.arm_state_source.node.get_clock().now()
         age = (now.nanoseconds - self._pose_stamp_ns(current)) * 1e-9
-        if -PLANNING_FRAME_MAX_AGE_SEC <= age < 0.0:
+        if -TF_FUTURE_TOLERANCE_SEC <= age < 0.0:
             # Match planning-frame verification: Spot acquisition stamps can
             # lead the host clock. Require buffered history at the current
             # time instead of accepting future geometry or rewriting its stamp.
@@ -822,7 +823,8 @@ class ArmMovementExecutor(MovementExecutor):
         state["not_before"] = self._monotonic_clock() + PRECISION_SETTLE_SEC
         state["deadline"] = state["not_before"] + PRECISION_SAMPLE_TIMEOUT_SEC
         state["last_feedback_detail"] = "No pose samples received"
-        state["stability"] = PoseStabilityWindow(pose_names=(
+        state["last_pose_received_at"] = state["not_before"]
+        state["stability"] = PoseStabilityWindow(maximum_sample_gap_sec=PLANNING_FRAME_MAX_AGE_SEC, pose_names=(
             "hand" if state["target"].sensor_id == BARE_HAND_MOTION_ID else "sensor tip",
         ))
         return ArmMovementUpdate(
@@ -850,19 +852,22 @@ class ArmMovementExecutor(MovementExecutor):
             if not math.isfinite(stamp) or stamp <= 0:
                 raise ValueError("Pose TF acquisition timestamp is invalid")
             if window.last_stamp_seconds and stamp * 1e-9 <= window.last_stamp_seconds:
+                if now - state["last_pose_received_at"] > PLANNING_FRAME_MAX_AGE_SEC:
+                    raise ValueError("Pose feedback stalled: no new acquisition for more than 3.000 s")
                 state["last_feedback_detail"] = "Pose acquisition timestamp did not advance"
                 return ArmMovementUpdate(
                     ArmMovementOutcome.RUNNING,
                     "Waiting for a distinct, advancing precision pose acquisition timestamp",
                 )
             age = (self._precision_ros_now_ns() - stamp) * 1e-9
-            if stamp < state["acquisition_after_ns"] or not 0 <= age <= PLANNING_FRAME_MAX_AGE_SEC:
+            if stamp < state["acquisition_after_ns"] or age < 0.0:
                 raise ValueError(
-                    f"Pose TF is stale, future-dated, or predates the settling deadline "
-                    f"(age {age:.3f} s, maximum {PLANNING_FRAME_MAX_AGE_SEC:.3f} s)"
+                    f"Pose TF is future-dated or predates the settling deadline "
+                    f"(age {age:.3f} s)"
                 )
             sample_pose = pose_to_pose_data(current.pose)
             sample_pose.validate()
+            state["last_pose_received_at"] = self._monotonic_clock()
         except Exception as exception:
             window.invalidate(str(exception))
             state["last_feedback_detail"] = str(exception)
@@ -1249,6 +1254,8 @@ class ArmMovementExecutor(MovementExecutor):
         return self._submit_goal(goal_builder)
 
     def _fresh_planning_frame_transform(self):
+        clock = self.arm_state_source.node.get_clock()
+        check_started_ns = clock.now().nanoseconds
         transform = self.tf_listener.lookup_a_tform_b(
             self.moveit_arm_planner.planning_frame, ODOM_FRAME_NAME,
             timeout_sec=0.0,
@@ -1256,11 +1263,10 @@ class ArmMovementExecutor(MovementExecutor):
         stamp_ns = self._pose_stamp_ns(transform)
         if stamp_ns <= 0:
             raise ValueError("Planning frame TF timestamp is empty")
-        clock = self.arm_state_source.node.get_clock()
         now = clock.now()
         now_ns = now.nanoseconds
         age = (now_ns - stamp_ns) * 1e-9
-        if -PLANNING_FRAME_MAX_AGE_SEC <= age < 0.0:
+        if -TF_FUTURE_TOLERANCE_SEC <= age < 0.0:
             # Spot's time-synchronized acquisition stamps can briefly lead the
             # host clock. Use the buffered transform at the current ROS time,
             # rather than treating a future sample as current geometry. TF must
@@ -1278,8 +1284,11 @@ class ArmMovementExecutor(MovementExecutor):
             stamp_ns = self._pose_stamp_ns(transform)
             if stamp_ns != now_ns:
                 raise ValueError("Planning frame TF did not match the requested current time")
-            age = (clock.now().nanoseconds - stamp_ns) * 1e-9
-        if not 0.0 <= age <= PLANNING_FRAME_MAX_AGE_SEC:
+            age = (now_ns - stamp_ns) * 1e-9
+        # Admit against check start, not time spent resolving the transform.
+        # A transform that arrived during this check is also eligible.
+        admission_age = max(0.0, (check_started_ns - stamp_ns) * 1e-9)
+        if age < 0.0 or admission_age > PLANNING_FRAME_MAX_AGE_SEC:
             raise _PlanningFrameNotFresh(
                 f"Planning frame TF is not fresh: age {age:.3f} s, "
                 f"maximum {PLANNING_FRAME_MAX_AGE_SEC:.3f} s"

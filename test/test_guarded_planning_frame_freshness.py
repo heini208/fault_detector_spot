@@ -214,7 +214,7 @@ def test_future_latest_tf_uses_current_time_interpolation(monkeypatch, lead):
 @pytest.mark.parametrize("samples, detail", [
     ([stamped_transform(stamp=10.003)], "current-time transform unavailable"),
     ([stamped_transform(stamp=9.99), stamped_transform(stamp=10.251)], "not fresh"),
-    ([stamped_transform(stamp=9.749)], "not fresh"),
+    ([stamped_transform(stamp=6.999)], "not fresh"),
 ])
 def test_time_qualified_lookup_keeps_missing_history_and_age_guards(monkeypatch, samples, detail):
     value = rig(monkeypatch)
@@ -253,7 +253,7 @@ def test_stowed_ready_lift_preserves_opt_in_for_primary_plan(monkeypatch):
     assert len(value.starts) == 1
     # The deployment stop is expected; frame verification remains active for
     # the pending primary trajectory and cannot send it with stale TF.
-    value.tf.transforms[("body", "odom")] = stamped_transform(stamp=9.5)
+    value.tf.transforms[("body", "odom")] = stamped_transform(stamp=6.9)
     assert value.executor.poll().outcome is ArmMovementOutcome.RUNNING
     value.clock.now += 3.0
     update = value.executor.poll()
@@ -267,7 +267,7 @@ def test_stale_tf_wait_recovers_without_relaxing_age(monkeypatch, during_dispatc
     value = rig(monkeypatch)
     if during_dispatch:
         begin(value)
-    value.tf.transforms[("body", "odom")] = stamped_transform(stamp=9.3)
+    value.tf.transforms[("body", "odom")] = stamped_transform(stamp=6.9)
     update = value.executor.poll() if during_dispatch else begin(value)
     assert update.outcome is ArmMovementOutcome.RUNNING
     assert "Waiting for fresh planning frame TF" in update.detail
@@ -283,7 +283,7 @@ def test_stale_tf_wait_recovers_without_relaxing_age(monkeypatch, during_dispatc
 
 
 @pytest.mark.parametrize("during_dispatch", [False, True])
-@pytest.mark.parametrize("stamp", [9.3, 10.3])
+@pytest.mark.parametrize("stamp", [6.9, 10.3])
 def test_stale_tf_wait_times_out_and_next_command_has_new_deadline(monkeypatch, during_dispatch, stamp):
     value = rig(monkeypatch)
     if during_dispatch:
@@ -304,7 +304,7 @@ def test_stale_tf_wait_times_out_and_next_command_has_new_deadline(monkeypatch, 
 def test_dispatch_tf_recovery_rechecks_geometry_and_replans(monkeypatch):
     value = rig(monkeypatch)
     begin(value)
-    value.tf.transforms[("body", "odom")] = stamped_transform(stamp=9.3)
+    value.tf.transforms[("body", "odom")] = stamped_transform(stamp=6.9)
     assert value.executor.poll().outcome is ArmMovementOutcome.RUNNING
     value.tf.transforms[("body", "odom")] = stamped_transform(x=0.003)
     assert value.executor.poll().outcome is ArmMovementOutcome.RUNNING
@@ -320,7 +320,7 @@ def test_cancel_during_tf_wait_prevents_late_dispatch(monkeypatch, during_dispat
     value = rig(monkeypatch)
     if during_dispatch:
         begin(value)
-    value.tf.transforms[("body", "odom")] = stamped_transform(stamp=9.3)
+    value.tf.transforms[("body", "odom")] = stamped_transform(stamp=6.9)
     update = value.executor.poll() if during_dispatch else begin(value)
     assert update.outcome is ArmMovementOutcome.RUNNING
     value.executor.cancel()
@@ -334,3 +334,19 @@ def test_cancel_during_tf_wait_prevents_late_dispatch(monkeypatch, during_dispat
     assert not value.executor.active
     assert not value.executor.cancelling
     assert value.client.sent_goals == []
+
+
+@pytest.mark.parametrize("stamp", [9.4, 12.0])
+def test_planning_tf_admission_does_not_expire_during_lookup(monkeypatch, stamp):
+    value = rig(monkeypatch)
+    ros_now = [10.0]
+    value.state.node = SimpleNamespace(get_clock=lambda: SimpleNamespace(
+        now=lambda: SimpleNamespace(nanoseconds=round(ros_now[0] * 1e9))))
+
+    def lookup(*args, **kwargs):
+        ros_now[0] += 4.0
+        return stamped_transform(stamp=stamp)
+
+    value.tf.lookup_a_tform_b = lookup
+    current = value.executor._fresh_planning_frame_transform()
+    assert Time.from_msg(current.header.stamp).nanoseconds == round(stamp * 1e9)

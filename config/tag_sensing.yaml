@@ -6,9 +6,9 @@
     tag_sensing.hand_detection_topic: '/detections'
     tag_sensing.hand_tag_frame_prefix: 'tag36h11:'
 
-    tag_sensing.base_max_age_sec: 1.5
-    tag_sensing.hand_max_age_sec: 1.0
-    tag_sensing.hand_tf_pending_sec: 0.5
+    tag_sensing.base_max_age_sec: 3.0
+    tag_sensing.hand_max_age_sec: 3.0
+    tag_sensing.hand_tf_pending_sec: 3.0
 
     tag_sensing.hand_max_hamming: 0
     tag_sensing.hand_min_decision_margin: 0.0
@@ -17,9 +17,9 @@
     tag_sensing.maximum_range_m: 1.5
 
     tag_sensing.publish_period_sec: 0.05
-    tag_sensing.state_timeout_sec: 1.5
+    tag_sensing.state_timeout_sec: 3.0
 
-    tag_sensing.probe_max_age_sec: 1.5
+    tag_sensing.probe_max_age_sec: 3.0
 
     inspection.active_object_id: ''
     inspection.active_routine_id: ''

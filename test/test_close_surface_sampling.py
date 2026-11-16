@@ -86,7 +86,7 @@ def test_initial_settle_excludes_earlier_frames_without_using_sampling_budget():
     assert not executor.guarded_calls
     assert poll_at(action, state, 10.7, 10.9) is MoveCloseToSurfaceOutcome.RUNNING
     assert state.requests[-1]["receipt_not_before"] == pytest.approx(10.5)
-    assert state.requests[-1]["maximum_latest_age_sec"] == pytest.approx(0.5)
+    assert state.requests[-1]["maximum_latest_age_sec"] == pytest.approx(3.0)
     assert action._measurement._phase_start == pytest.approx(10.9)
 
 
@@ -157,7 +157,7 @@ def test_invalid_measurement_reference_prohibits_approach_recovery(change, settl
     action, state, executor = sampling_execution()
     settle_initial_pose(action, state)
     state.samples = samples(10.6, [0.08] * 5)
-    assert poll_at(action, state, 11.8, 12.0, 12.2) is MoveCloseToSurfaceOutcome.RUNNING
+    assert poll_at(action, state, 11.8) is MoveCloseToSurfaceOutcome.RUNNING
     assert action._phase == "approach"
     assert len(executor.guarded_calls) == 1
 
@@ -197,7 +197,7 @@ def test_body_compliance_above_ten_millimeters_does_not_invalidate_approach(sett
     action, state, executor = sampling_execution()
     settle_initial_pose(action, state)
     state.samples = samples(10.6, [0.08] * 5)
-    assert poll_at(action, state, 11.8, 12.0, 12.2) is MoveCloseToSurfaceOutcome.RUNNING
+    assert poll_at(action, state, 11.8) is MoveCloseToSurfaceOutcome.RUNNING
     executor.poll = lambda: ArmMovementUpdate(ArmMovementOutcome.RUNNING, "moving")
     if settled:
         executor.active = False
@@ -229,7 +229,7 @@ def test_consistently_misaligned_measurement_cannot_start_surface_approach():
         distance_sample(distance, 10.6 + index * 0.3, surface_plane_probe=plane)
         for index in range(5)
     )
-    assert poll_at(action, state, 11.8, 12.0, 12.2) is MoveCloseToSurfaceOutcome.FAILURE
+    assert poll_at(action, state, 11.8) is MoveCloseToSurfaceOutcome.FAILURE
     assert action._measurement.result is not None
     assert "not aligned" in action.feedback_message
     assert "10.10 deg > 10.00 deg" in action.feedback_message
@@ -255,7 +255,7 @@ def test_surface_approach_reserves_alignment_margin_before_moving(initial_angle,
         for index in range(5)
     )
 
-    assert poll_at(action, state, 11.8, 12.0, 12.2) is expected
+    assert poll_at(action, state, 11.8) is expected
     assert action.config.maximum_axis_error_rad == pytest.approx(math.radians(5.0))
     assert action.config.maximum_approach_axis_error_rad == pytest.approx(math.radians(10.0))
     if expected is MoveCloseToSurfaceOutcome.FAILURE:

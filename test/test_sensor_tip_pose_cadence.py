@@ -24,7 +24,7 @@ def camera_backed_pose_source(case, monkeypatch):
     source._hand_depth_camera_info = info
     source.node = SimpleNamespace(get_clock=lambda: SimpleNamespace(
         now=lambda: SimpleNamespace(nanoseconds=round(case.clock.now * 1e9))))
-    for name in ("sensor_tip_pose_sample", "latest_hand_depth", "_validate_pose_acquisition_age"):
+    for name in ("sensor_tip_pose_sample", "latest_hand_depth", "_validate_pose_acquisition_stamp"):
         setattr(source, name, MethodType(getattr(ProbeSurfaceSource, name), source))
     monkeypatch.setattr(probe_surface_source.time, "monotonic", case.clock)
 
@@ -81,4 +81,4 @@ def test_camera_stall_after_one_valid_pose_cannot_complete_or_start_motion(monke
     assert outcome is MeasureSensorTipDistanceOutcome.FAILURE
     assert case.executor.calls == []
     assert case.execution.result is None
-    assert "distinct, advancing" in case.execution.feedback_message
+    assert "stream stalled" in case.execution.feedback_message

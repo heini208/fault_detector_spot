@@ -32,7 +32,7 @@ class HelperInitializer(py_trees.behaviour.Behaviour):
         ):
             self.node.declare_parameter(
                 "tag_sensing.state_timeout_sec",
-                1.5,
+                3.0,
             )
         tag_state_timeout_sec = float(
             self.node.get_parameter(

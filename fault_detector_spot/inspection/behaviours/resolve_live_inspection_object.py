@@ -42,7 +42,7 @@ class ResolveLiveInspectionObject(
         routine_id: str,
         tf_buffer: tf2_ros.Buffer,
         execution_frame: str = "odom",
-        maximum_age_sec: float = 1.5,
+        maximum_age_sec: float = 3.0,
         object_root: Optional[Union[str, Path]] = None,
         name: str = "ResolveLiveInspectionObject",
     ):

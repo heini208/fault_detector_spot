@@ -22,8 +22,8 @@ def test_tag_sensing_uses_raw_fiducial_frame_for_freshness():
 def test_probe_and_base_tag_freshness_windows_are_aligned():
     config = (ROOT / "config/tag_sensing.yaml").read_text(encoding="utf-8")
 
-    assert "tag_sensing.base_max_age_sec: 1.5" in config
-    assert "tag_sensing.probe_max_age_sec: 1.5" in config
+    assert "tag_sensing.base_max_age_sec: 3.0" in config
+    assert "tag_sensing.probe_max_age_sec: 3.0" in config
 
 
 def test_tag_node_defaults_match_tag_sensing_configuration():
@@ -36,7 +36,7 @@ def test_tag_node_defaults_match_tag_sensing_configuration():
 
     assert 'r"(?<!filtered_)fiducial_(\\d+)"' in tag_node
     assert (
-        'self._parameter("tag_sensing.base_max_age_sec", 1.5)'
+        'self._parameter("tag_sensing.base_max_age_sec", 3.0)'
     ) in tag_node
     assert (
         'self._parameter("tag_sensing.publish_period_sec", 0.05)'

@@ -197,7 +197,7 @@ def test_default_freshness_accepts_one_hz_spot_observation():
     behavior.update()
     result = behavior.blackboard.live_inspection_object
 
-    assert behavior.maximum_age_sec == 1.5
+    assert behavior.maximum_age_sec == 3.0
     assert result.state == ObjectPoseState.LIVE
     assert result.observation_age_sec == 1.1
 

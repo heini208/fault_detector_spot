@@ -1820,7 +1820,7 @@ def test_tag_accuracy_within_tolerance_finishes_without_adjustment(monkeypatch):
 
 def test_tag_accuracy_stale_feedback_times_out(monkeypatch):
     executor, _, clock, corrections = tag_verification_executor(monkeypatch, error=0.)
-    clock[0] = 2.1
+    clock[0] = 3.1
     assert executor.poll().outcome is ArmMovementOutcome.EXECUTION_ERROR
     assert not corrections
 

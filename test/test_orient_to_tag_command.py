@@ -202,7 +202,7 @@ def test_missing_or_stale_tag_rejects_target(stale):
         message = TagElementArray()
         message.elements = [tag]
         source._receive_usable_tags(message)
-        source._monotonic_clock = lambda: 12.0
+        source._monotonic_clock = lambda: 13.1
     executor.tag_state_source = source
     with pytest.raises(RuntimeError, match="not currently usable"):
         executor._resolve_tag_orientation_target(7, "hall_probe")

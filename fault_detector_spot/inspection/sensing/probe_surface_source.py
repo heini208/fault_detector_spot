@@ -51,7 +51,7 @@ from fault_detector_spot.shared.runtime_source import RuntimeSource
 
 
 HAND_DEPTH_HISTORY_MAX_SAMPLES = 32
-MAX_HAND_DEPTH_AGE_SEC = 0.5
+MAX_HAND_DEPTH_AGE_SEC = 3.0
 SENSOR_ATTACHMENT_TOPIC = "fault_detector/application/sensor_attachment_state"
 
 
@@ -131,7 +131,11 @@ class ProbeSurfaceSource(RuntimeSource):
         receipt_not_before: float = 0.0,
         acquisition_after_seconds: float | None = None,
     ):
-        """Return the newest fresh registered hand depth and camera info."""
+        """Select post-start depth without expiring it during TF or calculation.
+
+        Without a check boundary, require a callback within the stream timeout.
+        A consumer asking for another distinct acquisition still detects stalls.
+        """
         maximum_age_sec = float(maximum_age_sec)
         receipt_not_before = float(receipt_not_before)
         if not math.isfinite(maximum_age_sec) or maximum_age_sec <= 0.0:
@@ -172,13 +176,16 @@ class ProbeSurfaceSource(RuntimeSource):
             if not math.isfinite(seconds) or seconds <= 0.0:
                 raise ValueError("Registered hand-depth timestamp is empty or nonfinite")
             if seconds <= acquisition_after_seconds:
-                # An old cached frame becoming stale is not a new bad pose.
-                # Consumers retain their window but may not count this frame.
+                if time.monotonic() - receipt_time > MAX_HAND_DEPTH_AGE_SEC:
+                    raise ValueError(
+                        "Registered hand-depth stream stalled: no new depth image "
+                        f"received for more than {MAX_HAND_DEPTH_AGE_SEC:.3f}s")
+                # Polling an already consumed acquisition is not a new bad pose.
                 raise NoNewSensorTipPoseSample(
                     "Waiting for a distinct, advancing pose acquisition timestamp; "
                     f"latest={seconds:.6f}s, last accepted={acquisition_after_seconds:.6f}s")
         age = time.monotonic() - receipt_time
-        if age < -1e-9 or age > maximum_age_sec:
+        if age < -1e-9 or (receipt_not_before <= 0.0 and age > maximum_age_sec):
             publishers = self.node.count_publishers("/depth_registered/hand/image")
             raise ValueError(
                 "Registered hand-depth image is stale: "
@@ -262,11 +269,10 @@ class ProbeSurfaceSource(RuntimeSource):
         stamp_seconds = stamp.nanoseconds * 1e-9
         if stamp_seconds + 1e-9 < acquisition_not_before:
             raise ValueError("Registered hand-depth acquisition precedes the required observation time")
-        self._validate_pose_acquisition_age(stamp_seconds)
+        self._validate_pose_acquisition_stamp(stamp_seconds)
         camera_pose = self._lookup_pose(
             "odom", depth_frame_id(depth_image, camera_info), lookup_time=stamp,
         )
-        self._validate_pose_acquisition_age(stamp_seconds)
         try:
             if expected_distance_m is not None and (
                 not math.isfinite(expected_distance_m) or expected_distance_m <= 0.0
@@ -291,7 +297,6 @@ class ProbeSurfaceSource(RuntimeSource):
                 camera_pose, expected_distance_m,
                 target_plane_probe=target_plane_probe,
             )
-            self._validate_pose_acquisition_age(stamp_seconds)
             if target_plane_probe is None:
                 target_plane_probe = sample.surface_plane_probe
             visible, detail = True, "Original sensor-tip target has valid local depth support"
@@ -360,26 +365,20 @@ class ProbeSurfaceSource(RuntimeSource):
                 "Registered hand-depth acquisition precedes the required pose "
                 f"sample time: {stamp_seconds:.6f}s < {acquisition_not_before:.6f}s"
             )
-        self._validate_pose_acquisition_age(stamp_seconds)
+        self._validate_pose_acquisition_stamp(stamp_seconds)
         poses = tuple(
             self._lookup_pose("odom", frame, lookup_time=stamp)
             for frame in ("hand", sensor_probe_frame(sensor_id), "body")
         )
         for pose in poses:
             pose.validate()
-        # Timestamped TF can take time to resolve; remain fresh on return too.
-        self._validate_pose_acquisition_age(stamp_seconds)
+        # The selected acquisition remains valid while timestamped TF resolves.
         return SensorTipPoseSample(stamp_seconds, *poses)
 
-    def _validate_pose_acquisition_age(self, stamp_seconds: float) -> None:
+    def _validate_pose_acquisition_stamp(self, stamp_seconds: float) -> None:
         age = self.pose_acquisition_cutoff() - stamp_seconds
         if age < -1e-9:
             raise ValueError("Registered hand-depth acquisition timestamp is in the future")
-        if age > MAX_HAND_DEPTH_AGE_SEC:
-            raise ValueError(
-                "Registered hand-depth acquisition is stale for pose sampling: "
-                f"age={age:.3f}s, max_age={MAX_HAND_DEPTH_AGE_SEC:.3f}s"
-            )
 
     def sensor_tip_distance_samples(
         self,
@@ -462,9 +461,16 @@ class ProbeSurfaceSource(RuntimeSource):
             )
 
         samples = {}
-        valid_receipts = []
         errors = []
         now = time.monotonic()
+        # This is a stream admission check, never a calculation deadline.
+        # Post-start acquisitions belong to this check even if processing is slow.
+        if maximum_latest_age_sec is not None and history and receipt_not_before <= 0.0:
+            age = now - history[-1][0]
+            if age < -1e-9 or age > maximum_latest_age_sec:
+                raise ValueError(
+                    "Registered hand-depth stream is stale: "
+                    f"age={age:.3f}s, max_age={maximum_latest_age_sec:.3f}s")
         context = (
             measurement_context,
             None if attachment_state is None else (
@@ -482,10 +488,8 @@ class ProbeSurfaceSource(RuntimeSource):
         eligible_count = 0
         new_fits = 0
         deferred_count = 0
-        # Target-local fits inspect a full depth image. Fitting a buffered
-        # backlog in one tick can age even the newest frame beyond the live
-        # freshness limit. Acquire one new target fit per poll, newest first,
-        # and retain timestamped, revalidated cached fits for temporal stability.
+        # Bound work per poll so fitting a backlog does not monopolize execution.
+        # Retain timestamped, revalidated fits for temporal stability.
         selected_history = list(reversed(history)) if maximum_new_fits else history
         if previous_failed_fit is not None and previous_failed_fit[1][0] == context:
             # New arrivals must not wait behind a failed backlog until they
@@ -504,7 +508,7 @@ class ProbeSurfaceSource(RuntimeSource):
             if history_index < len(history):
                 post_start_count += 1
             age = now - receipt_time
-            if age < -1e-9 or age > maximum_age_sec:
+            if age < -1e-9 or (receipt_not_before <= 0.0 and age > maximum_age_sec):
                 continue
             if history_index < len(history):
                 eligible_count += 1
@@ -573,30 +577,8 @@ class ProbeSurfaceSource(RuntimeSource):
                                 deepcopy(cache_key), deepcopy(sample),
                             )
                 samples[id(depth_image)] = sample
-                valid_receipts.append(receipt_time)
             except Exception as exception:
                 errors.append(str(exception))
-
-        if maximum_latest_age_sec is not None and valid_receipts:
-            # Plane fitting itself takes time. Freshness must be checked when
-            # returning a measurement, not only before processing the batch.
-            with self._lock:
-                newest_raw_receipt = (self._hand_depth_history[-1][0]
-                                      if self._hand_depth_history else None)
-                completed_at = time.monotonic()
-            latest_age = completed_at - max(valid_receipts)
-            if latest_age < -1e-9 or latest_age > maximum_latest_age_sec:
-                newest_raw_detail = (f"{completed_at - newest_raw_receipt:.3f}s"
-                                     if newest_raw_receipt is not None else "none")
-                detail = (f"newest raw frame age={newest_raw_detail}; "
-                          f"valid={len(samples)}, rejected={len(errors)}, deferred={deferred_count}")
-                if errors:
-                    detail += f"; last rejection: {errors[-1]}"
-                raise ValueError(
-                    "Latest valid registered hand-depth sample is stale: "
-                    f"age={latest_age:.3f}s, "
-                    f"max_age={maximum_latest_age_sec:.3f}s; {detail}"
-                )
 
         if len(samples) < minimum_samples:
             newest_age = now - history[-1][0] if history else None

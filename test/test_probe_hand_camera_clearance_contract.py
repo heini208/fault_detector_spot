@@ -65,3 +65,20 @@ def test_reached_alignment_has_live_camera_clearance_gate(monkeypatch, clearance
             source.require_hand_camera_clearance()
     else:
         assert source.require_hand_camera_clearance() == pytest.approx(clearance_m)
+
+
+def test_setup_depth_admission_uses_three_second_timeout(monkeypatch):
+    from fault_detector_spot.inspection.setup import probe_setup_motion_state_source as module
+
+    image = object()
+    history = [(10.0, image)]
+    monkeypatch.setattr(module.time, "monotonic", lambda: 13.0)
+    assert ProbeSetupMotionStateSource._recent_hand_depth_samples(
+        history, module.MAX_HAND_DEPTH_AGE_SEC) == tuple(history)
+    monkeypatch.setattr(module.time, "monotonic", lambda: 20.0)
+    assert not ProbeSetupMotionStateSource._recent_hand_depth_samples(
+        history, module.MAX_HAND_DEPTH_AGE_SEC)
+    assert ProbeSetupMotionStateSource._recent_hand_depth_samples(
+        history, module.MAX_HAND_DEPTH_AGE_SEC, receipt_not_before=9.0) == tuple(history)
+    assert not ProbeSetupMotionStateSource._recent_hand_depth_samples(
+        history, module.MAX_HAND_DEPTH_AGE_SEC, receipt_not_before=11.0)

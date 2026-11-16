@@ -30,7 +30,7 @@ class BaseTagObservationTracker:
         frame_pattern: str = r"(?<!filtered_)fiducial_(\d+)",
         filtered_frame_prefix: str = "filtered_fiducial_",
         target_frame: str = "body",
-        max_age_sec: float = 1.5,
+        max_age_sec: float = 3.0,
         logger=None,
     ):
         self.tf_buffer = tf_buffer
@@ -145,8 +145,8 @@ class HandTagObservationTracker:
         tf_buffer,
         target_frame: str = "body",
         tag_frame_prefix: str = "tag36h11:",
-        max_age_sec: float = 1.0,
-        tf_pending_sec: float = 0.5,
+        max_age_sec: float = 3.0,
+        tf_pending_sec: float = 3.0,
         max_hamming: int = 0,
         min_decision_margin: float = 0.0,
         pending_queue_size: int = 10,

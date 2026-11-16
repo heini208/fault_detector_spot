@@ -180,6 +180,9 @@ def test_latest_hand_depth_can_require_frame_received_after_operation_start(monk
         receipt_not_before=1.5,
     )
     assert image.data == fresh.data
+    monkeypatch.setattr(probe_surface_source.time, 'monotonic', lambda: 20.0)
+    image, _ = source.latest_hand_depth(receipt_not_before=1.5)
+    assert image.data == fresh.data
 
     with pytest.raises(ValueError, match="after the required start time"):
         source.latest_hand_depth(receipt_not_before=2.5)
