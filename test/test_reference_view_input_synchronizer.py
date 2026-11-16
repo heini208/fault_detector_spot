@@ -1,13 +1,21 @@
 """Tests for raw reference-view input collection."""
 
 import math
-from types import SimpleNamespace
 
 import pytest
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
+from rclpy.qos import DurabilityPolicy, ReliabilityPolicy, qos_profile_sensor_data
 
 from fault_detector_spot.inspection.setup.reference_view_input_synchronizer import (
     ReferenceViewInputSynchronizer,
 )
+
+
+class FakeSubscription:
+    """Provide a weak-referenceable subscription for real callback groups."""
+
+    def __init__(self, **attributes):
+        self.__dict__.update(attributes)
 
 
 class FakeNode:
@@ -15,6 +23,7 @@ class FakeNode:
 
     def __init__(self):
         self.subscriptions = []
+        self.default_callback_group = MutuallyExclusiveCallbackGroup()
 
     def create_subscription(
         self,
@@ -22,13 +31,18 @@ class FakeNode:
         topic,
         callback,
         qos_profile,
+        *,
+        callback_group=None,
     ):
-        subscription = SimpleNamespace(
+        group = callback_group or self.default_callback_group
+        subscription = FakeSubscription(
             message_type=message_type,
             topic=topic,
             callback=callback,
             qos_profile=qos_profile,
+            callback_group=group,
         )
+        group.add_entity(subscription)
         self.subscriptions.append(subscription)
         return subscription
 
@@ -63,6 +77,43 @@ def test_configures_raw_images_and_both_calibrations():
     ]
     assert synchronizer.rgb_subscription is node.subscriptions[0]
     assert synchronizer.depth_subscription is node.subscriptions[1]
+
+
+def test_rgb_requests_reliable_delivery_without_latched_history():
+    synchronizer, node = make_synchronizer()
+
+    rgb_qos = synchronizer.rgb_subscription.qos_profile
+    assert rgb_qos.reliability == ReliabilityPolicy.RELIABLE
+    assert rgb_qos.durability == DurabilityPolicy.VOLATILE
+    assert rgb_qos.depth == 5
+    for subscription in node.subscriptions[1:]:
+        assert subscription.qos_profile == qos_profile_sensor_data
+
+
+def test_camera_callbacks_are_independent_of_default_group_and_other_cameras():
+    first, node = make_synchronizer()
+    second = ReferenceViewInputSynchronizer(
+        node, "/other/rgb", "/other/depth", "/other/rgb_info", "/other/depth_info",
+    )
+    unrelated = node.create_subscription(object, "/unrelated", lambda _: None, 10)
+    default_group = unrelated.callback_group
+    first_group = first.rgb_subscription.callback_group
+    second_group = second.rgb_subscription.callback_group
+
+    assert default_group.beginning_execution(unrelated)
+    try:
+        assert first_group.beginning_execution(first.depth_subscription)
+        try:
+            # A busy camera still serializes its own callbacks, but does not
+            # prevent a different camera from collecting its RGB frame.
+            assert not first_group.can_execute(first.rgb_subscription)
+            assert second_group.beginning_execution(second.rgb_subscription)
+            second_group.ending_execution(second.rgb_subscription)
+        finally:
+            first_group.ending_execution(first.depth_subscription)
+        assert first_group.can_execute(first.rgb_subscription)
+    finally:
+        default_group.ending_execution(unrelated)
 
 
 def test_collection_requires_explicit_begin():

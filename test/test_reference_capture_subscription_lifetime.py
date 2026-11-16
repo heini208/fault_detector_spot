@@ -22,7 +22,7 @@ class Node:
         self.subscriptions = []
         self.destroyed = []
 
-    def create_subscription(self, message_type, topic, callback, qos):
+    def create_subscription(self, message_type, topic, callback, qos, *, callback_group=None):
         subscription = SimpleNamespace(topic=topic, callback=callback)
         self.subscriptions.append(subscription)
         return subscription

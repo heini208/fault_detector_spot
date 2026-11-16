@@ -8,8 +8,9 @@ from dataclasses import dataclass
 from threading import Lock
 from typing import Deque, Optional, Tuple
 
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from rclpy.node import Node
-from rclpy.qos import qos_profile_sensor_data
+from rclpy.qos import QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
 from sensor_msgs.msg import CameraInfo, Image
 
 
@@ -77,29 +78,43 @@ class ReferenceViewInputSynchronizer:
         )
         self._collection: Optional[_CollectionWindow] = None
 
+        # Keep camera collection independent of other cameras and the node's
+        # default group (which also processes full hand-depth image copies).
+        self._callback_group = MutuallyExclusiveCallbackGroup()
+
+        # Spot publishes RGB reliably. Request retransmission of dropped image
+        # fragments so a short capture window does not lose whole RGB frames.
+        rgb_qos = QoSProfile(
+            depth=5,
+            reliability=ReliabilityPolicy.RELIABLE,
+        )
         self.rgb_subscription = node.create_subscription(
             Image,
             rgb_topic,
             self._rgb_callback,
-            qos_profile_sensor_data,
+            rgb_qos,
+            callback_group=self._callback_group,
         )
         self.depth_subscription = node.create_subscription(
             Image,
             depth_topic,
             self._depth_callback,
             qos_profile_sensor_data,
+            callback_group=self._callback_group,
         )
         self.rgb_camera_info_subscription = node.create_subscription(
             CameraInfo,
             rgb_camera_info_topic,
             self._rgb_camera_info_callback,
             qos_profile_sensor_data,
+            callback_group=self._callback_group,
         )
         self.depth_camera_info_subscription = node.create_subscription(
             CameraInfo,
             depth_camera_info_topic,
             self._depth_camera_info_callback,
             qos_profile_sensor_data,
+            callback_group=self._callback_group,
         )
 
     def ready_for_collection(self) -> bool:
