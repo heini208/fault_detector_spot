@@ -74,11 +74,11 @@ class FineAdjustmentDialog(QDialog):
         self.raise_()
         self.activateWindow()
 
-    def refresh(self, alignment_enabled, pathing_enabled):
-        enabled = pathing_enabled if self.pathing else alignment_enabled
+    def refresh(self):
+        """Keep adjustment controls available throughout probe setup."""
         for button in self.controls.refinement_buttons["alignment"].values():
-            button.setEnabled(enabled)
+            button.setEnabled(True)
         for field in (self.controls.refine_translation_step_field,
                       self.controls.refine_rotation_step_field,
                       self.controls.refine_frame_dropdown, self.speed_field):
-            field.setEnabled(enabled)
+            field.setEnabled(True)

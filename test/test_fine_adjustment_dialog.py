@@ -55,7 +55,7 @@ def test_same_window_has_all_actions_and_keeps_settings(application):
     assert intent.operation == intent.OPERATION_ADJUST_PATHING_POSE
     assert intent.translation.x == .02
     assert intent.arm_speed_scale == .25
-    assert not controls.refinement_buttons['alignment']['front'].isEnabled()
+    assert controls.refinement_buttons['alignment']['front'].isEnabled()
     main.hide()
     assert not shared.isVisible()
 

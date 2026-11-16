@@ -287,11 +287,11 @@ def test_alignment_controls_resume_after_measurement_preserves_pose(terminal_sta
     assert "0 mm" in dialog.contact_mode_hint_label.text()
     assert controls.handle_test_sensor_tip_distance()
     assert not dialog.test_distance_measure_button.isEnabled()
-    assert not controls.move_aligned_pose_button.isEnabled()
+    assert controls.move_aligned_pose_button.isEnabled()
     assert not dialog.next_button.isEnabled()
     assert not dialog.close_button.isEnabled()
     assert dialog.emergency_stop_button.isEnabled()
-    assert not any(button.isEnabled() for button in controls.refinement_buttons["alignment"].values())
+    assert all(button.isEnabled() for button in controls.refinement_buttons["alignment"].values())
     controls._handle_sensor_tip_distance_status(feedback(
         controls, state=terminal_state, continuation_safe=True,
     ))

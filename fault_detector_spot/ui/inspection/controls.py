@@ -1091,7 +1091,6 @@ class InspectionControls(UIControlHelper):
         for button in (
             self.move_calculated_approach_button,
             self.use_current_approach_button,
-            self.move_aligned_pose_button,
             self.use_current_alignment_button,
             self.orient_to_surface_button,
             self.orient_to_tag_button,
@@ -1791,17 +1790,10 @@ class InspectionControls(UIControlHelper):
             button.setEnabled(safe_enabled and safe_adjustable)
 
         self.refinement_dialog.refresh_path_controls(alignment_enabled)
-        self.move_aligned_pose_button.setEnabled(
-            alignment_enabled
-        )
+        self.move_aligned_pose_button.setEnabled(True)
         self.orient_to_surface_button.setEnabled(alignment_enabled)
         self.orient_to_tag_button.setEnabled(alignment_enabled)
         self.use_current_alignment_button.setEnabled(True)
-        for button in self.refinement_buttons["alignment"].values():
-            button.setEnabled(
-                alignment_enabled and alignment_adjustable
-            )
-
         self.test_surface_distance_button.setEnabled(
             probe_page
             and alignment_reached
@@ -1835,16 +1827,11 @@ class InspectionControls(UIControlHelper):
             distances_editable
         )
         self.surface_distance_tolerance_field.setEnabled(not pending)
-        self.refine_translation_step_field.setEnabled(not pending)
-        self.refine_rotation_step_field.setEnabled(not pending)
-        self.refine_frame_dropdown.setEnabled(not pending)
-        self.open_fine_adjustment_button.setEnabled(alignment_enabled and alignment_adjustable)
+        self.open_fine_adjustment_button.setEnabled(True)
         self.refinement_dialog.back_away_surface_button.setEnabled(
             alignment_enabled and alignment_adjustable
         )
-        self.refinement_dialog.fine_adjustment_dialog.refresh(
-            alignment_enabled and alignment_adjustable, alignment_enabled
-        )
+        self.refinement_dialog.fine_adjustment_dialog.refresh()
         approved = presentation.approved_pose(current)
         self.refinement_dialog.set_next_action(
             text=(
@@ -2012,11 +1999,11 @@ class InspectionControls(UIControlHelper):
         self.approach_step_status_label.setText(presentation.motion_states[RefinementStage.SAFE_APPROACH].value)
         self.alignment_step_status_label.setText(presentation.motion_states[stage].value)
         self.move_calculated_approach_button.setEnabled(enabled and safe_page)
-        self.move_aligned_pose_button.setEnabled(editable and candidate is not None)
+        self.move_aligned_pose_button.setEnabled(True)
         self.move_aligned_pose_button.setText("Move to Saved Candidate")
         self.use_current_alignment_button.setEnabled(True)
         self.use_current_alignment_button.setText("Save Current Pose as Candidate")
-        self.open_fine_adjustment_button.setEnabled(editable)
+        self.open_fine_adjustment_button.setEnabled(True)
         dialog.refresh_path_controls(editable)
         if stage is RefinementStage.PROBE:
             dialog.move_safe_pose_button.setEnabled(
@@ -2025,7 +2012,7 @@ class InspectionControls(UIControlHelper):
                 is RefinementMotionState.REACHED
             )
         dialog.move_path_button.setEnabled(editable and candidate is not None)
-        dialog.fine_adjustment_dialog.refresh(editable, editable)
+        dialog.fine_adjustment_dialog.refresh()
         dialog.set_next_action(
             text="Next", visible=not dialog.is_summary_page(),
         )
@@ -2037,8 +2024,6 @@ class InspectionControls(UIControlHelper):
         dialog = self.refinement_dialog.fine_adjustment_dialog
         if not dialog.pathing and not self._custom_probe_mode():
             submitted = self.handle_refine_pose("alignment", action)
-            if submitted:
-                dialog.refresh(False, False)
             return submitted
         try:
             translation_step = self._bounded_positive_value(
@@ -2060,8 +2045,6 @@ class InspectionControls(UIControlHelper):
             intent.arm_speed_scale = dialog.speed_field.value() / 100.0
             self._write_motion_tolerances(intent)
             submitted = self._submit_probe_motion(intent, "pathing pose adjustment")
-            if submitted:
-                dialog.refresh(False, False)
             return submitted
         except Exception as exception:
             self._show_setup_error("Fine Arm Adjustment", exception)

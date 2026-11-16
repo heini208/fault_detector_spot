@@ -787,7 +787,6 @@ class ProbeRefinementDialog(QDialog):
             field.setModified(False)
             field.setEnabled(False)
         for button in (
-            self.controls.move_aligned_pose_button,
             self.controls.orient_to_surface_button,
             self.controls.orient_to_tag_button,
             self.back_button,

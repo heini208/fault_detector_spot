@@ -38,7 +38,7 @@ def test_custom_shared_editor_has_no_surface_controls_and_independent_paths(appl
     assert not dialog.aligned_distance_field.isVisible()
     assert not controls.orient_to_surface_button.isVisible()
     assert not dialog.back_away_surface_button.isVisible()
-    assert not controls.move_aligned_pose_button.isEnabled()
+    assert controls.move_aligned_pose_button.isEnabled()
     assert controls.use_current_alignment_button.isEnabled()
     assert dialog.pose_comparison_labels[RefinementStage.ALIGNMENT]["candidate"].text() == "Not set"
     assert dialog.candidate_speed_field.value() == 100

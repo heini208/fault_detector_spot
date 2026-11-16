@@ -120,7 +120,7 @@ class PreApproachPathDialog(QDialog):
     def _update_buttons(self, *_):
         row = self.points.currentRow()
         selected = self._enabled and row >= 0
-        self.adjust_button.setEnabled(self._enabled)
+        self.adjust_button.setEnabled(True)
         self.move_button.setEnabled(selected)
         self.save_speed_button.setEnabled(selected)
         self.delete_button.setEnabled(selected)

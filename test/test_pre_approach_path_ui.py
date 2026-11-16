@@ -199,7 +199,7 @@ def test_candidate_motion_restores_editing_after_terminal_verification(
 
     publish_command_status(CommandControllerState.RUNNING, 1)
     assert accepted[-1]
-    assert not controls.open_fine_adjustment_button.isEnabled()
+    assert controls.open_fine_adjustment_button.isEnabled()
     assert dialog.add_pathing_point_button.isEnabled()
     assert not dialog.back_away_surface_button.isEnabled()
     assert controls.use_current_alignment_button.isEnabled()
