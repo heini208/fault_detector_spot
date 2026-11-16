@@ -37,6 +37,9 @@ from fault_detector_spot.inspection.setup.reference_probe_setup import (
 )
 
 
+_RETRACTION_POSITION_TOLERANCE_M = 0.05
+
+
 _TERMINAL_STATES = {
     CommandControllerState.SUCCEEDED,
     CommandControllerState.FAILED,
@@ -204,6 +207,12 @@ class ProbeRefinementController:
                 else draft.aligned_position_tolerance_m or motion.position_tolerance_m),
                 precision_mode=(draft.aligned_precision_mode if motion.retract_path
                                 else motion.precision_mode))
+        if motion.retract_path:
+            motion = replace(
+                motion,
+                position_tolerance_m=max(motion.position_tolerance_m, _RETRACTION_POSITION_TOLERANCE_M),
+                precision_mode=False,
+            )
         attachment = self._active_attachment(draft)
         if motion.kind in {
             ProbeMotionKind.MOVE_PATHING_POINT,
@@ -307,8 +316,11 @@ class ProbeRefinementController:
                 motion.kind,
             )
             purpose = stage.value
-            # The routine safe pose only requires successful command completion.
-            verify_achieved_pose = motion.kind is not ProbeMotionKind.MOVE_SAFE_APPROACH
+            # Safe poses and retreats require successful execution, not probe accuracy.
+            verify_achieved_pose = (
+                motion.kind is not ProbeMotionKind.MOVE_SAFE_APPROACH
+                and not motion.retract_path
+            )
         command = self._configure_motion_command(
             command, draft, motion, stage, target, attachment, custom,
         )
@@ -374,10 +386,11 @@ class ProbeRefinementController:
                         for point in reverse_points
                     ),
                     pre_approach_tolerances_m=tuple(
-                        p.position_tolerance_m for p in reverse_points
+                        max(p.position_tolerance_m, _RETRACTION_POSITION_TOLERANCE_M)
+                        for p in reverse_points
                     ),
                     pre_approach_precision_modes=tuple(
-                        p.precision_mode for p in reverse_points
+                        False for p in reverse_points
                     ),
                     pre_approach_speed_scales=tuple(
                         p.arm_speed_scale for p in reverse_points
@@ -394,7 +407,8 @@ class ProbeRefinementController:
                 )
             ),
             tag_position_tolerance_m=(
-                self._selected_routine(draft).safe_approach_position_tolerance_m
+                max(self._selected_routine(draft).safe_approach_position_tolerance_m,
+                    _RETRACTION_POSITION_TOLERANCE_M if motion.retract_path else 0.0)
                 if motion.kind is ProbeMotionKind.MOVE_SAFE_APPROACH
                 else motion.position_tolerance_m
             ),
@@ -901,6 +915,7 @@ class ProbeRefinementController:
             motion.pitch_rad,
             motion.yaw_rad,
             attachment.motion_sensor_id,
+            adjustment_frame=motion.frame,
             safe_approach=(
                 motion.kind is ProbeMotionKind.ADJUST_SAFE_APPROACH
             ),

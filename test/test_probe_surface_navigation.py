@@ -142,7 +142,7 @@ def test_only_confirmed_finalization_rejection_unlocks_saving(wizard, monkeypatc
 
 
 @pytest.mark.parametrize("fully_custom", [False, True])
-def test_finalization_keeps_close_and_abort_disabled_after_refresh(wizard, fully_custom):
+def test_finalization_keeps_abort_available_after_refresh(wizard, fully_custom):
     controls, state, *_ = wizard
     controls.handle_test_surface_distance()
     controls.handle_application_state(status(controls))
@@ -158,10 +158,14 @@ def test_finalization_keeps_close_and_abort_disabled_after_refresh(wizard, fully
     for update in (controls._refresh_refinement_dialog, lambda: controls.apply_setup_state(state)):
         update()
         assert not controls.refinement_dialog.close_button.isEnabled()
-        assert not controls.refinement_dialog.abort_button.isEnabled()
-        assert not controls.abort_probe_refinement_button.isEnabled()
+        assert controls.refinement_dialog.abort_button.isEnabled()
+        assert controls.abort_probe_refinement_button.isEnabled()
     assert not controls.request_close_refinement_workflow()
-    assert not controls.handle_abort_probe_refinement()
+    controls.ask_question = Mock(return_value=True)
+    controls.handle_refinement_emergency_stop = Mock()
+    assert controls.handle_abort_probe_refinement()
+    assert controls.refinement_dialog.abort_button.isEnabled()
+    assert controls.abort_probe_refinement_button.isEnabled()
 
     state.refinement_active = False
     controls.apply_setup_state(state)
@@ -211,7 +215,12 @@ def test_surface_attempts_block_overlap_and_ignore_old_results(wizard):
     assert not controls.test_surface_distance_button.isEnabled()
     assert not controls.reference_target_distance_field.isEnabled()
     assert not controls.handle_refinement_back()
-    assert not controls.handle_abort_probe_refinement()
+    controls.ask_question = Mock(return_value=True)
+    controls.handle_refinement_emergency_stop = Mock()
+    assert controls.handle_abort_probe_refinement()
+    controls.handle_refinement_emergency_stop.assert_called_once()
+    assert controls.refinement_dialog.abort_button.isEnabled()
+    assert controls.abort_probe_refinement_button.isEnabled()
     assert not controls.request_close_refinement_workflow()
     controls.handle_application_state(first_result)
     assert controls.refinement_dialog.next_button.isEnabled()

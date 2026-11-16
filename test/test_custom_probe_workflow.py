@@ -277,3 +277,22 @@ def test_custom_capture_does_not_require_preceding_stage(tmp_path, stage):
     state = approve(state.context)
     assert state.refinement.stage_is_approved(stage)
     assert state.refinement.approved_pose(stage) == probe.motion_state_source.pose
+
+
+@pytest.mark.parametrize("kind", [
+    ProbeMotionKind.ADJUST_ALIGNED_PREAPPROACH, ProbeMotionKind.ADJUST_PATHING_POSE,
+])
+def test_tag_forward_adjustment_dispatches_toward_tag_normal(tmp_path, kind):
+    from fault_detector_spot.inspection.setup.probe_setup_motion import ProbeMotionFrame
+    from fault_detector_spot.shared.geometry.models import Vector3Data
+    probe, commands, state = begin_custom(tmp_path)
+    state, _ = move(probe, commands, state, ProbeMotionKind.MOVE_SAFE_APPROACH)
+    from fault_detector_spot.inspection.setup.probe_setup_motion import ProbeSetupMotionCommandFactory
+    probe.refinement_controller.motion_command_factory = ProbeSetupMotionCommandFactory()
+    state, command = move(
+        probe, commands, state, kind, frame=ProbeMotionFrame.TAG,
+        translation=Vector3Data(.01, 0, 0), achieved=pose(.8),
+    )
+    assert command.offset.frame_id == "filtered_fiducial_7"
+    assert command.offset.position.x == pytest.approx(0.0, abs=1e-12)
+    assert command.offset.position.z == pytest.approx(-.01)

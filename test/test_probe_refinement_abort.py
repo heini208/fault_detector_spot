@@ -74,20 +74,25 @@ def test_abort_cancels_active_setup_motion(tmp_path):
     )
 
 
-def test_abort_rejects_active_finalization(tmp_path, monkeypatch):
+def test_abort_revokes_active_finalization_and_ignores_late_failure(tmp_path):
     probe, _, state = _begin_refinement(tmp_path)
-    monkeypatch.setattr(
-        probe.finalization_controller,
-        "active_request_id",
-        lambda _context: "finalization-request",
-    )
+    request_id = "9b361339-3d85-4a2e-a5c3-88cf9a6d4872"
+    probe.finalization_controller._active[state.context.context_id] = request_id
 
-    with pytest.raises(RuntimeError, match="finalization is already in progress"):
-        probe.end_refinement(state.context)
+    aborted = probe.end_refinement(state.context)
 
-    assert probe.snapshot(state.context).refinement is not None
+    assert aborted.refinement is None
+    assert not probe.finalization_controller.active_request_id(aborted.context)
+    with pytest.raises(RuntimeError, match="does not match"):
+        probe.prepare_motion(
+            aborted.context,
+            ProbeMotionRequest(ProbeMotionKind.MOVE_SAFE_APPROACH, retract_path=True),
+            finalization_request_id=request_id,
+        )
+    late = probe.fail_finalization(aborted.context, request_id, "Cancelled")
+    assert late.refinement is None
     attachment = probe.refinement_controller.sensor_attachment_controller
-    assert attachment.active_reservations == 1
+    assert attachment.active_reservations == 0
 
 
 def test_abort_control_is_available_in_dialog_and_main_panel():

@@ -133,3 +133,54 @@ def test_fine_adjustment_accepts_two_tenths_of_a_metre(kind):
     ProbeMotionRequest(
         kind=kind, translation=Vector3Data(x=0.2, y=-0.2, z=0.2),
     ).validate()
+
+
+@pytest.mark.parametrize("direction, expected", [
+    ((1, 0, 0), (0, 0, -1)),  # Forward approaches the tag.
+    ((-1, 0, 0), (0, 0, 1)),
+    ((0, 1, 0), (0, 1, 0)),
+    ((0, -1, 0), (0, -1, 0)),
+    ((0, 0, 1), (1, 0, 0)),  # Up follows the tag's upright axis.
+    ((0, 0, -1), (-1, 0, 0)),
+])
+def test_tag_fine_adjustment_uses_tag_facing_axes(direction, expected):
+    command = ProbeSetupMotionCommandFactory().relative(
+        "filtered_fiducial_7", Vector3Data(*(v * .01 for v in direction)),
+        0.0, 0.0, "hall_probe", adjustment_frame=ProbeMotionFrame.TAG,
+    )
+    position = command.offset.position
+    assert (position.x, position.y, position.z) == pytest.approx(
+        tuple(v * .01 for v in expected), abs=1e-12,
+    )
+    assert command.offset.frame_id == "filtered_fiducial_7"
+    assert command.offset.orientation.w == pytest.approx(1.0)
+
+
+@pytest.mark.parametrize("pitch, yaw, expected_axis", [
+    (-.02, 0, (0, -1, 0)),  # Pitch up rotates forward (-Z) toward up (+X).
+    (.02, 0, (0, 1, 0)),
+    (0, .02, (1, 0, 0)),  # Yaw left rotates forward (-Z) toward left (+Y).
+    (0, -.02, (-1, 0, 0)),
+])
+def test_tag_rotation_adjustments_rotate_about_tag_facing_axes(pitch, yaw, expected_axis):
+    command = ProbeSetupMotionCommandFactory().relative(
+        "filtered_fiducial_7", Vector3Data.zero(), pitch, yaw, "hall_probe",
+        adjustment_frame=ProbeMotionFrame.TAG,
+    )
+    rotation = command.offset.orientation
+    assert (rotation.x, rotation.y, rotation.z) == pytest.approx(
+        tuple(v * math.sin(.01) for v in expected_axis), abs=1e-12,
+    )
+    assert rotation.w == pytest.approx(math.cos(.01))
+
+
+@pytest.mark.parametrize("frame", [
+    ProbeMotionFrame.SENSOR, ProbeMotionFrame.HAND, ProbeMotionFrame.BODY, ProbeMotionFrame.MAP,
+])
+def test_other_fine_adjustment_frames_preserve_forward_axis(frame):
+    command = ProbeSetupMotionCommandFactory().relative(
+        ProbeSetupMotionCommandFactory.frame_id(frame, "hall_probe", 7),
+        Vector3Data(.01, 0, 0), 0.0, 0.0, "hall_probe", adjustment_frame=frame,
+    )
+    position = command.offset.position
+    assert (position.x, position.y, position.z) == (.01, 0, 0)

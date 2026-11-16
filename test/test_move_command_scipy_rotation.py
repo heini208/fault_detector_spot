@@ -145,3 +145,41 @@ def test_tag_transform_without_tf_is_only_allowed_in_same_frame():
     move.target_frame = "odom"
     with pytest.raises(RuntimeError, match="requires TF"):
         move.transform_tag_to_target_frame(None)
+
+
+@pytest.mark.parametrize("source", ["filtered_fiducial_7", "body", "map"])
+def test_arm_relative_translation_preserves_hand_attitude(source):
+    from fault_detector_spot.manipulation.commands.manipulator_move_relative_command import (
+        ManipulatorMoveRelativeCommand,
+    )
+    offset = PoseStamped()
+    offset.header.frame_id = source
+    offset.pose.position.z = -.01
+    offset.pose.orientation.w = 1.0
+    # Tag +X is up; tag -Z is forward in the hand frame.
+    transformer = FakeTransformer(transform_with_quaternion(
+        y=-math.sqrt(.5), w=math.sqrt(.5),
+    ))
+    result = ManipulatorMoveRelativeCommand("test", Time(), offset).compute_goal_pose(transformer)
+    assert result.pose.position.x == pytest.approx(.01)
+    q = result.pose.orientation
+    assert (q.x, q.y, q.z, q.w) == pytest.approx((0, 0, 0, 1), abs=1e-12)
+
+
+def test_arm_relative_rotation_changes_axes_without_snapping_to_frame():
+    from fault_detector_spot.manipulation.commands.manipulator_move_relative_command import (
+        ManipulatorMoveRelativeCommand,
+    )
+    offset = PoseStamped()
+    offset.header.frame_id = "filtered_fiducial_7"
+    # Tag-aligned yaw-left is a small rotation about tag +X.
+    offset.pose.orientation.x = math.sin(.01)
+    offset.pose.orientation.w = math.cos(.01)
+    transformer = FakeTransformer(transform_with_quaternion(
+        y=-math.sqrt(.5), w=math.sqrt(.5),
+    ))
+    result = ManipulatorMoveRelativeCommand("test", Time(), offset).compute_goal_pose(transformer)
+    q = result.pose.orientation
+    assert (q.x, q.y, q.z, q.w) == pytest.approx(
+        (0, 0, math.sin(.01), math.cos(.01)), abs=1e-12,
+    )

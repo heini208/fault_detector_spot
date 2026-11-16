@@ -21,7 +21,15 @@ from fault_detector_spot.application.commanding.semantic_command import (
     SemanticTag,
     StampedPose,
 )
+from fault_detector_spot.inspection.geometry.alignment_orientation import (
+    tag_aligned_probe_orientation,
+)
 from fault_detector_spot.inspection.geometry.pose import compose_poses
+from fault_detector_spot.shared.geometry.rotation import (
+    inverse_quaternion,
+    multiply_quaternions,
+    rotate_vector,
+)
 from fault_detector_spot.shared.geometry.models import (
     PoseData,
     QuaternionData,
@@ -57,7 +65,7 @@ class ProbeMotionFrame(str, Enum):
 
     SENSOR = "sensor"
     HAND = "hand"
-    TAG = "tag"
+    TAG = "tag"  # Directions follow the tag-aligned probe, with forward along tag -Z.
     BODY = "body"
     MAP = "map"
 
@@ -258,6 +266,7 @@ class ProbeSetupMotionCommandFactory:
         yaw_rad: float,
         motion_sensor_id: str,
         safe_approach: bool = False,
+        adjustment_frame: ProbeMotionFrame = ProbeMotionFrame.SENSOR,
     ) -> SemanticCommand:
         if not isinstance(frame_id, str) or not frame_id.strip():
             raise ValueError("Refinement frame must not be empty")
@@ -265,6 +274,14 @@ class ProbeSetupMotionCommandFactory:
 
         translation.validate()
         rotation = self._relative_rotation(pitch_rad, yaw_rad)
+        if adjustment_frame is ProbeMotionFrame.TAG:
+            # Match Orient to Tag: forward=-Z, left=+Y, up=+X in raw tag axes.
+            # Conjugate the rotation delta; do not replace the current probe attitude.
+            basis = tag_aligned_probe_orientation()
+            translation = rotate_vector(basis, translation)
+            rotation = multiply_quaternions(
+                multiply_quaternions(basis, rotation), inverse_quaternion(basis),
+            )
 
         return SemanticCommand(
             command_id=(

@@ -6,6 +6,10 @@ from builtin_interfaces.msg import Time
 from fault_detector_spot.application.behaviour_tree.commands.move_relative_command import (
     MoveRelativeCommand,
 )
+from fault_detector_spot.shared.geometry.rotation import (
+    quaternion_from_rotation,
+    rotation_from_quaternion,
+)
 from geometry_msgs.msg import PoseStamped
 from synchros2.tf_listener_wrapper import TFListenerWrapper
 
@@ -32,8 +36,13 @@ class ManipulatorMoveRelativeCommand(MoveRelativeCommand):
         self.precision_mode = precision_mode
         self.precision_orientation_tolerance_rad = precision_orientation_tolerance_rad
 
-    def compute_goal_pose(self, transformer: TFListenerWrapper) -> PoseStamped:
-        # Parent computes result = offset rotated into target_frame.
-        # For MoveRelative, 'result.pose.orientation' is the offset's orientation in target frame.
-        result = super().compute_goal_pose(transformer)
-        return result
+    def _rotate_quaternion_into_frame(
+        self, quat_xyzw, source_frame, target_frame, transformer: TFListenerWrapper,
+    ):
+        """Change the axes of a rotation delta without adding frame orientation."""
+        delta = rotation_from_quaternion(self._quaternion_data(quat_xyzw))
+        if source_frame != target_frame:
+            basis = self._frame_rotation(source_frame, target_frame, transformer)
+            delta = basis * delta * basis.inv()
+        result = quaternion_from_rotation(delta)
+        return [result.x, result.y, result.z, result.w]

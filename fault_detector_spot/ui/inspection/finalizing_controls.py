@@ -110,6 +110,9 @@ class FinalizingInspectionControls(InspectionControls):
         self.inspection_workspace_tabs.addTab(
             self.saved_probe_controls, "Probe Point Execution",
         )
+        # Keep abort outside the workspace tabs, which are disabled by the wizard.
+        self.abort_probe_refinement_button.setParent(None)
+        self.rows[0].addWidget(self.abort_probe_refinement_button)
 
     def handle_move_to_base_position(self):
         state = self._probe_setup_state
@@ -683,20 +686,11 @@ class FinalizingInspectionControls(InspectionControls):
             )
         )
 
-    def _can_abort_probe_refinement(self):
-        """Keep movement, measurement, and finalization owned until they finish."""
-        return bool(
-            not self._sensor_tip_distance_test_active
-            and not self._surface_test_active
-            and not self._probe_finalization_point_id
-        )
-
     def _update_abort_probe_refinement_state(self):
         refinement_active = self._refinement_presentation is not None
-        can_abort = self._can_abort_probe_refinement()
         self.abort_probe_refinement_button.setVisible(refinement_active)
-        self.abort_probe_refinement_button.setEnabled(refinement_active and can_abort)
-        self.refinement_dialog.set_abort_enabled(can_abort)
+        self.abort_probe_refinement_button.setEnabled(True)
+        self.refinement_dialog.set_abort_enabled(True)
 
     def _can_retract_without_saving(self, presentation):
         """Allow retraction from recovery or the probe stage."""
@@ -728,15 +722,6 @@ class FinalizingInspectionControls(InspectionControls):
 
     def handle_abort_probe_refinement(self):
         """Abort the current unsaved probe-point setup."""
-        if not self._can_abort_probe_refinement():
-            self.refinement_recovery_status_label.setText(
-                "Wait for the movement or distance test to finish or use Software Stop "
-                "before aborting setup."
-                if self._sensor_tip_distance_test_active or self._surface_test_active
-                else "Probe-point saving is already in progress and cannot be aborted here."
-            )
-            return False
-
         if self._reference_start_pending:
             self._abort_refinement_after_start = True
             self.refinement_recovery_status_label.setText(
@@ -763,11 +748,15 @@ class FinalizingInspectionControls(InspectionControls):
         if not self.ask_question(
             "Abort Probe Point Setup",
             (
-                "Discard the current unsaved probe-point setup? "
-                "Any active setup movement will be cancelled."
+                "Abort the current probe-point setup? "
+                "Any active setup movement will be cancelled. "
+                "An already saved probe point will be kept."
             ),
         ):
             return False
+
+        if self._sensor_tip_distance_test_active or self._surface_test_active:
+            self.handle_refinement_emergency_stop()
 
         intent = ProbeSetupIntent()
         intent.operation = ProbeSetupIntent.OPERATION_END_REFINEMENT
@@ -778,8 +767,6 @@ class FinalizingInspectionControls(InspectionControls):
             )
             return False
 
-        self.abort_probe_refinement_button.setEnabled(False)
-        self.refinement_dialog.set_abort_enabled(False)
         self.refinement_recovery_status_label.setText(
             "Aborting probe-point setup."
         )

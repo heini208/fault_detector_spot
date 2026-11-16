@@ -863,10 +863,9 @@ class ProbeSetupCoordinator:
             draft = self._selected_draft(context)
             if draft.refinement is None:
                 return self.snapshot(context)
-            if self.finalization_controller.active_request_id(context):
-                raise RuntimeError(
-                    "Probe point finalization is already in progress"
-                )
+            # Revoke finalization before cancelling movement so the runner
+            # cannot save or start another retreat after abort. Persisted points remain.
+            self.finalization_controller.discard_context(context)
             self._ending_refinements.add(context.context_id)
             request_ids = self.refinement_controller.request_ids_for(context)
         for request_id in request_ids:
@@ -1031,6 +1030,10 @@ class ProbeSetupCoordinator:
         """Release the action lock while preserving mandatory recovery."""
         with self._context_lock(context):
             self.setup_coordinator.require_current(context)
+            # An aborted runner may report failure after its authority was revoked.
+            # It must not restore recovery or alter a subsequently opened refinement.
+            if self.finalization_controller.active_request_id(context) != request_id:
+                return self.snapshot(context)
             draft = self._selected_draft(context)
             self.finalization_controller.fail(
                 context,
@@ -1157,6 +1160,8 @@ class ProbeSetupCoordinator:
                 context,
                 finalization_request_id,
             )
+            if finalization_request_id:
+                self.finalization_controller.require(context, finalization_request_id)
             draft = self._selected_draft(context)
             return self.refinement_controller.prepare_motion(
                 context,

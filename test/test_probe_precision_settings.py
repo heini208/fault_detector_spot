@@ -85,11 +85,31 @@ def test_custom_setup_keeps_modes_per_stage_and_waypoint_through_save(tmp_path):
     assert point.aligned_precision_mode is True and point.final_precision_mode is False
     assert point.pre_approach_path[0].precision_mode is True
     assert point.final_probe_path[0].precision_mode is True
-    retreat = probe.prepare_motion(state.context, ProbeMotionRequest(
+    retreat_operation = probe.prepare_motion(state.context, ProbeMotionRequest(
         ProbeMotionKind.MOVE_ALIGNED_PREAPPROACH, retract_path=True),
-        finalization_request_id=request_id).request.command
-    assert retreat.precision_mode is True
-    assert retreat.pre_approach_precision_modes == (True,)
+        finalization_request_id=request_id)
+    retreat = retreat_operation.request.command
+    assert retreat.precision_mode is False
+    assert retreat.tag_position_tolerance_m == .05
+    assert retreat.pre_approach_precision_modes == (False,)
+    assert retreat.pre_approach_tolerances_m == (.05,)
+    probe.submit_motion(retreat_operation)
+    achieved = deepcopy(state.setup.aligned_preapproach_pose_object)
+    achieved.position.x += .0122
+    probe.motion_state_source.pose = achieved
+    commands.succeed(retreat_operation.request)
+    state = latest(probe, state)
+    assert not state.refinement.recovery_required
+    safe_retreat = probe.prepare_motion(
+        state.context, ProbeMotionRequest(ProbeMotionKind.MOVE_SAFE_APPROACH, retract_path=True),
+        finalization_request_id=request_id,
+    )
+    assert safe_retreat.request.command.tag_position_tolerance_m >= .05
+    probe.submit_motion(safe_retreat)
+    aborted = probe.end_refinement(state.context)
+    assert aborted.refinement is None
+    assert not probe.refinement_controller.request_ids_for(aborted.context)
+    assert probe.object_repository.load("motor").get_routine("magnetic_scan").get_probe_point("custom") == point
 
 
 @pytest.mark.parametrize("operation, custom", [

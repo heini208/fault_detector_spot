@@ -541,7 +541,9 @@ class InspectionControls(UIControlHelper):
         ):
             self.refine_frame_dropdown.addItem(label, frame)
         self.refine_frame_dropdown.setToolTip(
-            "Coordinate frame used by each finite relative adjustment"
+            "Coordinate frame used by each finite relative adjustment. "
+            "Tag uses the Orient to Tag axes: Forward toward the tag (-Z), "
+            "Up along tag +X, Left along tag +Y."
         )
         self.refinement_buttons = {"approach": {}}
         for stage in ("alignment", "probe"):
