@@ -29,7 +29,7 @@ def test_reached_safe_pose_enables_continue_without_per_point_approval(applicati
     state = safe_state()
     controls.apply_setup_state(state)
     dialog = controls.refinement_dialog
-    assert not dialog.next_button.isEnabled()
+    assert dialog.next_button.isEnabled()
     assert dialog.fine_adjustment_dialog.isHidden()
     state.motion_pending = True
     state.safe_approach_motion_state = state.MOTION_MOVING
@@ -51,13 +51,13 @@ def test_reached_safe_pose_enables_continue_without_per_point_approval(applicati
     ProbeSetupState.MOTION_MOVING,
     ProbeSetupState.MOTION_FAILED,
 ])
-def test_safe_step_does_not_advance_without_verified_completion(application, motion_state):
+def test_safe_step_navigation_does_not_require_candidate_reach(application, motion_state):
     controls = FinalizingInspectionControls(FakeUI())
     state = safe_state()
     state.safe_approach_motion_state = motion_state
     controls.apply_setup_state(state)
-    assert not controls.refinement_dialog.next_button.isEnabled()
-    assert not controls.handle_refinement_next()
+    assert controls.refinement_dialog.next_button.isEnabled()
+    assert controls.handle_refinement_next()
     controls.refinement_dialog.hide()
 
 

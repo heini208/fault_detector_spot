@@ -8,7 +8,7 @@ from fault_detector_spot.application.commanding.request_identity import (
 )
 from fault_detector_spot.inspection.model.models import ProbePoint
 from fault_detector_spot.inspection.setup.probe_refinement_session import (
-    RefinementStage, RefinementMotionState,
+    RefinementStage,
 )
 from fault_detector_spot.inspection.setup.reference_probe_setup import (
     approve_surface_alignment_pose,
@@ -57,9 +57,8 @@ class ProbeFinalizationController:
                     f"Approve the {label} before finalization"
                 )
         if save_requested and draft.setup.fully_custom:
-            if (not refinement.stage_is_approved(RefinementStage.PROBE)
-                    or refinement.motion_states[RefinementStage.PROBE] is not RefinementMotionState.REACHED):
-                raise ValueError("Reach and save the custom final candidate before finalization")
+            if not refinement.stage_is_approved(RefinementStage.PROBE):
+                raise ValueError("Save the custom final candidate before finalization")
         with self.state_lock:
             self._active[context.context_id] = normalized
 

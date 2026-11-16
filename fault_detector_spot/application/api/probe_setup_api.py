@@ -83,7 +83,7 @@ class ProbeSetupApi:
         self.state_publisher.publish(self.state_adapter.message(
             snapshot, ProbeSetupIntent.OPERATION_UNSPECIFIED,
             ProbeSetupState.STATE_READY,
-            "Arm moved outside refinement. Move to the saved candidate or save the current pose before continuing.",
+            "Arm moved outside refinement. Saved candidates are unchanged.",
         ))
 
     def _transaction_handlers(self):

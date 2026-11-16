@@ -219,7 +219,7 @@ def test_orientation_button_uses_setup_motion_and_shares_measurement_lock():
     assert button.text() == "Orient sensor tip to surface"
     assert button.isEnabled()
     assert controls.orient_to_surface_button.text() == "Orient camera to surface"
-    assert not controls.refinement_dialog.test_distance_measure_button.isEnabled()
+    assert controls.refinement_dialog.test_distance_measure_button.isEnabled()
     calls = []
     controls._submit_probe_motion = lambda intent, label: calls.append((intent, label)) or True
     button.click()

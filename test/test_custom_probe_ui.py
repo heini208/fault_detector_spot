@@ -144,7 +144,7 @@ def test_final_step_returns_to_previous_aligned_candidate(application):
 
 
 @pytest.mark.parametrize("approved, reached", [(False, True), (True, False), (True, True)])
-def test_custom_probe_next_requires_approved_and_reached_final_candidate(application, approved, reached):
+def test_custom_probe_next_requires_approval_without_reach_requirement(application, approved, reached):
     controls = FinalizingInspectionControls(FakeUI())
     state = safe_state()
     state.fully_custom = True
@@ -158,9 +158,9 @@ def test_custom_probe_next_requires_approved_and_reached_final_candidate(applica
     controls.apply_setup_state(state)
     dialog = controls.refinement_dialog
     dialog.show_stage(RefinementStage.PROBE)
-    assert dialog.next_button.isEnabled() is (approved and reached)
-    assert controls.handle_refinement_next() is (approved and reached)
-    assert dialog.is_summary_page() is (approved and reached)
+    assert dialog.next_button.isEnabled() is approved
+    assert controls.handle_refinement_next() is approved
+    assert dialog.is_summary_page() is approved
     dialog.hide()
 
 
@@ -195,7 +195,7 @@ def test_custom_alignment_reuses_full_arm_controls_and_closes_on_navigation(appl
     dialog.hide()
 
 
-def test_external_motion_update_disables_next_but_keeps_saved_candidate(application, tmp_path):
+def test_external_motion_update_keeps_next_and_saved_candidate(application, tmp_path):
     from unittest.mock import Mock
     from fault_detector_spot.application.api.probe_setup_api import ProbeSetupApi
     from fault_detector_spot.inspection.setup.probe_setup_state_adapter import ProbeSetupStateAdapter
@@ -228,8 +228,7 @@ def test_external_motion_update_disables_next_but_keeps_saved_candidate(applicat
     assert message.surface_alignment_approved
     assert message.alignment_motion_state == message.MOTION_NOT_TESTED
     controls.apply_setup_state(message)
-    assert not dialog.next_button.isEnabled()
-    assert not controls.handle_refinement_next()
+    assert dialog.next_button.isEnabled()
     assert controls.move_aligned_pose_button.isEnabled()
     assert controls.use_current_alignment_button.isEnabled()
     state = latest(probe, state)
@@ -237,4 +236,28 @@ def test_external_motion_update_disables_next_but_keeps_saved_candidate(applicat
                     achieved=state.setup.aligned_preapproach_pose_object)
     controls.apply_setup_state(api.state_adapter.message(state, 0, ProbeSetupState.STATE_READY, "Reached"))
     assert dialog.next_button.isEnabled()
+    dialog.hide()
+
+
+@pytest.mark.parametrize("custom", [False, True])
+@pytest.mark.parametrize("motion_state", [ProbeSetupState.MOTION_NOT_TESTED, ProbeSetupState.MOTION_FAILED])
+def test_fine_adjustment_and_alignment_commands_do_not_require_reached_candidate(application, custom, motion_state):
+    ui = FakeUI()
+    motions = []
+    ui.probe_setup_client.execute_motion = lambda intent: motions.append(intent) or "motion"
+    controls = FinalizingInspectionControls(ui)
+    state = safe_state()
+    state.fully_custom = custom
+    state.safe_approach_motion_state = motion_state
+    state.alignment_motion_state = motion_state
+    controls.apply_setup_state(state)
+    dialog = controls.refinement_dialog
+    dialog.show_stage(RefinementStage.ALIGNMENT)
+    dialog.fine_adjustment_dialog.open_for(False)
+    assert controls.handle_fine_adjustment("up")
+    assert motions[-1].operation == ProbeSetupMotionIntent.OPERATION_ADJUST_ALIGNED_PREAPPROACH
+    if not custom:
+        assert controls.orient_to_surface_button.isEnabled()
+        assert dialog.test_distance_measure_button.isEnabled()
+        assert dialog.orient_sensor_tip_to_surface_button.isEnabled()
     dialog.hide()

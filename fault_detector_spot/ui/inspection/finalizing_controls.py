@@ -665,11 +665,6 @@ class FinalizingInspectionControls(InspectionControls):
             and not self._distance_failure_requires_retraction
             and not self._surface_test_active
             and self._surface_result_current()
-            and (
-                self._custom_probe_mode()
-                or presentation.motion_states[RefinementStage.ALIGNMENT]
-                is RefinementMotionState.REACHED
-            )
         )
 
     def _can_continue_refinement(self, presentation):
@@ -704,7 +699,7 @@ class FinalizingInspectionControls(InspectionControls):
         self.refinement_dialog.set_abort_enabled(can_abort)
 
     def _can_retract_without_saving(self, presentation):
-        """Allow retraction from recovery or the reached probe stage."""
+        """Allow retraction from recovery or the probe stage."""
         return bool(
             not self._refinement_has_pending_work(presentation)
             and (
@@ -712,8 +707,6 @@ class FinalizingInspectionControls(InspectionControls):
                 or self._distance_failure_requires_retraction
                 or (
                     presentation.active_stage is RefinementStage.PROBE
-                    and presentation.motion_states[RefinementStage.ALIGNMENT]
-                    is RefinementMotionState.REACHED
                 )
             )
         )
@@ -891,9 +884,7 @@ class FinalizingInspectionControls(InspectionControls):
         if (state is None or not state.context_id
                 or presentation.active_stage is not RefinementStage.ALIGNMENT
                 or self._refinement_has_pending_work(presentation)
-                or presentation.recovery_required
-                or presentation.motion_states[RefinementStage.ALIGNMENT]
-                is not RefinementMotionState.REACHED):
+                or presentation.recovery_required):
             return False
         self._sensor_tip_distance_context_id = (
             state.context_id + "/measure-sensor-tip-distance/" + uuid4().hex
@@ -1011,9 +1002,7 @@ class FinalizingInspectionControls(InspectionControls):
         )
         candidate = presentation.candidate_pose(RefinementStage.ALIGNMENT)
         if (candidate is not None
-                and presentation.active_stage in (RefinementStage.ALIGNMENT, RefinementStage.PROBE)
-                and presentation.motion_states[RefinementStage.ALIGNMENT]
-                is RefinementMotionState.REACHED):
+                and presentation.active_stage in (RefinementStage.ALIGNMENT, RefinementStage.PROBE)):
             intent.tag.id = state.selected_reference_tag_id
             intent.offset.header.frame_id = f"filtered_fiducial_{intent.tag.id}"
             intent.offset.pose = pose_data_to_pose(candidate)
@@ -1106,8 +1095,7 @@ class FinalizingInspectionControls(InspectionControls):
     def _surface_result_current(self):
         if self._custom_probe_mode():
             presentation = self._refinement_presentation
-            return bool(presentation and presentation.stage_is_approved(RefinementStage.PROBE)
-                        and presentation.motion_states[RefinementStage.PROBE] is RefinementMotionState.REACHED)
+            return bool(presentation and presentation.stage_is_approved(RefinementStage.PROBE))
         presentation = self._refinement_presentation
         if (
             not self._surface_move_succeeded
@@ -1182,7 +1170,7 @@ class FinalizingInspectionControls(InspectionControls):
         elif not numeric_ready:
             status = "Enter positive tolerances and measurement duration."
         elif not self._can_open_probe_summary():
-            status = ("Reach and save the final probe candidate before saving."
+            status = ("Save the final probe candidate before saving."
                       if state.fully_custom else
                       "Run Move Close to Surface successfully before saving.")
         elif state.motion_pending:
@@ -1256,7 +1244,7 @@ class FinalizingInspectionControls(InspectionControls):
         movement_label.setText(motion_state.value)
         self._set_depth_readiness_status(
             "Depth readiness for Move Close to Wall: NOT VERIFIED. "
-            f"{distance_text} Reach the aligned candidate and approve the "
+            f"{distance_text} Approve the "
             "current pose to verify live registered hand depth."
         )
 
@@ -1312,13 +1300,9 @@ class FinalizingInspectionControls(InspectionControls):
         )
         self.refinement_dialog.test_distance_measure_button.setEnabled(
             alignment_available
-            and presentation.motion_states[RefinementStage.ALIGNMENT]
-            is RefinementMotionState.REACHED
         )
         self.refinement_dialog.orient_sensor_tip_to_surface_button.setEnabled(
             alignment_available
-            and presentation.motion_states[RefinementStage.SAFE_APPROACH]
-            is RefinementMotionState.REACHED
         )
         self.refinement_dialog.continue_to_summary_button.setEnabled(
             self._can_open_probe_summary()

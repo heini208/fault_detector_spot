@@ -61,3 +61,22 @@ def test_discard_context_releases_finalization_lock():
     finalization.discard_context(context)
 
     assert finalization.active_request_id(context) == ""
+
+
+@pytest.mark.parametrize("approved", [False, True])
+def test_custom_finalization_requires_saved_pose_but_not_candidate_reach(approved):
+    from fault_detector_spot.inspection.setup.probe_refinement_session import RefinementStage
+
+    finalization = controller()
+    context = SimpleNamespace(context_id="custom")
+    request_id = new_request_id()
+    draft = SimpleNamespace(
+        setup=SimpleNamespace(fully_custom=True),
+        refinement=SimpleNamespace(stage_is_approved=lambda stage: stage is not RefinementStage.PROBE or approved),
+    )
+    if approved:
+        finalization.begin(context, draft, request_id, True)
+        assert finalization.active_request_id(context) == request_id
+    else:
+        with pytest.raises(ValueError, match="Save the custom final candidate"):
+            finalization.begin(context, draft, request_id, True)
