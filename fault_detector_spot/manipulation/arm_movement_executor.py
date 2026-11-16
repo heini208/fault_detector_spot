@@ -480,6 +480,12 @@ class ArmMovementExecutor(MovementExecutor):
             return self._start_commanded_pose(command, absolute, speed, force_threshold_n)
 
     def _start_commanded_pose(self, command, absolute, speed, force_threshold_n):
+        cartesian_path = (
+            not absolute
+            and self.moveit_arm_planner is not None
+            and self.probe_motion_planner.relative_command_is_translation(command)
+        )
+
         def frozen_target():
             if self._retry_target is None:
                 resolved = (
@@ -508,6 +514,7 @@ class ArmMovementExecutor(MovementExecutor):
                 frozen_target,
                 speed,
                 force_threshold_n,
+                cartesian_path=cartesian_path,
             )
         if not absolute and self.probe_motion_planner.relative_command_is_noop(command):
             return ArmMovementUpdate(
@@ -519,6 +526,7 @@ class ArmMovementExecutor(MovementExecutor):
             speed=speed,
             force_threshold_n=force_threshold_n,
             ignore_environment_collisions=command.ignore_environment_collisions,
+            cartesian_path=cartesian_path,
         )
 
     def pose(
@@ -610,6 +618,7 @@ class ArmMovementExecutor(MovementExecutor):
         force_threshold_n=None,
     ) -> ArmMovementUpdate:
         """Move to a tag, then verify and correct the achieved tip position."""
+        cartesian_path = self.moveit_arm_planner is not None
         scale = float(getattr(command, "arm_speed_scale", 1.0))
         if not math.isfinite(scale) or not 0 < scale <= 1:
             raise ValueError("Arm speed scale must be in (0, 1]")
@@ -623,6 +632,7 @@ class ArmMovementExecutor(MovementExecutor):
                 lambda: self.probe_motion_planner.resolve_tag(command, self.tag_state_source),
                 speed,
                 force_threshold_n,
+                cartesian_path=cartesian_path,
             )
         with self._execution_lock:
             admission_error = self._motion_admission_error()
@@ -638,18 +648,21 @@ class ArmMovementExecutor(MovementExecutor):
                 "tolerance": tolerance, "target": None, "corrections": 0,
                 "speed": speed or self.speed_policy.default_speed,
                 "force_threshold": force_threshold_n,
+                "cartesian_path": cartesian_path,
             }
             update = self.guarded_probe(
                 lambda: self._resolve_verified_tag_target(command),
                 speed=speed,
                 force_threshold_n=force_threshold_n,
                 ignore_environment_collisions=command.ignore_environment_collisions,
+                cartesian_path=cartesian_path,
             )
             if update.outcome is not ArmMovementOutcome.RUNNING:
                 self._tag_accuracy = None
             return update
 
-    def _start_precision_movement(self, command, resolve_target, speed, force_threshold_n):
+    def _start_precision_movement(self, command, resolve_target, speed, force_threshold_n,
+                                  *, cartesian_path=False):
         """Use the existing post-motion verifier for an opt-in frozen odom goal."""
         with self._execution_lock:
             admission_error = self._motion_admission_error()
@@ -675,6 +688,7 @@ class ArmMovementExecutor(MovementExecutor):
                 ),
                 "speed": speed or self.speed_policy.default_speed,
                 "force_threshold": force_threshold_n,
+                "cartesian_path": cartesian_path,
             }
 
             def frozen_target():
@@ -695,6 +709,7 @@ class ArmMovementExecutor(MovementExecutor):
             update = self.guarded_probe(
                 frozen_target, speed=speed, force_threshold_n=force_threshold_n,
                 ignore_environment_collisions=command.ignore_environment_collisions,
+                cartesian_path=cartesian_path,
                 **planning_options,
             )
             if update.outcome is not ArmMovementOutcome.RUNNING:
@@ -782,7 +797,7 @@ class ArmMovementExecutor(MovementExecutor):
         baseline = state["speed"]
         speed = ArmMotionSpeed(baseline.linear_speed_mps * .5, baseline.angular_speed_rad_s * .5)
         self._guarded_force_threshold_n = state["force_threshold"]
-        self._guarded_cartesian_path = False
+        self._guarded_cartesian_path = state.get("cartesian_path", False)
         self._guarded_plan_builder = lambda: self.probe_motion_planner.build_plan(
             lambda: state["target"], speed
         )
@@ -910,7 +925,7 @@ class ArmMovementExecutor(MovementExecutor):
         speed = ArmMotionSpeed(baseline.linear_speed_mps * PRECISION_CORRECTION_SPEED_SCALE,
                                baseline.angular_speed_rad_s * PRECISION_CORRECTION_SPEED_SCALE)
         self._guarded_force_threshold_n = state["force_threshold"]
-        self._guarded_cartesian_path = False
+        self._guarded_cartesian_path = state["cartesian_path"]
         self._guarded_plan_builder = lambda: self.probe_motion_planner.build_plan(
             lambda: state["target"], speed,
         )

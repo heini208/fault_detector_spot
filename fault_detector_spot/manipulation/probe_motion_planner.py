@@ -550,6 +550,17 @@ class ProbeMotionPlanner:
         return speed
 
     @classmethod
+    def relative_command_is_translation(cls, command) -> bool:
+        offset = getattr(command, "offset", None)
+        if not isinstance(offset, PoseStamped) or cls.pose_offset_is_noop(offset):
+            return False
+        rotation_only = deepcopy(offset)
+        rotation_only.pose.position.x = 0.0
+        rotation_only.pose.position.y = 0.0
+        rotation_only.pose.position.z = 0.0
+        return cls.pose_offset_is_noop(rotation_only)
+
+    @classmethod
     def relative_command_is_noop(cls, command) -> bool:
         return cls.pose_offset_is_noop(getattr(command, "offset", None))
 
