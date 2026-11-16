@@ -511,3 +511,83 @@ def test_repeated_cancel_is_idempotent_before_ack_during_stop_and_after_timeout(
     assert controller.cancel_all() == stop_id
     assert len(dispatched) == 2
     assert controller.software_stop_status.latched
+
+
+def test_reconciliation_timeout_fails_queue_and_waits_for_real_stop_before_release():
+    from dataclasses import replace
+
+    now, dispatched, states = [0.0], [], []
+    controller = CommandController(
+        dispatch_request=dispatched.append, monotonic_clock=lambda: now[0],
+        reconciliation_timeout_sec=10.0,
+    )
+    controller.add_status_listener(states.append)
+    active = make_request(CommandID.READY_ARM)
+    queued = make_request(CommandID.MOVE_SAFE_APPROACH)
+    controller.submit(active)
+    controller.submit(queued)
+    now[0] = 3.0
+    controller.poll()
+    now[0] = 12.9
+    controller.poll()
+    assert dispatched == [active]
+    now[0] = 13.0
+    controller.poll()
+    stop = dispatched[-1]
+    assert stop.command.command_id is CommandID.EMERGENCY_CANCEL
+    assert stop.stop_request_ids == (active.request_id,)
+    queued_status = next(s for s in reversed(states) if s.request_id == queued.request_id)
+    assert queued_status.state is CommandControllerState.FAILED
+    assert "timed out before dispatch" in queued_status.detail
+    assert controller.queued_request_ids == ()
+    assert controller.active_request_id == active.request_id
+    now[0] = 100.0
+    controller.poll()
+    assert len(dispatched) == 2
+    assert controller.active_request_id == active.request_id
+    # A late success or a stop lacking idle proof cannot free the lane.
+    controller.handle_execution_status(execution_status(active.request_id, CommandControllerState.SUCCEEDED))
+    controller.handle_execution_status(replace(execution_status(
+        active.request_id, CommandControllerState.STOP_CONFIRMED, sequence=2), execution_idle=False))
+    assert controller.active_request_id == active.request_id
+    controller.handle_execution_status(execution_status(
+        active.request_id, CommandControllerState.STOP_CONFIRMED, sequence=3))
+    result = next(s for s in reversed(states) if s.request_id == active.request_id)
+    assert result.state is CommandControllerState.FAILED
+    assert result.execution_idle and "timed out" in result.detail
+    controller.handle_execution_status(execution_status(stop.request_id, CommandControllerState.STOP_CONFIRMED))
+    assert controller.active_request_id == ""
+    assert controller.software_stop_status.stop_confirmed
+    assert controller.software_stop_status.latched
+    assert not controller.handle_execution_status(execution_status(
+        active.request_id, CommandControllerState.SUCCEEDED, sequence=4))
+
+
+def test_reconciliation_deadline_survives_unknown_updates_but_resets_on_live_execution():
+    now, dispatched = [0.0], []
+    controller = CommandController(
+        dispatch_request=dispatched.append, monotonic_clock=lambda: now[0],
+        reconciliation_timeout_sec=10.0,
+    )
+    active = make_request(CommandID.READY_ARM)
+    controller.submit(active)
+    now[0] = 3.0
+    controller.poll()
+    now[0] = 8.0
+    controller.handle_execution_status(execution_status(active.request_id, CommandControllerState.UNKNOWN))
+    now[0] = 12.0
+    controller.handle_execution_status(execution_status(
+        active.request_id, CommandControllerState.RUNNING, sequence=2))
+    now[0] = 13.0
+    controller.poll()
+    assert dispatched == [active]
+    now[0] = 17.0
+    controller.poll()
+    now[0] = 26.0
+    controller.handle_execution_status(execution_status(
+        active.request_id, CommandControllerState.UNKNOWN, sequence=3))
+    controller.poll()
+    assert dispatched == [active]
+    now[0] = 27.0
+    controller.poll()
+    assert dispatched[-1].command.command_id is CommandID.EMERGENCY_CANCEL

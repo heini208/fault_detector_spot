@@ -161,6 +161,7 @@ class ApplicationApiNode(Node):
             ack_timeout_sec=lifecycle.ack_timeout_sec,
             heartbeat_timeout_sec=lifecycle.heartbeat_timeout_sec,
             reconciliation_interval_sec=lifecycle.reconciliation_interval_sec,
+            reconciliation_timeout_sec=lifecycle.reconciliation_timeout_sec,
             session_work_changed=self._shutdown_store.set_session_work,
             listener_error_handler=(
                 lambda exception: self.get_logger().error(

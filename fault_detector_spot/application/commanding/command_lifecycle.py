@@ -11,6 +11,7 @@ class CommandLifecycleConfig:
     heartbeat_timeout_sec: float = 5.0
     reconciliation_interval_sec: float = 1.0
     query_timeout_sec: float = 2.0
+    reconciliation_timeout_sec: float = 10.0
     poll_period_sec: float = 0.1
 
     def __post_init__(self):

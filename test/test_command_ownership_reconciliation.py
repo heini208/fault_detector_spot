@@ -204,3 +204,39 @@ def test_base_tag_timeout_finishes_failed_only_with_physical_stop_proof(fresh_st
     state = next(state for state in reversed(p.states) if state.request_id == request.request_id)
     assert state.state is (CommandControllerState.FAILED if fresh_stop else CommandControllerState.UNKNOWN)
     assert p.controller.active_request_id == ("" if fresh_stop else request.request_id)
+
+
+def test_unresolved_timeout_stops_and_fails_through_ros_and_owner_ledger():
+    p = pipeline()
+    original = make_request(CommandID.READY_ARM)
+    queued = make_request(CommandID.MOVE_SAFE_APPROACH)
+    p.controller.submit(original)
+    p.controller.submit(queued)
+    # Neither receipt nor query reply arrives before the reconciliation deadline.
+    p.now[0] = 3.0
+    p.controller.poll()
+    p.now[0] = 13.0
+    p.controller.poll()
+    stop = p.wire[-1]
+    assert stop.payload.command_id == CommandID.EMERGENCY_CANCEL.value
+    assert next(s for s in reversed(p.states) if s.request_id == queued.request_id).state is CommandControllerState.FAILED
+    # The stop fences even a delayed original command before confirming idle.
+    p.subscriber.append_request_to_buffer(stop)
+    p.subscriber.append_request_to_buffer(p.wire[0])
+    for receipt in p.subscriber.request_status_publisher.messages:
+        p.transport.handle_command_status(receipt)
+    assert p.controller.active_request_id == original.request_id
+    command = p.subscriber.blackboard.command_buffer.pop()
+    command.stop_confirmed = True
+    p.subscriber.blackboard.last_command = command
+    p.subscriber.blackboard.command_tree_status = Status.SUCCESS
+    p.proof[0] = True
+    p.publisher.update()
+    for status in p.publisher.structured_status_pub.messages:
+        p.transport.handle_command_status(status)
+    p.controller.poll()
+    assert p.controller.active_request_id == ""
+    result = next(s for s in reversed(p.states) if s.request_id == original.request_id)
+    assert result.state is CommandControllerState.FAILED and result.execution_idle
+    assert p.controller.software_stop_status.stop_confirmed
+    assert len(p.wire) == 2

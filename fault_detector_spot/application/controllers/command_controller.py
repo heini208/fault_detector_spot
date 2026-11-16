@@ -127,6 +127,7 @@ class CommandController:
         heartbeat_timeout_sec: float = 5.0,
         reconciliation_interval_sec: float = 1.0,
         session_work_changed=None,
+        reconciliation_timeout_sec: float = 10.0,
     ):
         if dispatch_request is not None and not callable(dispatch_request):
             raise TypeError("Dispatch callback must be callable")
@@ -139,6 +140,7 @@ class CommandController:
         limits = CommandLifecycleConfig(
             ack_timeout_sec=ack_timeout_sec, heartbeat_timeout_sec=heartbeat_timeout_sec,
             reconciliation_interval_sec=reconciliation_interval_sec,
+            reconciliation_timeout_sec=reconciliation_timeout_sec,
         )
         if (
             listener_error_handler is not None
@@ -162,6 +164,8 @@ class CommandController:
         self._active_state = None
         self._reconcile_request = None
         self._last_reconciled = {}
+        self._unresolved_since = {}
+        self._timeout_failure_request_id = None
         self._request_execution_instances = {}
         self._retired_execution_instances = set()
         self._last_execution_receipt = {}
@@ -764,6 +768,13 @@ class CommandController:
                             status = replace(status, state=CommandControllerState.FAILED,
                                 detail="Software stop remains latched: reset proof is incomplete")
                         self._reset_request_id = None
+                if request.request_id == self._timeout_failure_request_id:
+                    status = replace(
+                        status, state=CommandControllerState.FAILED,
+                        detail="Execution ownership reconciliation timed out; stopping confirmed",
+                        retry_safe=False, continuation_safe=False, retry_command=None,
+                    )
+                    self._timeout_failure_request_id = None
                 self._active = None
                 self._active_state = None
                 self._active_acknowledged = False
@@ -806,6 +817,7 @@ class CommandController:
             self._reconcile_emergencies_locked()
             self._check_acknowledgement_locked()
             self._check_liveness_locked()
+            self._check_reconciliation_timeout_locked()
             self._poll_stops_locked()
             self._query_owners_locked()
             self._refresh_stop_confirmation_locked()
@@ -832,6 +844,7 @@ class CommandController:
             self._refresh_session_work_locked()
             if self._software_stop.latched and request_id == self._current_cancel_request_id:
                 return
+        self._unresolved_since.pop(request_id, None)
         self._last_reconciled.pop(request_id, None)
         self._last_execution_receipt.pop(request_id, None)
         self._last_execution_sequence.pop(request_id, None)
@@ -905,6 +918,19 @@ class CommandController:
                 stop["state"] = CommandControllerState.STOP_UNCONFIRMED
                 self._emit_locked(stop["request"], stop["state"],
                                   "Stop owner liveness expired; stopping remains unconfirmed")
+
+    def _check_reconciliation_timeout_locked(self):
+        """Bound unknown ownership with a real stop, never a synthetic idle result."""
+        if (self._active is None or self._active_state is not CommandControllerState.UNKNOWN
+                or self._software_stop.latched):
+            return
+        started = self._unresolved_since.get(self._active.request_id)
+        if (started is None or self._monotonic_clock() - started
+                < self.lifecycle_limits.reconciliation_timeout_sec):
+            return
+        self._timeout_failure_request_id = self._active.request_id
+        self.cancel_all()
+        self._reconcile_emergencies_locked()
 
     def _query_owners_locked(self):
         if self._reconcile_request is None:
@@ -1071,8 +1097,14 @@ class CommandController:
                 feedback = self._emergency_feedback.pop(request.request_id)
             self._emit_accepted_locked(request)
             for pending in queued:
-                self._emit_locked(pending, CommandControllerState.CANCELLED,
-                                  "Cancelled before dispatch by emergency stop", execution_idle=True)
+                timed_out = self._timeout_failure_request_id is not None
+                self._emit_locked(
+                    pending,
+                    CommandControllerState.FAILED if timed_out else CommandControllerState.CANCELLED,
+                    "Execution ownership reconciliation timed out before dispatch; automatic stop requested"
+                    if timed_out else "Cancelled before dispatch by emergency stop",
+                    execution_idle=True,
+                )
             if self._active is not None:
                 self._active_state = CommandControllerState.STOP_REQUESTED
                 self._emit_locked(self._active, CommandControllerState.STOP_REQUESTED,
@@ -1164,6 +1196,10 @@ class CommandController:
         retry_command: SemanticCommand | None = None,
         execution_idle: bool = False,
     ) -> None:
+        if state is CommandControllerState.UNKNOWN:
+            self._unresolved_since.setdefault(request.request_id, self._monotonic_clock())
+        else:
+            self._unresolved_since.pop(request.request_id, None)
         if state is CommandControllerState.QUEUED:
             self._last_queue_status[request.request_id] = self._monotonic_clock()
         else:
