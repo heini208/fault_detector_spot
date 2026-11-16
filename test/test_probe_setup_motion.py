@@ -117,8 +117,19 @@ def test_motion_request_rejects_oversized_manual_adjustment():
     request = ProbeMotionRequest(
         kind=ProbeMotionKind.ADJUST_SAFE_APPROACH,
         frame=ProbeMotionFrame.SENSOR,
-        translation=Vector3Data(x=0.051, y=0.0, z=0.0),
+        translation=Vector3Data(x=0.201, y=0.0, z=0.0),
     )
 
-    with pytest.raises(ValueError, match="exceeds 0.05 m"):
+    with pytest.raises(ValueError, match="exceeds 0.2 m"):
         request.validate()
+
+
+@pytest.mark.parametrize("kind", [
+    ProbeMotionKind.ADJUST_SAFE_APPROACH,
+    ProbeMotionKind.ADJUST_ALIGNED_PREAPPROACH,
+    ProbeMotionKind.ADJUST_PATHING_POSE,
+])
+def test_fine_adjustment_accepts_two_tenths_of_a_metre(kind):
+    ProbeMotionRequest(
+        kind=kind, translation=Vector3Data(x=0.2, y=-0.2, z=0.2),
+    ).validate()

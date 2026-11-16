@@ -308,7 +308,10 @@ class ProbeSetupApi:
         return self.coordinator.approve_safe_pose(context)
 
     def _approve_aligned_pose(self, context, intent):
-        return self.coordinator.approve_aligned_pose(context, intent.position_tolerance_m, intent.arm_speed_scale, intent.precision_mode)
+        return self.coordinator.approve_aligned_pose(
+            context, intent.position_tolerance_m, intent.arm_speed_scale,
+            intent.precision_mode, intent.allow_unmeasured_alignment,
+        )
 
     def _approve_custom_probe(self, context, intent):
         if not self.coordinator.snapshot(context).setup.fully_custom:

@@ -261,7 +261,8 @@ def test_live_alignment_clearance_gate_delegates_to_state_source():
     assert source.live_calls == 1
 
 
-def test_explicit_alignment_approval_promotes_failed_pose_to_reached():
+@pytest.mark.parametrize("allow_unmeasured,missing_distance", [(False, False), (True, True), (False, True)])
+def test_explicit_alignment_approval_promotes_failed_pose_to_reached(allow_unmeasured, missing_distance):
     calculated = make_setup(aligned_distance=0.12)
     safe_approved = approve_safe_approach_pose(
         calculated,
@@ -294,14 +295,27 @@ def test_explicit_alignment_approval_promotes_failed_pose_to_reached():
     controller._ensure_minimum_camera_clearance_geometry = (
         lambda _draft, _attachment=None: None
     )
-    controller._require_live_alignment_camera_clearance = (
-        lambda: 0.270
-    )
+    from unittest.mock import Mock
+    clearance = Mock(return_value=0.270)
+    if missing_distance:
+        clearance.side_effect = RuntimeError("Distance unavailable")
+    controller._require_live_alignment_camera_clearance = clearance
     controller.current_probe_pose = (
         lambda _draft, _attachment=None: pose(x=0.12)
     )
 
-    controller.approve(draft, RefinementStage.ALIGNMENT)
+    if missing_distance and not allow_unmeasured:
+        with pytest.raises(RuntimeError, match="Distance unavailable"):
+            controller.approve(draft, RefinementStage.ALIGNMENT)
+        assert not draft.setup.surface_alignment_approved
+        assert reservation.release() is True
+        return
+
+    controller.approve(
+        draft, RefinementStage.ALIGNMENT,
+        allow_unmeasured_alignment=allow_unmeasured,
+    )
+    assert clearance.call_count == (0 if allow_unmeasured else 1)
 
     assert draft.refinement.motion_states[RefinementStage.ALIGNMENT] is (
         RefinementMotionState.REACHED

@@ -431,6 +431,7 @@ class ProbeRefinementDialog(QDialog):
         self.full_control_button.hide()
         content_layout.addWidget(self.full_control_button)
         content_layout.addWidget(distance_widget)
+        content_layout.addWidget(self.controls.allow_unmeasured_alignment_checkbox)
 
         self.distance_measure_group = QGroupBox("Sensor tip distance")
         measure_layout = QVBoxLayout(self.distance_measure_group)
@@ -1008,6 +1009,7 @@ class ProbeRefinementDialog(QDialog):
         self.full_control_button.setVisible(self.fully_custom and stage is RefinementStage.ALIGNMENT)
         index = self.STAGES.index(stage)
         self.workflow_stack.setCurrentIndex(self.ALIGNMENT_PAGE if self.fully_custom and stage is RefinementStage.PROBE else index + 1)
+        self.controls.allow_unmeasured_alignment_checkbox.setVisible(not self.fully_custom)
         self.aligned_distance_field.setVisible(not self.fully_custom)
         self.aligned_distance_label.setVisible(not self.fully_custom)
         self.clearance_group.setVisible(not self.fully_custom)
@@ -1027,7 +1029,7 @@ class ProbeRefinementDialog(QDialog):
                 state.final_precision_mode if final else state.aligned_precision_mode
             )
         self.controls.refine_translation_step_field.setValidator(self.controls._bounded_number_validator(
-            self.controls.refine_translation_step_field, .001, .2 if self.fully_custom else .05, 3))
+            self.controls.refine_translation_step_field, .001, self.controls._translation_limit(), 3))
         self.path_dialog.speed_field.setValue(20 if final else 100)
         self.path_dialog.hide()
         self.path_heading.setText("Final Probe Point" if final else "Pre-approach Path")

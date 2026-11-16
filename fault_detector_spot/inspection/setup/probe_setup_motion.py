@@ -99,7 +99,7 @@ class ProbeMotionRequest:
         ):
             if not math.isfinite(float(value)):
                 raise ValueError(f"{label} must be finite")
-        limit = .05 if self.kind is ProbeMotionKind.ADJUST_SAFE_APPROACH else MAX_REFINEMENT_TRANSLATION_M
+        limit = MAX_REFINEMENT_TRANSLATION_M
         if any(
             abs(value) > limit
             for value in (

@@ -979,6 +979,14 @@ class FinalizingInspectionControls(InspectionControls):
                 "Probe setup context is unavailable"
             )
             return False
+        try:
+            surface_tolerance = self._distance_value(
+                self.surface_distance_tolerance_field, "Surface tolerance",
+                allow_zero=presentation.target_surface_distance_m == 0.0,
+            )
+        except ValueError as error:
+            self.surface_distance_test_status_label.setText(str(error))
+            return False
         self._surface_test_active = True
         self._surface_move_succeeded = False
         self._surface_move_setup_context_id = state.context_id
@@ -994,6 +1002,7 @@ class FinalizingInspectionControls(InspectionControls):
 
         intent = OperationalIntent()
         intent.intent = OperationalIntent.INTENT_MOVE_CLOSE_TO_SURFACE
+        intent.surface_tolerance_m = surface_tolerance
         intent.target_surface_distance_m = float(
             presentation.target_surface_distance_m
         )

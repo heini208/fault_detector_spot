@@ -381,3 +381,22 @@ def test_pause_and_resume_preserve_successful_surface_move(wizard):
     assert dialog.next_button.isEnabled()
     assert controls.handle_refinement_next()
     assert dialog.is_summary_page()
+
+
+@pytest.mark.parametrize("target,tolerance,accepted", [
+    (0.0, "0", True), (0.1, "0.001", True),
+    (0.1, "0", False), (0.0, "-0.001", False),
+])
+def test_surface_tolerance_is_forwarded_and_zero_requires_contact(
+    wizard, target, tolerance, accepted,
+):
+    controls, state, operations, _ = wizard
+    state.target_surface_distance_m = target
+    controls.apply_setup_state(state)
+    controls.surface_distance_tolerance_field.setText(tolerance)
+    assert not controls.surface_distance_tolerance_field.isReadOnly()
+    assert controls.handle_test_surface_distance() is accepted
+    if accepted:
+        assert operations[-1][0].surface_tolerance_m == float(tolerance)
+    else:
+        assert not operations

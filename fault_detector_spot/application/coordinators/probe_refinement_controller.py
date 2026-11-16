@@ -144,7 +144,11 @@ class ProbeRefinementController:
             draft.refinement = None
         self._release_attachment(draft)
 
-    def approve(self, draft, stage: RefinementStage) -> None:
+    def approve(
+        self, draft, stage: RefinementStage, *, allow_unmeasured_alignment=False,
+    ) -> None:
+        if type(allow_unmeasured_alignment) is not bool:
+            raise ValueError("Unmeasured alignment option must be a boolean")
         if stage is RefinementStage.SAFE_APPROACH:
             raise ValueError("Set the shared safe pose in routine setup")
         self.setup_coordinator.require_configuration_idle(
@@ -174,7 +178,8 @@ class ProbeRefinementController:
                 raise RuntimeError(
                     "Reach or attempt the alignment pose before approval"
                 )
-            self._require_live_alignment_camera_clearance()
+            if not allow_unmeasured_alignment:
+                self._require_live_alignment_camera_clearance()
         elif (
             stage != RefinementStage.SAFE_APPROACH
             and refinement.motion_states[stage]
@@ -218,8 +223,6 @@ class ProbeRefinementController:
         custom = bool(draft.setup and draft.setup.fully_custom)
         if motion.path_stage == "probe" and not custom:
             raise ValueError("Final pose paths require custom mode")
-        if not custom and any(abs(v) > .05 for v in (motion.translation.x, motion.translation.y, motion.translation.z)):
-            raise ValueError("Surface refinement translation exceeds 0.05 m")
         if custom and motion.kind in _ORIENTATION_MOTION_KINDS:
             raise ValueError("Surface orientation is unavailable in custom mode")
         if motion.kind is ProbeMotionKind.ADJUST_SAFE_APPROACH:

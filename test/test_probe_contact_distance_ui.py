@@ -115,3 +115,17 @@ def test_positive_tolerances_do_not_inherit_contact_target_rules(controls, text)
     assert not field.hasAcceptableInput()
     with pytest.raises(ValueError, match="positive and finite"):
         controls._distance_value(field, "Position tolerance")
+
+
+def test_unmeasured_alignment_is_explicit_in_capture_intent(controls):
+    assert not controls.allow_unmeasured_alignment_checkbox.isChecked()
+    controls.allow_unmeasured_alignment_checkbox.setChecked(True)
+    assert controls.handle_use_current_alignment()
+    assert controls.ui.requests[-1].allow_unmeasured_alignment
+
+
+def test_surface_fine_adjustment_validator_accepts_point_two(controls):
+    controls.refine_translation_step_field.setText("0.2")
+    assert controls.refine_translation_step_field.hasAcceptableInput()
+    controls.refine_translation_step_field.setText("0.201")
+    assert not controls.refine_translation_step_field.hasAcceptableInput()

@@ -782,6 +782,7 @@ class ProbeSetupCoordinator:
         position_tolerance_m=None,
         arm_speed_scale=1.0,
         precision_mode=False,
+        allow_unmeasured_alignment=False,
     ) -> ProbeSetupSnapshot:
         """Approve one achieved surface-aligned pre-approach pose."""
         if type(precision_mode) is not bool:
@@ -794,6 +795,7 @@ class ProbeSetupCoordinator:
         self.refinement_controller.approve(
             draft,
             RefinementStage.ALIGNMENT,
+            allow_unmeasured_alignment=allow_unmeasured_alignment,
         )
         draft.aligned_position_tolerance_m = position_tolerance_m
         draft.pre_approach_speed_scale = arm_speed_scale

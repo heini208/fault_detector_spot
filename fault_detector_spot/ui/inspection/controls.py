@@ -70,7 +70,7 @@ from ..ros.probe_setup_state_adapter import probe_setup_state_to_view
 from ..shared.control_helper import UIControlHelper
 
 
-MAX_REFINEMENT_TRANSLATION_M = 0.05
+MAX_REFINEMENT_TRANSLATION_M = 0.2
 MAX_REFINEMENT_ROTATION_DEG = 15.0
 SURFACE_DISTANCE_TOLERANCE_M = 0.005
 REFINEMENT_FRAME_SENSOR = "sensor"
@@ -482,6 +482,13 @@ class InspectionControls(UIControlHelper):
         self.use_current_alignment_button = QPushButton(
             "Save Final Aligned Pre-approach Pose"
         )
+        self.allow_unmeasured_alignment_checkbox = QCheckBox(
+            "Save aligned pose without distance measurement"
+        )
+        self.allow_unmeasured_alignment_checkbox.setToolTip(
+            "Capture the current pose when depth cannot be measured, including "
+            "contact setups. Movement safety checks still apply."
+        )
         self.orient_to_surface_button = QPushButton("Orient camera to surface")
         self.orient_to_surface_button.setToolTip(
             "Orient the active probe using the lower-middle surface patch "
@@ -590,15 +597,15 @@ class InspectionControls(UIControlHelper):
             f"{SURFACE_DISTANCE_TOLERANCE_M:.3f}"
         )
         self.surface_distance_tolerance_field.setFixedWidth(90)
-        self.surface_distance_tolerance_field.setReadOnly(True)
+        self.surface_distance_tolerance_field.setReadOnly(False)
         self.surface_distance_tolerance_field.setToolTip(
-            "Close-surface command success tolerance"
+            "Close-surface command success tolerance; zero is allowed for contact (distance 0)."
         )
         self.surface_distance_tolerance_field.setValidator(
             self._bounded_number_validator(
                 self.surface_distance_tolerance_field,
-                0.001,
-                0.05,
+                0.0,
+                0.100,
                 3,
             )
         )
@@ -1986,7 +1993,7 @@ class InspectionControls(UIControlHelper):
         return "probe" if self._custom_probe_mode() and presentation and presentation.active_stage is RefinementStage.PROBE else "alignment"
 
     def _translation_limit(self):
-        return .2 if self._custom_probe_mode() else MAX_REFINEMENT_TRANSLATION_M
+        return MAX_REFINEMENT_TRANSLATION_M
 
     def _refresh_custom_refinement(self):
         presentation = self._refinement_presentation
@@ -2824,6 +2831,10 @@ class InspectionControls(UIControlHelper):
 
     def handle_use_current_alignment(self):
         intent = ProbeSetupIntent()
+        intent.allow_unmeasured_alignment = (
+            not self._custom_probe_mode()
+            and self.allow_unmeasured_alignment_checkbox.isChecked()
+        )
         intent.operation = (
             ProbeSetupIntent.OPERATION_APPROVE_CUSTOM_PROBE if self._path_stage() == "probe"
             else ProbeSetupIntent.OPERATION_APPROVE_ALIGNED_POSE
