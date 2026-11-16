@@ -58,8 +58,6 @@ def rig(monkeypatch, *, stowed=False, ignore_environment_collisions=False):
     def plan_start(target, **kwargs):
         events.append("plan")
         starts.append(deepcopy(target))
-        kwargs.pop("path_orientation", None)
-        kwargs.pop("path_orientation_tolerance_rad", None)
         assert kwargs == {"ignore_environment_collisions": ignore_environment_collisions}
         return MoveItPlanUpdate(MoveItPlanOutcome.RUNNING, "Planning")
 

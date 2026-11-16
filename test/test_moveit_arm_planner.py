@@ -229,29 +229,3 @@ def test_failed_plan_reports_diagnostic_and_releases_future(code, name, explanat
         assert explanation in update.detail
     else:
         assert update.detail.endswith(f"({name}, error code {code})")
-
-
-def test_orientation_path_constraint_is_separate_from_goal_orientation():
-    from geometry_msgs.msg import Quaternion
-    from moveit_msgs.msg import OrientationConstraint
-
-    node = SimpleNamespace(
-        get_logger=lambda: SimpleNamespace(info=lambda *_args: None),
-        create_client=lambda *_args: object(),
-    )
-    planner = MoveItArmPlanner(node)
-    target = PoseStamped()
-    target.header.frame_id = "body"
-    target.pose.orientation.z = 0.5
-    target.pose.orientation.w = 3 ** 0.5 / 2
-    current = Quaternion(w=1.0)
-    motion = planner._build_request(target, current, 1.2).motion_plan_request
-    constraint, = motion.path_constraints.orientation_constraints
-    assert constraint.orientation == current
-    assert constraint.header.frame_id == "body"
-    assert constraint.link_name == "hand"
-    assert constraint.parameterization == OrientationConstraint.ROTATION_VECTOR
-    assert [constraint.absolute_x_axis_tolerance, constraint.absolute_y_axis_tolerance,
-            constraint.absolute_z_axis_tolerance] == pytest.approx([1.2] * 3)
-    assert motion.goal_constraints[0].orientation_constraints[0].orientation == target.pose.orientation
-    assert not planner._build_request(target).motion_plan_request.path_constraints.orientation_constraints

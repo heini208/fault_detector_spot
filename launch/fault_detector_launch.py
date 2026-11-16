@@ -153,9 +153,6 @@ def generate_launch_description():
         GroupAction([
             *_moveit_sensor_parameters(moveit_sensors_config, moveit_pkg),
             SetParameter("use_sim_time", use_sim_time),
-            # Orientation path constraints otherwise select IK pose-space
-            # sampling, which can flip joint solutions between waypoints.
-            SetParameter("ompl.arm.enforce_joint_model_state_space", True),
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(
                     os.path.join(
