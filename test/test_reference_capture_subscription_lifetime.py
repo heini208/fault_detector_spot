@@ -224,3 +224,39 @@ def test_capture_can_be_cancelled_between_empty_windows(coordinator, monkeypatch
         )
     assert not coordinator._active_request_id
     assert all(not value.collection_active for value in coordinator._synchronizers.values())
+
+
+@pytest.mark.parametrize('deliver', [True, False])
+def test_collection_waits_for_delayed_fresh_pair_or_timeout(coordinator, monkeypatch, deliver):
+    from test_reference_view_collection_window import make_synchronizer, make_image
+    from fault_detector_spot.inspection.setup import reference_view_input_synchronizer
+
+    clock = [0.0]
+    monkeypatch.setattr(capture_module.time, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(reference_view_input_synchronizer.time, 'monotonic_ns',
+                        lambda: int(clock[0] * 1_000_000_000))
+    coordinator.node.get_clock = lambda: SimpleNamespace(
+        now=lambda: SimpleNamespace(nanoseconds=11_000_000_000),
+    )
+    synchronizer = make_synchronizer()
+    synchronizers = {'hand': synchronizer}
+    selected = ((0, 'hand'),)
+    coordinator._begin_collections(synchronizers, selected)
+
+    def wait(_):
+        clock[0] += 0.25
+        if deliver and clock[0] == 2.0:
+            synchronizer._rgb_callback(make_image(100_000_000))
+            synchronizer._depth_callback(make_image(105_000_000))
+
+    coordinator._shutdown = SimpleNamespace(is_set=lambda: False, wait=wait)
+    collect = capture_module.ProbeReferenceCaptureCoordinator._wait_for_collections
+    if deliver:
+        collect(coordinator, synchronizers, selected, lambda: False)
+        assert clock[0] == 2.0
+        assert synchronizer.best_snapshot(0) is not None
+    else:
+        with pytest.raises(capture_module.ReferenceViewCaptureNotReady,
+                           match='Timed out.*hand:.*rgb_frames=0'):
+            collect(coordinator, synchronizers, selected, lambda: False)
+        assert clock[0] == coordinator.capture_timeout_sec

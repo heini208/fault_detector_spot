@@ -155,10 +155,9 @@ class ProbeReferenceCaptureCoordinator:
                         tag_id,
                         cancel_requested,
                     )
-                    capture_receipt_start = time.monotonic()
-                    capture_receipt_end = (
-                        capture_receipt_start
-                        + self.collection_duration_sec
+                    # Include tag observations accompanying retained frames.
+                    capture_receipt_start = (
+                        time.monotonic() - self.maximum_input_age_sec
                     )
                     minimum_sequences = self._begin_collections(
                         synchronizers,
@@ -169,6 +168,7 @@ class ProbeReferenceCaptureCoordinator:
                         selected,
                         cancel_requested,
                     )
+                    capture_receipt_end = time.monotonic()
                     self.probe_setup_coordinator.require_current(context)
                     self._require_command_lane_idle()
                     reference_tags = self._historical_reference_tags(
@@ -349,9 +349,11 @@ class ProbeReferenceCaptureCoordinator:
         for _, camera_id in selected:
             synchronizer = synchronizers[camera_id]
             synchronizer.cancel_collection()
-            minimum_sequence = synchronizer.input_sequence + 1
+            minimum_sequence = 0
             minimum_sequences[camera_id] = minimum_sequence
-            synchronizer.begin_collection(minimum_sequence)
+            synchronizer.begin_collection(
+                minimum_sequence, timeout_sec=self.capture_timeout_sec,
+            )
         return minimum_sequences
 
     def _wait_for_collections(
@@ -360,22 +362,32 @@ class ProbeReferenceCaptureCoordinator:
         selected,
         cancel_requested,
     ):
-        deadline = (
-            time.monotonic()
-            + self.collection_duration_sec
-            + self.capture_timeout_sec
-        )
-        while time.monotonic() < deadline:
+        deadline = time.monotonic() + self.capture_timeout_sec
+        while True:
             self._check_cancel(cancel_requested)
-            if all(
-                synchronizers[camera_id].collection_ready()
+            now_ns = self.node.get_clock().now().nanoseconds
+            ready = [
+                synchronizers[camera_id].fresh_pair_ready(
+                    now_ns, self.maximum_input_age_sec,
+                )
                 for _, camera_id in selected
-            ):
+            ]
+            if all(ready):
+                for _, camera_id in selected:
+                    synchronizers[camera_id].finish_collection()
                 return
+            if time.monotonic() >= deadline:
+                details = "; ".join(
+                    f"{camera_id}: "
+                    f"{synchronizers[camera_id].collection_diagnostics(0)}"
+                    for (_, camera_id), is_ready in zip(selected, ready)
+                    if not is_ready
+                )
+                raise ReferenceViewCaptureNotReady(
+                    "Timed out waiting for fresh synchronized camera inputs: "
+                    f"{details}"
+                )
             self._shutdown.wait(self.poll_sec)
-        raise ReferenceViewCaptureNotReady(
-            "Reference-view collection window did not complete"
-        )
 
     def _stable_reference_tag(self, tag_id):
         try:

@@ -167,3 +167,33 @@ def test_collection_freezes_both_calibrations_at_start(monkeypatch):
 
     assert snapshot[2].k[0] == 100.0
     assert snapshot[3].k[0] == 200.0
+
+
+def test_waiting_collection_keeps_buffered_pair_and_prunes_stale(monkeypatch):
+    clock = [1_000_000_000]
+    monkeypatch.setattr(synchronizer_module.time, 'monotonic_ns', lambda: clock[0])
+    synchronizer = make_synchronizer()
+    synchronizer._rgb_callback(make_image(100_000_000))
+    synchronizer._depth_callback(make_image(105_000_000))
+    synchronizer.begin_collection(0, timeout_sec=3.0)
+    assert synchronizer.fresh_pair_ready(11_000_000_000, 1.5)
+    assert not synchronizer.fresh_pair_ready(12_000_000_000, 1.5)
+
+
+def test_waiting_collection_accepts_delayed_pair_and_retains_it_on_retry(monkeypatch):
+    clock = [1_000_000_000]
+    monkeypatch.setattr(synchronizer_module.time, 'monotonic_ns', lambda: clock[0])
+    synchronizer = make_synchronizer()
+    synchronizer.begin_collection(0, timeout_sec=3.0)
+    clock[0] += 2_000_000_000
+    assert not synchronizer.fresh_pair_ready(11_000_000_000, 1.5)
+    synchronizer._rgb_callback(make_image(100_000_000))
+    synchronizer._depth_callback(make_image(105_000_000))
+    assert synchronizer.fresh_pair_ready(11_000_000_000, 1.5)
+    synchronizer.finish_collection()
+    assert synchronizer.best_snapshot(0) is not None
+    synchronizer.cancel_collection()
+    synchronizer.begin_collection(0, timeout_sec=3.0)
+    assert synchronizer.fresh_pair_ready(11_000_000_000, 1.5)
+    synchronizer.finish_collection()
+    assert synchronizer.best_snapshot(0) is not None

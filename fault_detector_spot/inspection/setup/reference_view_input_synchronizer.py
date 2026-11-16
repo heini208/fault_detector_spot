@@ -63,7 +63,7 @@ class ReferenceViewInputSynchronizer:
         self._rgb_camera_info: Optional[CameraInfo] = None
         self._depth_camera_info: Optional[CameraInfo] = None
         self._input_sequence = 0
-        self._idle_history_size = 2
+        self._idle_history_size = 60
         self._rgb_history: Deque[ImageSample] = deque(
             maxlen=self._idle_history_size
         )
@@ -127,8 +127,12 @@ class ReferenceViewInputSynchronizer:
                 and bool(self._depth_history)
             )
 
-    def begin_collection(self, minimum_input_sequence: int) -> None:
+    def begin_collection(
+        self, minimum_input_sequence: int, timeout_sec=None,
+    ) -> None:
         """Start one time-bounded camera-specific capture window."""
+        if timeout_sec is not None:
+            self._validate_duration(timeout_sec, "Collection timeout", False)
         self._validate_sequence(minimum_input_sequence)
         now_nanoseconds = time.monotonic_ns()
         with self._lock:
@@ -140,7 +144,8 @@ class ReferenceViewInputSynchronizer:
                 minimum_input_sequence=minimum_input_sequence,
                 ends_at_nanoseconds=(
                     now_nanoseconds
-                    + self._collection_duration_nanoseconds
+                    + (self._collection_duration_nanoseconds if timeout_sec is None
+                       else int(timeout_sec * 1_000_000_000))
                 ),
                 rgb_images=deque(
                     sample
@@ -165,6 +170,34 @@ class ReferenceViewInputSynchronizer:
                 and now_nanoseconds
                 >= self._collection.ends_at_nanoseconds
             )
+
+    def fresh_pair_ready(self, current_time_ns, maximum_age_sec) -> bool:
+        """Keep only fresh samples and check for a synchronized pair."""
+        oldest = current_time_ns - int(maximum_age_sec * 1_000_000_000)
+        newest = current_time_ns + 100_000_000
+        with self._lock:
+            collection = self._collection
+            if collection is None:
+                return False
+            for samples in (collection.rgb_images, collection.depth_images):
+                fresh = [sample for sample in samples
+                         if oldest <= self._image_stamp_nanoseconds(sample[1]) <= newest
+                         and self._image_stamp_nanoseconds(sample[1]) > 0]
+                samples.clear()
+                samples.extend(fresh)
+            return (
+                collection.rgb_camera_info is not None
+                and collection.depth_camera_info is not None
+                and self._select_best_pair(
+                    collection.rgb_images, collection.depth_images,
+                ) is not None
+            )
+
+    def finish_collection(self) -> None:
+        """Freeze the shared capture once every camera has fresh inputs."""
+        with self._lock:
+            if self._collection is not None:
+                self._collection.ends_at_nanoseconds = time.monotonic_ns()
 
     def best_snapshot(
         self,
