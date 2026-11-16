@@ -53,6 +53,10 @@ class Node:
 
     def create_client(self, _service_type, name):
         client = Client(name, self.events)
+        # Existing scene-only tests exercise the service-unavailable fallback.
+        # Seeded IK sequencing is covered separately with this client enabled.
+        if name == "/compute_ik":
+            client.available = False
         self.clients[name] = client
         return client
 

@@ -9,11 +9,12 @@ import time
 from geometry_msgs.msg import Pose, PoseStamped
 from moveit_msgs.msg import (
     Constraints,
+    JointConstraint,
     MoveItErrorCodes,
     OrientationConstraint,
     PositionConstraint,
 )
-from moveit_msgs.srv import GetCartesianPath, GetMotionPlan
+from moveit_msgs.srv import GetCartesianPath, GetMotionPlan, GetPositionIK
 from shape_msgs.msg import SolidPrimitive
 
 from fault_detector_spot.manipulation.arm_motion_parameters import ArmMotionParameters
@@ -47,7 +48,7 @@ DEFAULT_CARTESIAN_JUMP_THRESHOLD = 3.0
 DEFAULT_CARTESIAN_MIN_FRACTION = 0.999
 MIN_ARM_SH1_RAD = math.radians(-178.0)
 _READ_ONLY_PHASES = frozenset({
-    "read_scene", "verify_scene", "head_attachment", "head_model", "head_mesh", "head_verify",
+    "ik", "read_scene", "verify_scene", "head_attachment", "head_model", "head_mesh", "head_verify",
 })
 
 class MoveItPlanOutcome(Enum):
@@ -166,10 +167,13 @@ class MoveItArmPlanner:
             GetMotionPlan,
             self.service_name,
         )
+        self._ik_client = node.create_client(GetPositionIK, "/compute_ik")
         self._cartesian_client = node.create_client(
             GetCartesianPath,
             self.cartesian_service_name,
         )
+        self._ik_attempted = False
+        self._pending_joint_goal = None
         self._future = None
         self._started_at = None
         self._planning_mode = None
@@ -250,9 +254,52 @@ class MoveItArmPlanner:
             client = self._cartesian_client
             request = self._build_cartesian_request(self._pending_target)
         else:
+            if not self._ik_attempted:
+                self._ik_attempted = True
+                if self._ik_client.wait_for_service(timeout_sec=0.0):
+                    return self._submit("ik", self._ik_client, self._build_ik_request())
             client = self._client
             request = self._build_request(self._pending_target)
+            if self._pending_joint_goal is not None:
+                request.motion_plan_request.goal_constraints[0].joint_constraints = self._pending_joint_goal
         return self._submit(mode, client, request)
+
+    def _build_ik_request(self):
+        request = GetPositionIK.Request()
+        ik = request.ik_request
+        ik.group_name = self.group_name
+        ik.ik_link_name = self.end_effector_link
+        ik.pose_stamped = deepcopy(self._pending_target)
+        # MoveIt's IK service starts from its monitored current robot state
+        # when no explicit joint seed is supplied. Do not replace that with
+        # a second joint-state owner or random pose-goal sampling.
+        ik.robot_state.is_diff = True
+        ik.avoid_collisions = True
+        # Zero selects the kinematics plugin's configured default timeout.
+        return request
+
+    def _finish_ik(self, response):
+        if response.error_code.val == MoveItErrorCodes.SUCCESS:
+            state = response.solution.joint_state
+            values = dict(zip(state.name, state.position))
+            if (len(state.name) != len(state.position)
+                    or len(values) != len(state.name)
+                    or any(name not in values or not math.isfinite(values[name])
+                           for name in ARM_JOINT_NAMES)):
+                self._reset()
+                return MoveItPlanUpdate(MoveItPlanOutcome.ERROR, "MoveIt IK returned invalid arm joints")
+            self._pending_joint_goal = [
+                JointConstraint(joint_name=name, position=values[name],
+                                tolerance_above=0.0001, tolerance_below=0.0001, weight=1.0)
+                for name in ARM_JOINT_NAMES
+            ]
+        elif response.error_code.val != MoveItErrorCodes.NO_IK_SOLUTION:
+            detail = self._planning_failure_detail(response.error_code.val)
+            self._reset()
+            return MoveItPlanUpdate(MoveItPlanOutcome.FAILURE, detail)
+        # If exact-pose IK fails, retain the existing pose-tolerance search.
+        # Planning still checks the full path and the original pose goal.
+        return self._submit_plan()
 
     def _submit(self, phase, client, request):
         try:
@@ -345,6 +392,9 @@ class MoveItArmPlanner:
                 ),
             )
 
+        if mode == "ik":
+            return self._finish_ik(response)
+
         if mode not in ("motion", "cartesian"):
             try:
                 next_request = self._collision_scene.advance(mode, response)
@@ -418,7 +468,8 @@ class MoveItArmPlanner:
 
     def destroy(self) -> None:
         self.cancel()
-        clients = (self._client, self._cartesian_client)
+        clients = (self._client, self._cartesian_client, self._ik_client)
+        self._ik_client = None
         self._client = None
         self._cartesian_client = None
         for client in clients:
@@ -811,6 +862,8 @@ class MoveItArmPlanner:
         )
 
     def _reset(self) -> None:
+        self._ik_attempted = False
+        self._pending_joint_goal = None
         self._future = None
         self._started_at = None
         self._planning_mode = None
