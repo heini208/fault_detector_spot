@@ -6,6 +6,7 @@ from copy import deepcopy
 from types import SimpleNamespace
 
 import pytest
+from action_msgs.msg import GoalStatus
 from fault_detector_msgs.msg import TagElement
 from geometry_msgs.msg import PoseStamped, TransformStamped
 
@@ -16,6 +17,7 @@ from fault_detector_spot.navigation.base_correction_policy import (
 from fault_detector_spot.navigation.base_movement_executor import (
     BaseMovementExecutor,
     BaseMovementOutcome,
+    DEFAULT_BASE_TAG_OBSERVATION_TIMEOUT_SEC,
 )
 from fault_detector_spot.navigation.posture_state_source import (
     PostureState,
@@ -91,7 +93,7 @@ class Client:
 def make_movement(
     kind="relative",
     correction_config=None,
-    tag_observation_timeout_sec=5.0,
+    tag_observation_timeout_sec=DEFAULT_BASE_TAG_OBSERVATION_TIMEOUT_SEC,
 ):
     clock, client = ManualClock(), Client()
     transform = TransformStamped()
@@ -159,6 +161,7 @@ def make_movement(
         executor.poll()
         client.results[-1].set_result(
             SimpleNamespace(
+                status=GoalStatus.STATUS_SUCCEEDED,
                 result=SimpleNamespace(success=success)
             )
         )
@@ -237,8 +240,9 @@ def test_tag_verification_accepts_observed_one_hz_spot_cadence():
     assert len(client.goals) == 2
 
 
-def test_tag_timeout_allows_full_five_seconds_after_settling():
+def test_tag_timeout_allows_full_ten_seconds_after_settling():
     executor, _, _, poll, complete = make_movement("tag")
+    assert executor.tag_observation_timeout_sec == 10.0
     # Time spent executing must not consume the post-settle timeout.
     poll(0.0, 20.0)
     complete(1.0)
@@ -247,7 +251,7 @@ def test_tag_timeout_allows_full_five_seconds_after_settling():
         complete_stationary_handoff(poll, complete, 1.0).outcome
         is BaseMovementOutcome.RUNNING
     )
-    assert poll(1.0, 4.9).outcome is BaseMovementOutcome.RUNNING
+    assert poll(1.0, 9.9).outcome is BaseMovementOutcome.RUNNING
     assert (
         poll(1.0, 0.11).outcome
         is BaseMovementOutcome.TAG_OBSERVATION_TIMEOUT
@@ -317,8 +321,9 @@ def test_missing_capture_time_transform_is_bounded():
     update = poll(1.0, 0.7)
     assert update.outcome is BaseMovementOutcome.RUNNING
     assert "capture-time tag transform" in update.detail
-    update = poll(1.0, 5.0)
+    update = poll(1.0, 10.0)
     assert update.outcome is BaseMovementOutcome.TAG_OBSERVATION_TIMEOUT
+    assert executor.execution_idle
 
 
 def test_two_correction_attempts_then_failure():
@@ -476,6 +481,7 @@ def test_missing_post_settle_tag_times_out():
     )
     assert "timed out after 1.0 s" in failed.detail
     assert not executor.active
+    assert executor.execution_idle
 
 
 def test_unstable_post_settle_tag_times_out():
@@ -502,6 +508,7 @@ def test_unstable_post_settle_tag_times_out():
     )
     assert "stable post-settle tag 7" in failed.detail
     assert not executor.active
+    assert executor.execution_idle
 
 
 def test_transient_tag_replan_geometry_is_bounded():
@@ -528,6 +535,7 @@ def test_transient_tag_replan_geometry_is_bounded():
     assert failed.outcome is BaseMovementOutcome.MOTION_FAILED
     assert "timed out after 1.0 s" in failed.detail
     assert not executor.active
+    assert executor.execution_idle
 
 
 def test_unexpected_tag_replan_failure_is_reported():
@@ -563,3 +571,31 @@ def test_exhausted_base_goal_offers_absolute_retry_only_after_fresh_stationary_f
     assert update.retry_target.header.frame_id == "odom"
     assert update.retry_target.pose.position.x == pytest.approx(1.0)
     assert executor._movement_plan is None
+
+
+@pytest.mark.parametrize("evidence", ["stale", "moving", "unterminated_action"])
+def test_tag_timeout_cannot_release_owner_without_current_stop_proof(evidence):
+    executor, client, _, poll, complete = make_movement("tag", tag_observation_timeout_sec=1.0)
+    complete(0.8)
+    complete_stationary_handoff(poll, complete, 0.8)
+    executor.tag_state_source.clear()
+    if evidence == "unterminated_action":
+        # A missing action result must not be inferred from stationary TF.
+        executor._submitted_goals.append([ManualFuture(), None])
+    failed = poll(0.9 if evidence == "moving" else 0.8, 1.1, fresh=evidence != "stale")
+    assert failed.outcome is BaseMovementOutcome.TAG_OBSERVATION_TIMEOUT
+    assert not executor.execution_idle
+
+
+def test_transient_base_motion_during_tag_wait_requires_settling_again():
+    executor, _, _, poll, complete = make_movement("tag", tag_observation_timeout_sec=2.0)
+    complete(0.8)
+    complete_stationary_handoff(poll, complete, 0.8)
+    executor.tag_state_source.clear()
+    poll(0.9, 0.2)
+    assert not executor._goal_verifier.settled
+    poll(0.9, 0.6)
+    assert executor._goal_verifier.settled
+    failed = poll(0.9, 1.3)
+    assert failed.outcome is BaseMovementOutcome.TAG_OBSERVATION_TIMEOUT
+    assert executor.execution_idle

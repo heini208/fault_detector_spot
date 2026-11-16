@@ -66,7 +66,7 @@ BASE_TAG_OBSERVATION_TIMEOUT_PARAMETER = (
 
 DEFAULT_BASE_READY_STATE_TIMEOUT_SEC = 2.0
 DEFAULT_BASE_READY_STANDING_TIMEOUT_SEC = 2.0
-DEFAULT_BASE_TAG_OBSERVATION_TIMEOUT_SEC = 5.0
+DEFAULT_BASE_TAG_OBSERVATION_TIMEOUT_SEC = 10.0
 
 
 class BaseMovementOutcome(Enum):
@@ -755,7 +755,8 @@ class BaseMovementExecutor(MovementExecutor):
                         "Settled base verification has no timestamp",
                     )
                 self._tag_settle_boundary_stamp = boundary
-                self._goal_verifier = None
+                # Keep physical settling evidence while collecting tag geometry.
+                # An observation timeout does not mean the held base is moving.
                 self._tag_observation_tracker.reset()
                 self._set_phase(_BasePhase.WAITING_FOR_FRESH_TAG)
                 return self._poll_fresh_tag_target()
@@ -820,7 +821,20 @@ class BaseMovementExecutor(MovementExecutor):
             _BasePhase.CORRECTING,
         )
 
+    def _refresh_tag_wait_stop_evidence(self):
+        verifier = self._goal_verifier
+        if verifier is None:
+            return False
+        sample = self.base_pose_source.sample()
+        verifier.update(
+            sample.body_pose if sample is not None else None,
+            sample.stamp_sec if sample is not None else None,
+            self._ros_time_sec(), self._monotonic_clock(),
+        )
+        return verifier.settled
+
     def _poll_fresh_tag_target(self):
+        self._refresh_tag_wait_stop_evidence()
         command = self._semantic_tag_command
         source = self.tag_state_source
         boundary = self._tag_settle_boundary_stamp
@@ -1242,11 +1256,16 @@ class BaseMovementExecutor(MovementExecutor):
                 and self._phase is _BasePhase.VERIFYING_STATIONARY_STAND
                 and self._goal_verifier is not None and self._goal_verifier.settled
             )
+        stopped_while_waiting = (
+            self._phase is _BasePhase.WAITING_FOR_FRESH_TAG
+            and self._refresh_tag_wait_stop_evidence()
+            and self.goals_settled()
+        )
         if outcome is BaseMovementOutcome.GOAL_REJECTED:
             # A rejected goal cannot have changed the height.
             self._pending_commanded_height_m = None
         elif (outcome is not BaseMovementOutcome.SUCCESS and not safe
-              and self._send_goal_future is not None):
+              and not stopped_while_waiting and self._send_goal_future is not None):
             self._stop_unconfirmed = True
         result = super()._finish(outcome, detail)
         return replace(result, retry_safe=safe, retry_target=target)

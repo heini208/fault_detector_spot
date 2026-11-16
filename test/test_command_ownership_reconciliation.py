@@ -168,3 +168,39 @@ def test_stop_fences_a_delayed_original_and_confirms_each_lane_owner():
     p.controller.submit(later)
     assert p.controller.active_request_id == later.request_id
     assert len(p.wire) == 4
+
+
+@pytest.mark.parametrize("fresh_stop", [True, False])
+def test_base_tag_timeout_finishes_failed_only_with_physical_stop_proof(fresh_stop):
+    from test_base_goal_corrections import make_movement, complete_stationary_handoff
+    from fault_detector_spot.navigation.base_movement_executor import BaseMovementOutcome
+
+    executor, _, _, poll, complete = make_movement("tag", tag_observation_timeout_sec=1.0)
+    complete(0.8)
+    complete_stationary_handoff(poll, complete, 0.8)
+    executor.tag_state_source.clear()
+    failure = poll(0.8, 1.1, fresh=fresh_stop)
+    assert failure.outcome is BaseMovementOutcome.TAG_OBSERVATION_TIMEOUT
+
+    p = pipeline()
+    from dataclasses import replace
+    from fault_detector_spot.application.commanding.semantic_command import (
+        SemanticTag, StampedPose, CommandQuaternion,
+    )
+    request = make_request(CommandID.MOVE_BASE_TO_TAG)
+    request = replace(request, command=replace(request.command, tag=SemanticTag(
+        7, StampedPose(frame_id="odom", orientation=CommandQuaternion(w=1.0)))))
+    p.controller.submit(request)
+    p.subscriber.append_request_to_buffer(p.wire[0])
+    p.subscriber.update()
+    command = p.subscriber.blackboard.command_buffer.pop()
+    command.execution_feedback_message = failure.detail
+    p.subscriber.blackboard.last_command = command
+    p.subscriber.blackboard.command_tree_status = Status.FAILURE
+    p.proof[0] = executor.execution_idle
+    p.publisher.update()
+    p.transport.handle_command_status(p.publisher.structured_status_pub.messages[-1])
+
+    state = next(state for state in reversed(p.states) if state.request_id == request.request_id)
+    assert state.state is (CommandControllerState.FAILED if fresh_stop else CommandControllerState.UNKNOWN)
+    assert p.controller.active_request_id == ("" if fresh_stop else request.request_id)

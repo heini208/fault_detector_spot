@@ -1603,6 +1603,14 @@ Normal walking obstacle avoidance remains enabled; standing still allows Spot's
 normal balance adjustments. A failed stand or missing settling feedback prevents
 successful completion and progression to the next queued command.
 
+Base tag-relative movements allow ten seconds after settling to collect three
+consistent tag observations (`base.tag_correction.observation_timeout_sec`).
+An inconsistent window restarts sample collection within that same deadline.
+While waiting, execution continues checking physical base settling. If tag
+collection times out with terminal action results and fresh stationary feedback,
+the command finishes as failed and releases ownership; missing stop evidence
+still leaves ownership unconfirmed.
+
 Waypoint execution owns its preparation in `WaypointNavigationExecutor`, so both
 the waypoint tree and direct application callers must pass the same sequence:
 confirm/stow the arm, prepare walking height, then dispatch the Nav2 goal. The
