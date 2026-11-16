@@ -12,7 +12,7 @@ from rclpy.time import Time
 
 from fault_detector_spot.inspection.setup.multi_reference_view_capture import (
     CameraCaptureRequest,
-    capture_reference_views,
+    resolve_reference_views,
     validate_multi_reference_view_capture_target,
 )
 from fault_detector_spot.inspection.setup.reference_camera_registry import (
@@ -137,121 +137,83 @@ class ProbeReferenceCaptureCoordinator:
             self._require_command_lane_idle()
 
             synchronizers = self._create_synchronizers(selected)
-            last_error = None
-            attempt = 1
-            attempt_deadline = time.monotonic() + self.capture_timeout_sec
-            while attempt <= self.capture_max_attempts:
-                self._check_cancel(cancel_requested)
-                self._emit(
-                    state_changed,
-                    ReferenceCapturePhase.WAITING_FOR_INPUTS,
-                    attempt,
-                    snapshot,
-                )
-                try:
-                    self._wait_for_ready_inputs(
-                        synchronizers,
-                        selected,
-                        tag_id,
-                        cancel_requested,
-                    )
-                    # Include tag observations accompanying retained frames.
-                    capture_receipt_start = (
-                        time.monotonic() - self.maximum_input_age_sec
-                    )
-                    minimum_sequences = self._begin_collections(
-                        synchronizers,
-                        selected,
-                    )
-                    self._wait_for_collections(
-                        synchronizers,
-                        selected,
-                        cancel_requested,
-                    )
-                    capture_receipt_end = time.monotonic()
+            captures = {}
+            errors = {}
+            for attempt in range(1, self.capture_max_attempts + 1):
+                for slot in selected:
+                    slot_index, camera_id = slot
+                    if camera_id in captures:
+                        continue
+                    deadline = time.monotonic() + self.capture_timeout_sec
+                    while True:
+                        self._check_cancel(cancel_requested)
+                        self.probe_setup_coordinator.require_current(context)
+                        self._require_command_lane_idle()
+                        self._emit(state_changed, ReferenceCapturePhase.WAITING_FOR_INPUTS,
+                                   attempt, snapshot)
+                        try:
+                            self._wait_for_ready_inputs(
+                                synchronizers, (slot,), tag_id, cancel_requested,
+                            )
+                            receipt_start = time.monotonic() - self.maximum_input_age_sec
+                            sequences = self._begin_collections(synchronizers, (slot,))
+                            self._wait_for_collections(
+                                synchronizers, (slot,), cancel_requested,
+                            )
+                            tags = self._historical_reference_tags(
+                                tag_id, receipt_start, time.monotonic(),
+                            )
+                            self._emit(state_changed, ReferenceCapturePhase.VALIDATING,
+                                       attempt, snapshot)
+                            resolved = resolve_reference_views(
+                                (CameraCaptureRequest(
+                                    slot_index, camera_id, synchronizers[camera_id],
+                                    sequences[camera_id],
+                                ),),
+                                self.tf_buffer, self.node.get_clock().now(), tag_id, tags,
+                                maximum_input_age_sec=self.maximum_input_age_sec,
+                                maximum_timestamp_skew_sec=self.maximum_timestamp_skew_sec,
+                                fixed_frame=self.fixed_frame,
+                                transform_timeout_sec=self.transform_timeout_sec,
+                            )
+                            self._check_cancel(cancel_requested)
+                            self.probe_setup_coordinator.require_current(context)
+                            self._require_command_lane_idle()
+                            captures[camera_id] = resolved[0]
+                            synchronizers[camera_id].suspend()
+                            errors.pop(camera_id, None)
+                            break
+                        except (ReferenceViewCaptureNotReady,
+                                tf2_ros.TransformException) as exception:
+                            errors[camera_id] = str(exception)
+                            synchronizers[camera_id].cancel_collection()
+                            if time.monotonic() >= deadline:
+                                break
+                            self._shutdown.wait(self.poll_sec)
+                if len(captures) == len(selected):
+                    self._check_cancel(cancel_requested)
                     self.probe_setup_coordinator.require_current(context)
                     self._require_command_lane_idle()
-                    reference_tags = self._historical_reference_tags(
-                        tag_id,
-                        capture_receipt_start,
-                        capture_receipt_end,
-                    )
-                    requests = tuple(
-                        CameraCaptureRequest(
-                            slot_index=slot_index,
-                            camera_id=camera_id,
-                            input_synchronizer=synchronizers[camera_id],
-                            minimum_input_sequence=(
-                                minimum_sequences[camera_id]
-                            ),
-                        )
-                        for slot_index, camera_id in selected
-                    )
-                    self._emit(
-                        state_changed,
-                        ReferenceCapturePhase.VALIDATING,
-                        attempt,
-                        snapshot,
-                    )
-                    self._emit(
-                        state_changed,
-                        ReferenceCapturePhase.SAVING,
-                        attempt,
-                        snapshot,
-                    )
-                    capture_reference_views(
-                        self.reference_repository,
-                        requests,
-                        self.tf_buffer,
-                        object_id,
-                        routine_id,
-                        self.node.get_clock().now(),
-                        tag_id,
-                        reference_tags,
-                        maximum_input_age_sec=(
-                            self.maximum_input_age_sec
-                        ),
-                        maximum_timestamp_skew_sec=(
-                            self.maximum_timestamp_skew_sec
-                        ),
-                        fixed_frame=self.fixed_frame,
-                        transform_timeout_sec=self.capture_timeout_sec,
+                    self._emit(state_changed, ReferenceCapturePhase.SAVING,
+                               attempt, snapshot)
+                    self.reference_repository.save_reference_views(
+                        object_id, routine_id,
+                        [captures[camera_id] for _, camera_id in selected],
+                        maximum_timestamp_skew_sec=self.maximum_timestamp_skew_sec,
                     )
                     current = self.probe_setup_coordinator.context(
-                        context.context_id,
-                        context.client_id,
+                        context.context_id, context.client_id,
                     )
                     snapshot = self.probe_setup_coordinator.select_routine(
-                        current,
-                        object_id,
-                        routine_id,
+                        current, object_id, routine_id,
                     )
-                    self._emit(
-                        state_changed,
-                        ReferenceCapturePhase.COMPLETE,
-                        attempt,
-                        snapshot,
-                    )
+                    self._emit(state_changed, ReferenceCapturePhase.COMPLETE,
+                               attempt, snapshot)
                     return snapshot
-                except (
-                    ReferenceViewCaptureNotReady,
-                    tf2_ros.TransformException,
-                ) as exception:
-                    last_error = exception
-                    self._cancel_collections(synchronizers)
-                    # A completed collection window is not a capture timeout.
-                    # Keep trying fresh windows when streams stall or a valid
-                    # triplet is missing, without spending an attempt early.
-                    if time.monotonic() >= attempt_deadline:
-                        attempt += 1
-                        attempt_deadline = (
-                            time.monotonic() + self.capture_timeout_sec
-                        )
-                    if attempt <= self.capture_max_attempts:
-                        self._shutdown.wait(self.poll_sec)
+            details = "; ".join(f"{camera}: {error}" for camera, error in errors.items())
             raise RuntimeError(
                 "Reference-view capture failed after "
-                f"{self.capture_max_attempts} attempts: {last_error}"
+                f"{self.capture_max_attempts} attempts: {details}"
             )
         finally:
             self._release_synchronizers(self._synchronizers)

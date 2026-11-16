@@ -59,8 +59,11 @@ def coordinator(monkeypatch):
     monkeypatch.setattr(capture_module, 'validate_multi_reference_view_capture_target', lambda *_: 7)
     value.captured_requests = []
     monkeypatch.setattr(
-        capture_module, 'capture_reference_views',
-        lambda repository, requests, *_, **__: value.captured_requests.append(requests),
+        capture_module, 'resolve_reference_views',
+        lambda requests, *_, **__: list(requests),
+    )
+    value.reference_repository = SimpleNamespace(
+        save_reference_views=lambda _object, _routine, captures, **_: value.captured_requests.append(captures),
     )
     value.detached = detached
     return value
@@ -190,19 +193,20 @@ def test_empty_windows_do_not_exhaust_attempts_before_timeout(
         windows.append(clock[0])
         if valid_after_windows is None or len(windows) < valid_after_windows:
             raise capture_module.ReferenceViewCaptureNotReady('no images')
+        return list(args[0])
 
-    monkeypatch.setattr(capture_module, 'capture_reference_views', capture)
+    monkeypatch.setattr(capture_module, 'resolve_reference_views', capture)
     context = SimpleNamespace(context_id='context', client_id='client')
     spec = capture_module.ProbeReferenceCaptureSpec(replace_existing=False)
     if valid_after_windows is None:
-        with pytest.raises(RuntimeError, match='failed after 3 attempts: no images'):
+        with pytest.raises(RuntimeError, match='failed after 3 attempts: frontleft: no images'):
             coordinator.run(context, 'capture', spec, lambda: False)
         assert clock[0] >= (
             coordinator.capture_timeout_sec * coordinator.capture_max_attempts
         )
     else:
         coordinator.run(context, 'capture', spec, lambda: False)
-        assert len(windows) == valid_after_windows
+        assert len(windows) == valid_after_windows + 5
     assert not coordinator._active_request_id
     assert all(not value.collection_active for value in coordinator._synchronizers.values())
 
@@ -215,7 +219,7 @@ def test_capture_can_be_cancelled_between_empty_windows(coordinator, monkeypatch
         cancelled[0] = True
         raise capture_module.ReferenceViewCaptureNotReady('no images')
 
-    monkeypatch.setattr(capture_module, 'capture_reference_views', capture)
+    monkeypatch.setattr(capture_module, 'resolve_reference_views', capture)
     with pytest.raises(capture_module.ReferenceCaptureCancelled):
         coordinator.run(
             SimpleNamespace(context_id='context', client_id='client'),
@@ -260,3 +264,42 @@ def test_collection_waits_for_delayed_fresh_pair_or_timeout(coordinator, monkeyp
                            match='Timed out.*hand:.*rgb_frames=0'):
             collect(coordinator, synchronizers, selected, lambda: False)
         assert clock[0] == coordinator.capture_timeout_sec
+
+
+@pytest.mark.parametrize('recover', [True, False])
+def test_only_failed_camera_retries_and_complete_set_is_saved_once(
+    coordinator, monkeypatch, recover,
+):
+    clock = [0.0]
+    monkeypatch.setattr(capture_module.time, 'monotonic', lambda: clock[0])
+    coordinator._wait_for_ready_inputs = lambda *_: None
+    seen = []
+    accepted = {}
+
+    def resolve(requests, *args, **kwargs):
+        request = requests[0]
+        seen.append(request.camera_id)
+        clock[0] += coordinator.capture_timeout_sec
+        if request.camera_id == 'frontleft' and (not recover or seen.count('frontleft') == 1):
+            raise capture_module.ReferenceViewCaptureNotReady('missing frontleft')
+        assert request.camera_id not in accepted
+        accepted[request.camera_id] = request
+        return [request]
+
+    monkeypatch.setattr(capture_module, 'resolve_reference_views', resolve)
+    context = SimpleNamespace(context_id='context', client_id='client')
+    spec = capture_module.ProbeReferenceCaptureSpec(False)
+    if recover:
+        coordinator.run(context, 'capture', spec, lambda: False)
+        assert seen.count('frontleft') == 2
+        assert len(coordinator.captured_requests) == 1
+        saved = coordinator.captured_requests[0]
+        assert [item.slot_index for item in saved] == list(range(6))
+        assert all(item is accepted[item.camera_id] for item in saved)
+    else:
+        with pytest.raises(RuntimeError, match='frontleft: missing frontleft'):
+            coordinator.run(context, 'capture', spec, lambda: False)
+        assert seen.count('frontleft') == coordinator.capture_max_attempts
+        assert not coordinator.captured_requests
+    for camera in ('frontright', 'left', 'right', 'back', 'hand'):
+        assert seen.count(camera) == 1

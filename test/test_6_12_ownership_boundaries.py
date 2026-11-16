@@ -46,7 +46,8 @@ def test_reference_capture_is_application_coordinator_not_bt_behavior():
     source = inspect.getsource(ProbeReferenceCaptureCoordinator)
     assert "py_trees" not in source
     assert "CommandID" not in source
-    assert "capture_reference_views" in source
+    assert "resolve_reference_views" in source
+    assert "save_reference_views" in source
     assert "reference_tag(" in source
     assert "_require_command_lane_idle" in source
     assert "_release_synchronizers" in source

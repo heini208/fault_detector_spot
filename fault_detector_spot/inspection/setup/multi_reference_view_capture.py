@@ -64,6 +64,23 @@ def capture_reference_views(
     transform_timeout_sec: float = 0.05,
 ):
     """Resolve every selected camera and save the set only when all pass."""
+    captures = resolve_reference_views(
+        requests, tf_buffer, current_time, reference_tag_id, reference_tags,
+        maximum_input_age_sec, maximum_timestamp_skew_sec,
+        fixed_frame, transform_timeout_sec,
+    )
+    return repository.save_reference_views(
+        object_id, routine_id, captures,
+        maximum_timestamp_skew_sec=maximum_timestamp_skew_sec,
+    )
+
+
+def resolve_reference_views(
+    requests, tf_buffer, current_time, reference_tag_id, reference_tags,
+    maximum_input_age_sec=2.0, maximum_timestamp_skew_sec=0.05,
+    fixed_frame="odom", transform_timeout_sec=0.05,
+):
+    """Validate captures at acquisition time without persisting them."""
     if (
         not math.isfinite(maximum_input_age_sec)
         or maximum_input_age_sec < 0.0
@@ -165,12 +182,7 @@ def capture_reference_views(
             fixed_frame=fixed_frame,
         ))
 
-    return repository.save_reference_views(
-        object_id,
-        routine_id,
-        captures,
-        maximum_timestamp_skew_sec=maximum_timestamp_skew_sec,
-    )
+    return captures
 
 
 def _matching_reference_tags(
