@@ -154,6 +154,7 @@ def test_sensors_are_scoped_to_original_move_group_without_changing_its_config(
     assert "__node:=move_group" in command
     assert len(paths) == 2 and paths[0] == SENSORS
     assert f"use_sim_time:={use_sim_time.title()}" in command
+    assert "ompl.arm.enforce_joint_model_state_space:=True" in command
     assert next(iter(documents[1].values()))["ros__parameters"] == baseline_parameters
     assert {
         "robot_description", "robot_description_semantic",
@@ -173,6 +174,7 @@ def test_sensors_are_scoped_to_original_move_group_without_changing_its_config(
     command, paths, documents = captured[4]
     assert SENSORS not in paths
     assert not any("use_sim_time:=" in argument for argument in command)
+    assert not any("enforce_joint_model_state_space:=" in argument for argument in command)
     assert next(iter(documents[0].values()))["ros__parameters"] == {"own_parameter": 1}
 
 
