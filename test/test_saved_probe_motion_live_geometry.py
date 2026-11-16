@@ -89,7 +89,7 @@ def test_saved_target_uses_full_live_tag_rotation(axis, expected_position):
     planner = ProbeMotionPlanner(listener, ArmMotionSpeedPolicy())
     command = saved_command()
     rotation = Rotation.from_euler(axis, 90, degrees=True)
-    source = SimpleNamespace(usable_tag=lambda _id: observed_tag(rotation))
+    source = SimpleNamespace(motion_tag=lambda _id: observed_tag(rotation))
 
     result = planner.resolve_tag(command, source)
 
@@ -108,7 +108,7 @@ def test_repeated_resolution_uses_new_tag_without_mutating_saved_target():
     original_offset = deepcopy(command.offset)
     original_tag = deepcopy(command.tag_pose)
     observation = observed_tag()
-    source = SimpleNamespace(usable_tag=lambda _id: observation)
+    source = SimpleNamespace(motion_tag=lambda _id: observation)
 
     first = planner.resolve_tag(command, source)
     observation = observed_tag(Rotation.from_euler("z", 90, degrees=True))
@@ -124,7 +124,7 @@ def test_repeated_resolution_uses_new_tag_without_mutating_saved_target():
 def test_saved_target_requires_usable_tag_before_resolving_geometry():
     listener = BodyTF()
     planner = ProbeMotionPlanner(listener, ArmMotionSpeedPolicy())
-    source = SimpleNamespace(usable_tag=lambda _id: None)
+    source = SimpleNamespace(motion_tag=lambda _id: None)
 
     with pytest.raises(RuntimeError, match="Tag 7 is not currently usable"):
         planner.resolve_tag(saved_command(), source)
@@ -137,7 +137,7 @@ def test_tag_relative_orientation_keeps_existing_facing_convention():
     planner = ProbeMotionPlanner(BodyTF(), ArmMotionSpeedPolicy())
     command = saved_command(OrientationModes.TAG_ORIENTATION)
     rotation = Rotation.from_euler("xyz", [0.4, -0.2, 0.6])
-    source = SimpleNamespace(usable_tag=lambda _id: observed_tag(rotation))
+    source = SimpleNamespace(motion_tag=lambda _id: observed_tag(rotation))
 
     result = planner.resolve_tag(command, source)
 
@@ -151,7 +151,7 @@ def test_body_relative_offset_keeps_existing_geometry():
     command = saved_command()
     command.offset.header.frame_id = "body"
     source = SimpleNamespace(
-        usable_tag=lambda _id: observed_tag(Rotation.from_euler("z", 90, degrees=True)),
+        motion_tag=lambda _id: observed_tag(Rotation.from_euler("z", 90, degrees=True)),
     )
 
     result = planner.resolve_tag(command, source)
@@ -165,7 +165,7 @@ def test_other_tag_frames_keep_their_existing_tf_requirements(frame):
     planner = ProbeMotionPlanner(BodyTF(), ArmMotionSpeedPolicy())
     command = saved_command()
     command.offset.header.frame_id = frame
-    source = SimpleNamespace(usable_tag=lambda _id: observed_tag())
+    source = SimpleNamespace(motion_tag=lambda _id: observed_tag())
 
     with pytest.raises(MovementGeometryUnavailable):
         planner.resolve_tag(command, source)

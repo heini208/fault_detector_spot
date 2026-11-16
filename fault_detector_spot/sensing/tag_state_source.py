@@ -9,6 +9,7 @@ from fault_detector_msgs.msg import TagElementArray
 
 from fault_detector_spot.shared.ros.qos_profiles import TAG_STATE_QOS
 from fault_detector_spot.shared.runtime_source import RuntimeSource
+from fault_detector_spot.shared.persistence.basic_settings import parameter_override
 
 
 DEFAULT_TAG_STATE_STALE_AFTER_SEC = 3.0
@@ -22,6 +23,7 @@ class TagStateSource(RuntimeSource):
         node,
         stale_after_sec: float = DEFAULT_TAG_STATE_STALE_AFTER_SEC,
         monotonic_clock=time.monotonic,
+        ignore_usability_for_motion: bool = False,
     ):
         if node is None:
             raise RuntimeError("TagStateSource requires a ROS node")
@@ -31,6 +33,9 @@ class TagStateSource(RuntimeSource):
         if not callable(monotonic_clock):
             raise TypeError("Monotonic clock must be callable")
 
+        self.ignore_usability_for_motion = parameter_override(
+            "tag_sensing.ignore_usability_for_motion", ignore_usability_for_motion,
+        )
         self.node = node
         self.stale_after_sec = stale_after_sec
         self._monotonic_clock = monotonic_clock
@@ -96,6 +101,12 @@ class TagStateSource(RuntimeSource):
 
     def usable_tag(self, tag_id: int, now: float = None):
         return self.usable_snapshot(now).get(int(tag_id))
+
+    def motion_tag(self, tag_id: int, now: float = None):
+        """Select a fresh motion observation under the saved usability policy."""
+        if self.ignore_usability_for_motion:
+            return self.visible_tag(tag_id, now)
+        return self.usable_tag(tag_id, now)
 
     def destroy(self) -> None:
         subscriptions = tuple(self._subscriptions)

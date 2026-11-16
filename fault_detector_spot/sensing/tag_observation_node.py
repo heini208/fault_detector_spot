@@ -59,7 +59,7 @@ class TagObservationNode(Node):
             self._parameter("tag_sensing.publish_period_sec", 0.05)
         )
         maximum_range_m = float(
-            self._parameter("tag_sensing.maximum_range_m", 1.5)
+            self._parameter("tag_sensing.maximum_range_m", 3.0)
         )
 
         if publish_period_sec <= 0.0:

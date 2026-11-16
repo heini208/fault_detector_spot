@@ -256,7 +256,7 @@ class FakeTagStateSource:
         self.tags = tags
         self.requests = []
 
-    def usable_tag(self, tag_id):
+    def motion_tag(self, tag_id):
         self.requests.append(tag_id)
         tag = self.tags.get(tag_id)
         return None if tag is None else deepcopy(tag)

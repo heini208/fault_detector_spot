@@ -41,3 +41,16 @@ def test_filter_rejects_nonfinite_positions(coordinate):
 def test_filter_rejects_invalid_range(maximum_range):
     with pytest.raises(ValueError):
         TagUsabilityFilter(maximum_range)
+
+
+def test_configured_range_accepts_distant_tags_and_keeps_a_limit():
+    from pathlib import Path
+    import yaml
+
+    config = Path(__file__).resolve().parents[1] / 'config' / 'tag_sensing.yaml'
+    maximum_range = yaml.safe_load(config.read_text())['/**']['ros__parameters']['tag_sensing.maximum_range_m']
+    assert maximum_range == 3.0
+    distant = tag(2.5, 0., 0.)
+    assert TagUsabilityFilter(maximum_range).filter(
+        {1: distant, 2: tag(3.01, 0., 0.)}
+    ) == {1: distant}

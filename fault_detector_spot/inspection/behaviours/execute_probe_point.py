@@ -129,7 +129,7 @@ class ExecuteProbePoint(ArmMovementBehaviour):
     def _move_forward(self):
         step = self._steps[self._stage][self._index]
         if not self._started and hasattr(step, "tag_id"):
-            if self.executor.tag_state_source.usable_tag(step.tag_id) is None:
+            if self.executor.tag_state_source.motion_tag(step.tag_id) is None:
                 return self._wait_for_tag(f"Tag {step.tag_id} is not currently usable", "motion")
             self._tag_wait_started = None
         surface = step.command_id is CommandID.MOVE_CLOSE_TO_SURFACE

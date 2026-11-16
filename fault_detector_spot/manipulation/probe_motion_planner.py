@@ -158,7 +158,7 @@ class ProbeMotionPlanner:
             )
 
         tag_id = int(command.tag_id)
-        tag = tag_state_source.usable_tag(tag_id)
+        tag = tag_state_source.motion_tag(tag_id)
         if tag is None:
             raise RuntimeError(
                 f"Tag {tag_id} is not currently usable"

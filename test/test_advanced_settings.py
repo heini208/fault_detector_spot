@@ -42,12 +42,14 @@ def test_both_tabs_preserve_other_saved_values_and_roundtrip_units(app):
     advanced.fields['base.goal_verification.yaw_tolerance_rad'].setValue(6.)
     advanced.fields['base.correction.maximum_attempts'].setValue(0)
     advanced.fields['arm.contact.telemetry.raw_logging_enabled'].setChecked(False)
+    advanced.fields['tag_sensing.ignore_usability_for_motion'].setChecked(True)
     advanced.save()
     saved = repo.load()
     assert saved['base.goal_verification.yaw_tolerance_rad'] == pytest.approx(.1047197551)
     assert saved['base.correction.maximum_attempts'] == 0
     assert type(saved['base.correction.maximum_attempts']) is int
     assert saved['arm.contact.telemetry.raw_logging_enabled'] is False
+    assert saved['tag_sensing.ignore_usability_for_motion'] is True
     basic.fields['arm_mode'].setCurrentIndex(1)
     basic.save()
     assert all(repo.load()[key] == value for key, value in saved.items())

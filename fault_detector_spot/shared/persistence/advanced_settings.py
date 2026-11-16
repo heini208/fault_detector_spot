@@ -40,8 +40,9 @@ MOVEIT_PATHS = {
     'moveit.octomap_resolution_m': ('octomap_resolution',),
     'moveit.lidar_max_range_m': ('lidar', 'max_range'),
 }
-KEYS = set(ARM_KEYS + BASE_KEYS + SURFACE_KEYS) | NAVIGATION_PATHS.keys() | MOVEIT_PATHS.keys()
-BOOL_KEYS = {'arm.contact.telemetry.raw_logging_enabled', 'close_surface.observation_custom_region_enabled'}
+TAG_KEYS = ('tag_sensing.ignore_usability_for_motion',)
+KEYS = set(ARM_KEYS + BASE_KEYS + SURFACE_KEYS + TAG_KEYS) | NAVIGATION_PATHS.keys() | MOVEIT_PATHS.keys()
+BOOL_KEYS = {'tag_sensing.ignore_usability_for_motion', 'arm.contact.telemetry.raw_logging_enabled', 'close_surface.observation_custom_region_enabled'}
 FRACTION_KEYS = {'close_surface.observation_reference_u', 'close_surface.observation_reference_v'}
 INTEGER_MINIMUMS = {
     'arm.correction.maximum_attempts': 0,
@@ -81,7 +82,7 @@ def validate_relationships(values):
 def defaults(parameters, document):
     values = {}
     for filename, keys in [('arm_motion.yaml', ARM_KEYS), ('base_motion.yaml', BASE_KEYS),
-                           ('close_surface.yaml', SURFACE_KEYS)]:
+                           ('close_surface.yaml', SURFACE_KEYS), ('tag_sensing.yaml', TAG_KEYS)]:
         source = parameters(filename)
         values.update({key: source[key] for key in keys})
     for filename, root, paths in [

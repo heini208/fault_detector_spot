@@ -133,3 +133,26 @@ def test_visible_tag_after_rejects_non_finite_boundary():
             raise AssertionError(
                 "Non-finite tag observation boundary was accepted"
             )
+
+
+def test_motion_tag_requires_usability_by_default():
+    source = TagStateSource(FakeNode())
+    source._receive_visible_tags(message_with_tag(7))
+    assert source.motion_tag(7) is None
+    source._receive_usable_tags(message_with_tag(7))
+    assert source.motion_tag(7).id == 7
+
+
+def test_motion_usability_override_preserves_freshness_and_strict_snapshot():
+    from fault_detector_spot.shared.persistence.basic_settings import BasicSettingsRepository
+
+    BasicSettingsRepository().save({'tag_sensing.ignore_usability_for_motion': True})
+    now = [100.0]
+    source = TagStateSource(FakeNode(), stale_after_sec=1.5, monotonic_clock=lambda: now[0])
+    source._receive_visible_tags(message_with_tag(7))
+    assert source.motion_tag(7).id == 7
+    assert source.motion_tag(8) is None
+    assert source.usable_tag(7) is None
+    assert source.usable_snapshot() == {}
+    now[0] = 101.6
+    assert source.motion_tag(7) is None

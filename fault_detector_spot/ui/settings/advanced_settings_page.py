@@ -12,6 +12,9 @@ from fault_detector_spot.shared.persistence.advanced_settings import FRACTION_KE
 DEGREES = 180. / math.pi
 # group, explanatory text, (key, label, displayed units per stored unit, suffix)
 SECTIONS = (
+    ('Tag-relative movements', 'Allow arm and probe movements to use visible tags beyond the usability range. '
+     'Fresh observations are still required. Walking already uses visible tags. '
+     'Restart the robot application to apply.', ()),
     ('Arm accuracy', 'Defaults for new commands and points. Saved point tolerances stay unchanged. '
      'Turning accuracy is checked in Precision mode. Zero correction attempts disables tag/Precision retries.', (
         ('arm.motion.position_tolerance_m', 'Allowed position error', 1000., ' mm'),
@@ -84,6 +87,9 @@ class AdvancedSettingsPage(BasicSettingsPage):
             hint = QLabel(explanation)
             hint.setWordWrap(True)
             form.addRow(hint)
+            if title == 'Tag-relative movements':
+                self._boolean(form, 'tag_sensing.ignore_usability_for_motion',
+                              'Ignore tag usability for tag-relative movements', explanation)
             if title == 'Sensor observation':
                 self._boolean(form, 'close_surface.observation_custom_region_enabled',
                               'Use custom reference point', explanation)

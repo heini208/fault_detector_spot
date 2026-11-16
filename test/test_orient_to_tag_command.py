@@ -122,7 +122,7 @@ def executor_with_geometry():
     executor = object.__new__(ArmMovementExecutor)
     tag = SimpleNamespace(pose=pose(angles=(15, 25, 35)))
     executor.tag_state_source = SimpleNamespace(
-        usable_tag=Mock(return_value=tag),
+        motion_tag=Mock(return_value=tag),
     )
     current = pose(angles=(-10, 5, 20))
     mounting = pose((0.12, -0.04, 0.08), (10, 20, 30)).pose
@@ -147,7 +147,7 @@ def test_executor_preserves_probe_origin_and_compensates_mount():
     assert sensor_id == "hall_probe"
     assert target.pose.position == original.pose.position
     assert current == original
-    executor.tag_state_source.usable_tag.assert_called_once_with(7)
+    executor.tag_state_source.motion_tag.assert_called_once_with(7)
     executor.probe_motion_planner.normalize_target.assert_called_once_with(
         tag.pose, GRAV_ALIGNED_BODY_FRAME_NAME,
     )

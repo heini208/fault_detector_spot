@@ -39,10 +39,15 @@ class HelperInitializer(py_trees.behaviour.Behaviour):
                 "tag_sensing.state_timeout_sec"
             ).value
         )
+        if not self.node.has_parameter("tag_sensing.ignore_usability_for_motion"):
+            self.node.declare_parameter("tag_sensing.ignore_usability_for_motion", False)
         if self.tag_state_source is None:
             self.tag_state_source = TagStateSource(
                 self.node,
                 stale_after_sec=tag_state_timeout_sec,
+                ignore_usability_for_motion=self.node.get_parameter(
+                    "tag_sensing.ignore_usability_for_motion"
+                ).value,
             )
 
         if not self.node.has_parameter("navigation.map_root"):

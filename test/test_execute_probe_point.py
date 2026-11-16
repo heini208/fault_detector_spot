@@ -539,12 +539,12 @@ def test_surface_recovery_failure_blocks_combined_retry():
 def test_missing_tag_waits_then_continues_without_spending_retry(monkeypatch):
     value = action(retries=1)
     value._steps[0][0].tag_id = 42
-    value.executor.tag_state_source.usable_tag.return_value = None
+    value.executor.tag_state_source.motion_tag.return_value = None
     monkeypatch.setattr('fault_detector_spot.inspection.behaviours.execute_probe_point.time.monotonic', lambda: 10.0)
     assert value.update() is Status.RUNNING
     assert value.events == []
     assert value._attempt == 0
-    value.executor.tag_state_source.usable_tag.return_value = object()
+    value.executor.tag_state_source.motion_tag.return_value = object()
     assert value.update() is Status.RUNNING
     assert value.events == [('move', 'safe')]
 
@@ -552,7 +552,7 @@ def test_missing_tag_waits_then_continues_without_spending_retry(monkeypatch):
 def test_missing_tag_timeout_recovers_checkpoint_before_retry(monkeypatch):
     value = action(retries=1)
     value._steps[0][0].tag_id = 42
-    value.executor.tag_state_source.usable_tag.return_value = None
+    value.executor.tag_state_source.motion_tag.return_value = None
     now = [10.0]
     monkeypatch.setattr('fault_detector_spot.inspection.behaviours.execute_probe_point.time.monotonic', lambda: now[0])
     value.update()

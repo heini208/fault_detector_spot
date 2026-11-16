@@ -1849,7 +1849,7 @@ class ArmMovementExecutor(MovementExecutor):
         tag_id: int,
         sensor_id: str,
     ):
-        tag = self.tag_state_source.usable_tag(tag_id)
+        tag = self.tag_state_source.motion_tag(tag_id)
         if tag is None:
             raise RuntimeError(
                 f"Tag {tag_id} is not currently usable"

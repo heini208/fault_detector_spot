@@ -14,7 +14,9 @@
     tag_sensing.hand_min_decision_margin: 0.0
 
     # Rough sensing range from the body-frame origin, not manipulator reach.
-    tag_sensing.maximum_range_m: 1.5
+    tag_sensing.maximum_range_m: 3.0
+
+    tag_sensing.ignore_usability_for_motion: false
 
     tag_sensing.publish_period_sec: 0.05
     tag_sensing.state_timeout_sec: 3.0
