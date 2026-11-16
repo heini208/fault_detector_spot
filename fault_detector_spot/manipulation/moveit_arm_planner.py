@@ -174,6 +174,8 @@ class MoveItArmPlanner:
         self._started_at = None
         self._planning_mode = None
         self._collision_scene = collision_scene
+        self._pending_path_orientation = None
+        self._pending_path_orientation_tolerance_rad = None
         self._pending_target = None
         self._pending_mode = None
         self._queued_plan = None
@@ -204,24 +206,31 @@ class MoveItArmPlanner:
         return self._prepare_scene(False)
 
     def start(self, target_hand: PoseStamped, *,
-              ignore_environment_collisions: bool = False) -> MoveItPlanUpdate:
-        return self._start(target_hand, "motion", ignore_environment_collisions)
+              ignore_environment_collisions: bool = False,
+              path_orientation=None,
+              path_orientation_tolerance_rad=math.radians(5.0)) -> MoveItPlanUpdate:
+        return self._start(target_hand, "motion", ignore_environment_collisions,
+                           path_orientation, path_orientation_tolerance_rad)
 
     def start_cartesian(self, target_hand: PoseStamped, *,
                         ignore_environment_collisions: bool = False) -> MoveItPlanUpdate:
         return self._start(target_hand, "cartesian", ignore_environment_collisions)
 
-    def _start(self, target_hand, mode, ignore_environment_collisions):
+    def _start(self, target_hand, mode, ignore_environment_collisions,
+               path_orientation=None, path_orientation_tolerance_rad=math.radians(5.0)):
         error = self._target_error(target_hand, allow_scene_sync=True)
         if error is not None:
             return error
         if type(ignore_environment_collisions) is not bool:
             return MoveItPlanUpdate(MoveItPlanOutcome.ERROR, "Collision bypass must be a boolean")
         if self.scene_sync_active:
-            self._queued_plan = (deepcopy(target_hand), mode, ignore_environment_collisions)
+            self._queued_plan = (deepcopy(target_hand), mode, ignore_environment_collisions,
+                                 deepcopy(path_orientation), path_orientation_tolerance_rad)
             return MoveItPlanUpdate(
                 MoveItPlanOutcome.RUNNING, "Waiting for collision scene synchronization"
             )
+        self._pending_path_orientation = deepcopy(path_orientation)
+        self._pending_path_orientation_tolerance_rad = path_orientation_tolerance_rad
         self._pending_target = deepcopy(target_hand)
         self._pending_mode = mode
         if self._collision_scene is None:
@@ -251,7 +260,10 @@ class MoveItArmPlanner:
             request = self._build_cartesian_request(self._pending_target)
         else:
             client = self._client
-            request = self._build_request(self._pending_target)
+            request = self._build_request(
+                self._pending_target, self._pending_path_orientation,
+                self._pending_path_orientation_tolerance_rad,
+            )
         return self._submit(mode, client, request)
 
     def _submit(self, phase, client, request):
@@ -572,7 +584,8 @@ class MoveItArmPlanner:
             trajectory=trajectory,
         )
 
-    def _build_request(self, target_hand: PoseStamped):
+    def _build_request(self, target_hand: PoseStamped, path_orientation=None,
+                       path_orientation_tolerance_rad=math.radians(5.0)):
         request = GetMotionPlan.Request()
         motion = request.motion_plan_request
         motion.group_name = self.group_name
@@ -585,6 +598,15 @@ class MoveItArmPlanner:
         motion.goal_constraints = [
             self._pose_goal_constraints(target_hand)
         ]
+        if path_orientation is not None:
+            orientation = deepcopy(motion.goal_constraints[0].orientation_constraints[0])
+            orientation.orientation = deepcopy(path_orientation)
+            orientation.parameterization = OrientationConstraint.ROTATION_VECTOR
+            tolerance = self._positive(path_orientation_tolerance_rad, "Path orientation tolerance")
+            orientation.absolute_x_axis_tolerance = tolerance
+            orientation.absolute_y_axis_tolerance = tolerance
+            orientation.absolute_z_axis_tolerance = tolerance
+            motion.path_constraints.orientation_constraints = [orientation]
         return request
 
     def _build_cartesian_request(self, target_hand: PoseStamped):
@@ -814,6 +836,8 @@ class MoveItArmPlanner:
         self._future = None
         self._started_at = None
         self._planning_mode = None
+        self._pending_path_orientation = None
+        self._pending_path_orientation_tolerance_rad = None
         self._pending_target = None
         self._pending_mode = None
         self._queued_plan = None

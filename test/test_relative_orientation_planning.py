@@ -1,4 +1,4 @@
-"""Directional translations select Cartesian planning without a free-path fallback."""
+"""Directional translations select Orientation-constrained planning without a free-path fallback."""
 
 import math
 from types import SimpleNamespace
@@ -34,9 +34,12 @@ def relative_rig(monkeypatch, *, axis="x", distance=0.1, yaw=0.0, precision=Fals
 
     def start(mode, target, **kwargs):
         value.modes.append(mode)
+        value.path_options = kwargs.copy()
+        kwargs.pop("path_orientation", None)
+        kwargs.pop("path_orientation_tolerance_rad", None)
         return original_start(target, **kwargs)
 
-    planner.start = lambda target, **kwargs: start("motion", target, **kwargs)
+    planner.start = lambda target, **kwargs: start("orientation" if "path_orientation" in kwargs else "motion", target, **kwargs)
     planner.start_cartesian = lambda target, **kwargs: start("cartesian", target, **kwargs)
     value.update = value.executor.relative(command)
     return value
@@ -44,12 +47,13 @@ def relative_rig(monkeypatch, *, axis="x", distance=0.1, yaw=0.0, precision=Fals
 
 @pytest.mark.parametrize("axis", ["x", "y", "z"])
 @pytest.mark.parametrize("distance", [-0.1, 0.1])
-def test_directional_translation_uses_cartesian_planning(monkeypatch, axis, distance):
+def test_directional_translation_uses_orientation_planning(monkeypatch, axis, distance):
     value = relative_rig(monkeypatch, axis=axis, distance=distance)
     assert value.update.outcome is ArmMovementOutcome.RUNNING
-    assert value.modes == ["cartesian"]
+    assert value.modes == ["orientation"]
     assert getattr(value.starts[0].pose.position, axis) == pytest.approx(distance)
     assert value.starts[0].pose.orientation.w == pytest.approx(1.0)
+    assert value.path_options["path_orientation_tolerance_rad"] == pytest.approx(math.radians(5))
 
 
 @pytest.mark.parametrize("distance", [0.0, 0.1])
@@ -59,21 +63,21 @@ def test_rotation_and_combined_moves_keep_motion_planning(monkeypatch, distance)
     assert value.modes == ["motion"]
 
 
-def test_cartesian_failure_does_not_fall_back_or_dispatch(monkeypatch):
+def test_orientation_failure_does_not_fall_back_or_dispatch(monkeypatch):
     value = relative_rig(monkeypatch)
     value.executor.moveit_arm_planner.poll = lambda: MoveItPlanUpdate(
-        MoveItPlanOutcome.FAILURE, "Incomplete Cartesian path",
+        MoveItPlanOutcome.FAILURE, "Incomplete Orientation-constrained path",
     )
     update = value.executor.poll()
     assert update.outcome is not ArmMovementOutcome.RUNNING
     assert update.outcome is not ArmMovementOutcome.SUCCESS
-    assert value.modes == ["cartesian"]
+    assert value.modes == ["orientation"]
     assert value.client.sent_goals == []
 
 
-def test_precision_correction_keeps_cartesian_planning(monkeypatch):
+def test_precision_correction_keeps_orientation_planning(monkeypatch):
     value = relative_rig(monkeypatch, precision=True)
     assert value.executor.poll().outcome is ArmMovementOutcome.RUNNING
     finish_motion(value)
     assert stable_feedback(value, position=0.088).outcome is ArmMovementOutcome.RUNNING
-    assert value.modes == ["cartesian", "cartesian"]
+    assert value.modes == ["orientation", "orientation"]

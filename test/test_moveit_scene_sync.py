@@ -216,3 +216,22 @@ def test_scene_sync_requires_a_collision_scene():
         assert not node.events
     finally:
         planner.destroy()
+
+
+def test_orientation_constraint_survives_queued_scene_sync_and_is_cleared(head_rig):
+    from geometry_msgs.msg import Quaternion
+
+    rig = head_rig
+    advance_sync_to(rig, "apply")
+    orientation = Quaternion(w=1.0)
+    assert rig.planner.start(
+        rig.target, path_orientation=orientation, path_orientation_tolerance_rad=0.1,
+    ).outcome is MoveItPlanOutcome.RUNNING
+    orientation.w = 0.0
+    while rig.planner._planning_mode != "motion":
+        assert rig.step().outcome is MoveItPlanOutcome.RUNNING
+    constraint, = rig.node.clients[PLAN].requests[-1].motion_plan_request.path_constraints.orientation_constraints
+    assert constraint.orientation.w == 1.0
+    assert constraint.absolute_x_axis_tolerance == pytest.approx(0.1)
+    assert rig.finish_plan().outcome is MoveItPlanOutcome.SUCCESS
+    assert rig.planner._pending_path_orientation is None
