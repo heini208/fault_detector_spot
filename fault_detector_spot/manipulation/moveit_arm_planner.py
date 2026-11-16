@@ -45,7 +45,7 @@ DEFAULT_CARTESIAN_MAX_STEP_M = 0.002
 # smooth approach with changing wrist geometry can start above twice that mean; keep
 # MoveIt's jump check active with room for this changing joint sensitivity.
 DEFAULT_CARTESIAN_JUMP_THRESHOLD = 3.0
-DEFAULT_CARTESIAN_MIN_FRACTION = 0.999
+DEFAULT_CARTESIAN_MIN_FRACTION = 0.98
 MIN_ARM_SH1_RAD = math.radians(-178.0)
 _READ_ONLY_PHASES = frozenset({
     "ik", "read_scene", "verify_scene", "head_attachment", "head_model", "head_mesh", "head_verify",

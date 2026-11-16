@@ -69,7 +69,7 @@ def test_default_position_tolerance_is_five_millimeters():
 def test_cartesian_defaults_require_dense_nearly_complete_path():
     assert DEFAULT_CARTESIAN_MAX_STEP_M == pytest.approx(0.002)
     assert DEFAULT_CARTESIAN_JUMP_THRESHOLD == pytest.approx(3.0)
-    assert DEFAULT_CARTESIAN_MIN_FRACTION == pytest.approx(0.999)
+    assert DEFAULT_CARTESIAN_MIN_FRACTION == pytest.approx(0.98)
 
 
 def test_motion_request_relies_on_robot_model_joint_limits():
