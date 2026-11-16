@@ -16,10 +16,10 @@ def test_unchanged_distance_focus_loss_does_not_submit_transaction():
     assert "_handle_dialog_distances_changed" in source
 
 
-def test_changed_distance_commit_blocks_immediate_alignment_approval():
+def test_changed_distance_commit_keeps_alignment_capture_available():
     source = inspect.getsource(
         ProbeRefinementDialog._handle_distance_editing_finished
     )
 
-    assert "use_current_alignment_button" in source
+    assert "use_current_alignment_button" not in source
     assert "setEnabled(False)" in source

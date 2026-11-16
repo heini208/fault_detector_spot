@@ -1796,9 +1796,7 @@ class InspectionControls(UIControlHelper):
         )
         self.orient_to_surface_button.setEnabled(alignment_enabled)
         self.orient_to_tag_button.setEnabled(alignment_enabled)
-        self.use_current_alignment_button.setEnabled(
-            alignment_enabled and alignment_adjustable
-        )
+        self.use_current_alignment_button.setEnabled(True)
         for button in self.refinement_buttons["alignment"].values():
             button.setEnabled(
                 alignment_enabled and alignment_adjustable
@@ -2016,7 +2014,7 @@ class InspectionControls(UIControlHelper):
         self.move_calculated_approach_button.setEnabled(enabled and safe_page)
         self.move_aligned_pose_button.setEnabled(editable and candidate is not None)
         self.move_aligned_pose_button.setText("Move to Saved Candidate")
-        self.use_current_alignment_button.setEnabled(editable)
+        self.use_current_alignment_button.setEnabled(True)
         self.use_current_alignment_button.setText("Save Current Pose as Candidate")
         self.open_fine_adjustment_button.setEnabled(editable)
         dialog.refresh_path_controls(editable)

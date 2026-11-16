@@ -774,8 +774,7 @@ class ProbeSetupCoordinator:
         )
         return self._advance(draft)
 
-    @_configuration_transaction
-    @_serialized_transaction()
+    @_serialized_transaction(require_idle=False)
     def approve_aligned_pose(
         self,
         context: SetupContextSnapshot,
@@ -800,10 +799,11 @@ class ProbeSetupCoordinator:
         draft.aligned_position_tolerance_m = position_tolerance_m
         draft.pre_approach_speed_scale = arm_speed_scale
         draft.aligned_precision_mode = precision_mode
-        return self._advance(draft)
+        return (self.snapshot(draft.context)
+                if self.refinement_controller.has_context(draft.context)
+                else self._advance(draft))
 
-    @_configuration_transaction
-    @_serialized_transaction()
+    @_serialized_transaction(require_idle=False)
     def approve_probe_pose(
         self,
         context: SetupContextSnapshot,
@@ -825,7 +825,9 @@ class ProbeSetupCoordinator:
         draft.final_probe_speed_scale = arm_speed_scale
         draft.final_position_tolerance_m = position_tolerance_m
         draft.final_precision_mode = precision_mode
-        return self._advance(draft)
+        return (self.snapshot(draft.context)
+                if self.refinement_controller.has_context(draft.context)
+                else self._advance(draft))
 
     @_idle_command_transaction
     @_serialized_transaction()
@@ -1044,17 +1046,13 @@ class ProbeSetupCoordinator:
         self._finish_context_close(draft)
         return snapshot
 
-    @_configuration_transaction
-    @_serialized_transaction()
+    @_serialized_transaction(require_idle=False)
     def add_pathing_point(self, context, name, position_tolerance_m=.01,
                           arm_speed_scale=1.0, path_stage="alignment", precision_mode=False):
         """Capture a full tag-relative tip pose without changing final alignment."""
         draft = self._selected_draft(context)
         self.refinement_controller.require_refinement(draft)
         path = self._path_for_stage(draft, path_stage)
-        self.require_configuration_idle(
-            "Robot command lane must be idle before capturing a pathing point"
-        )
         name = name.strip()
         if not name:
             raise ValueError("Pathing point name must not be empty")
@@ -1073,7 +1071,9 @@ class ProbeSetupCoordinator:
                       else (RefinementStage.ALIGNMENT, RefinementStage.PROBE)):
             refinement.motion_states[stage] = RefinementMotionState.NOT_TESTED
         draft.dirty = True
-        return self._advance(draft)
+        return (self.snapshot(draft.context)
+                if self.refinement_controller.has_context(draft.context)
+                else self._advance(draft))
 
     @_serialized_transaction()
     def delete_pathing_point(self, context, index, path_stage="alignment"):

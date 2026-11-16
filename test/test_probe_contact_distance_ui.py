@@ -47,7 +47,7 @@ def test_dialog_contact_commit_submits_geometry_and_waits_for_state(controls):
     assert controls.reference_target_distance_field.text() == "0.000"
     assert not dialog.target_distance_field.isModified()
     assert not dialog.target_distance_field.isEnabled()
-    assert not controls.use_current_alignment_button.isEnabled()
+    assert controls.use_current_alignment_button.isEnabled()
 
 
 def test_reference_selection_rejects_invalid_clearance_without_raising(

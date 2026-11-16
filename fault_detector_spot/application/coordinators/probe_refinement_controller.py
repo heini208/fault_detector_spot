@@ -151,43 +151,14 @@ class ProbeRefinementController:
             raise ValueError("Unmeasured alignment option must be a boolean")
         if stage is RefinementStage.SAFE_APPROACH:
             raise ValueError("Set the shared safe pose in routine setup")
-        self.setup_coordinator.require_configuration_idle(
-            "Robot command lane must be idle before approving a probe pose"
-        )
         if draft.setup is None:
             raise ValueError("No calculated probe setup is available")
         attachment = self._active_attachment(draft)
-        if stage is RefinementStage.ALIGNMENT:
-            self._ensure_minimum_camera_clearance_geometry(
-                draft,
-                attachment,
-            )
         refinement = self.require_refinement(draft)
-        if draft.setup.fully_custom:
-            predecessor = (RefinementStage.SAFE_APPROACH if stage is RefinementStage.ALIGNMENT
-                           else RefinementStage.ALIGNMENT)
-            if refinement.motion_states[predecessor] is not RefinementMotionState.REACHED:
-                raise RuntimeError("Reach the preceding stage before capturing this pose")
-            if not refinement.stage_is_approved(predecessor):
-                raise RuntimeError("Approve the preceding stage first")
-        elif stage is RefinementStage.ALIGNMENT:
-            if refinement.motion_states[stage] not in {
-                RefinementMotionState.REACHED,
-                RefinementMotionState.FAILED,
-            }:
-                raise RuntimeError(
-                    "Reach or attempt the alignment pose before approval"
-                )
-            if not allow_unmeasured_alignment:
-                self._require_live_alignment_camera_clearance()
-        elif (
-            stage != RefinementStage.SAFE_APPROACH
-            and refinement.motion_states[stage]
-            != RefinementMotionState.REACHED
-        ):
-            raise RuntimeError(
-                f"Reach the {stage.value} pose before approval"
-            )
+        if (stage is RefinementStage.ALIGNMENT
+                and not draft.setup.fully_custom
+                and not allow_unmeasured_alignment):
+            self._require_live_alignment_camera_clearance()
         pose_object = self.current_probe_pose(draft, attachment)
         if (
             stage == RefinementStage.SAFE_APPROACH

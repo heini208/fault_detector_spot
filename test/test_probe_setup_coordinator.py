@@ -515,8 +515,8 @@ def test_external_motion_invalidates_refinement_before_completion(tmp_path, comm
     assert not current.refinement.alignment_candidate_reached
     assert not current.refinement.alignment_orientation_established
     assert current.refinement.candidate_poses == state.refinement.candidate_poses
-    with pytest.raises(RuntimeError, match="Reach the probe pose before approval"):
-        probe.approve_probe_pose(current.context)
+    captured = probe.approve_probe_pose(current.context)
+    assert captured.refinement.stage_is_approved(RefinementStage.PROBE)
 
 
 def test_probe_motion_uses_active_sensor_attachment(tmp_path):
@@ -870,6 +870,7 @@ def test_pose_capture_distinguishes_pending_stop_from_owned_motion(tmp_path, cap
             recording_policy=RecordingPolicy.EXCLUDE,
         ))
     commands.cancel_all()
+    state = probe.snapshot(probe.context(state.context.context_id, "probe-ui"))
     before = probe.object_repository.get_object_path("motor").read_text()
     actions = {
         "base": lambda: probe.save_base_position(state.context),
@@ -879,14 +880,14 @@ def test_pose_capture_distinguishes_pending_stop_from_owned_motion(tmp_path, cap
         "probe": lambda: probe.approve_probe_pose(state.context),
     }
 
-    if command_state == "active_motion":
+    if command_state == "active_motion" and capture in {"base", "safe"}:
         with pytest.raises(RuntimeError):
             actions[capture]()
         assert probe.object_repository.get_object_path("motor").read_text() == before
     else:
         result = actions[capture]()
         assert result.context.revision > state.context.revision
-        assert [request.command.command_id for request in sent] == [CommandID.EMERGENCY_CANCEL]
+        assert sent[-1].command.command_id == CommandID.EMERGENCY_CANCEL
         # Capturing data cannot reopen setup movement or clear the stop latch.
         with pytest.raises(RuntimeError):
             probe.require_physical_lane_idle("Motion remains blocked")

@@ -51,8 +51,6 @@ def test_custom_starts_without_reference_or_default_candidates(tmp_path):
     assert state.setup.surface_target is None
     assert state.refinement.candidate_pose(RefinementStage.ALIGNMENT) is None
     assert state.refinement.candidate_pose(RefinementStage.PROBE) is None
-    with pytest.raises(RuntimeError, match="preceding"):
-        probe.approve_aligned_pose(state.context)
     state, _ = move(probe, commands, state, ProbeMotionKind.MOVE_SAFE_APPROACH)
     for kind in (ProbeMotionKind.MOVE_ALIGNED_PREAPPROACH, ProbeMotionKind.MOVE_PRE_APPROACH_PATH):
         with pytest.raises(ValueError, match="Save a candidate"):
@@ -270,3 +268,12 @@ def test_unrelated_command_does_not_invalidate_reached_candidate(tmp_path):
     for listener in tuple(commands.listeners):
         listener(CommandControllerStatus(request, CommandControllerState.DISPATCHED))
     assert latest(probe, state).refinement.motion_states[RefinementStage.ALIGNMENT] is RefinementMotionState.REACHED
+
+
+@pytest.mark.parametrize("stage", [RefinementStage.ALIGNMENT, RefinementStage.PROBE])
+def test_custom_capture_does_not_require_preceding_stage(tmp_path, stage):
+    probe, commands, state = begin_custom(tmp_path)
+    approve = probe.approve_aligned_pose if stage is RefinementStage.ALIGNMENT else probe.approve_probe_pose
+    state = approve(state.context)
+    assert state.refinement.stage_is_approved(stage)
+    assert state.refinement.approved_pose(stage) == probe.motion_state_source.pose

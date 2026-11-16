@@ -581,7 +581,8 @@ class ProbeRefinementDialog(QDialog):
         if self.full_control_dialog is not None:
             self.full_control_dialog.setEnabled(enabled)
         self.pathing_point_count_label.setText(f"Pathing points: {count}")
-        for button in (self.add_pathing_point_button, self.move_path_button, self.move_safe_pose_button):
+        self.add_pathing_point_button.setEnabled(True)
+        for button in (self.move_path_button, self.move_safe_pose_button):
             button.setEnabled(enabled)
         self.path_dialog.refresh(state, enabled)
         if state is None or not state.refinement_active:
@@ -787,7 +788,6 @@ class ProbeRefinementDialog(QDialog):
             field.setEnabled(False)
         for button in (
             self.controls.move_aligned_pose_button,
-            self.controls.use_current_alignment_button,
             self.controls.orient_to_surface_button,
             self.controls.orient_to_tag_button,
             self.back_button,

@@ -57,7 +57,7 @@ def test_popup_captures_names_reorders_and_emits_selected_move(application):
     dialog.hide()
 
 
-def test_path_popup_disables_edits_during_movement(application):
+def test_path_popup_allows_capture_during_movement(application):
     controls = FinalizingInspectionControls(FakeUI())
     state = safe_state()
     state.safe_approach_motion_state = ProbeSetupState.MOTION_REACHED
@@ -69,7 +69,7 @@ def test_path_popup_disables_edits_during_movement(application):
     dialog.refresh_path_controls(True)
     assert dialog.path_dialog.add_button.isEnabled()
     dialog.refresh_path_controls(False)
-    assert not dialog.path_dialog.add_button.isEnabled()
+    assert dialog.path_dialog.add_button.isEnabled()
     assert not dialog.path_dialog.move_button.isEnabled()
     assert not dialog.move_path_button.isEnabled()
     dialog.hide()
@@ -85,7 +85,7 @@ def test_delete_selection_and_duplicate_name_feedback(application):
     dialog.show_stage(RefinementStage.ALIGNMENT)
     popup = dialog.path_dialog
     popup.name_field.setText(" CLEAR HOUSING ")
-    assert not popup.add_button.isEnabled()
+    assert popup.add_button.isEnabled()
     assert "already exists" in popup.name_error_label.text()
     popup.points.setCurrentRow(-1)
     assert not popup.delete_button.isEnabled()
@@ -200,9 +200,9 @@ def test_candidate_motion_restores_editing_after_terminal_verification(
     publish_command_status(CommandControllerState.RUNNING, 1)
     assert accepted[-1]
     assert not controls.open_fine_adjustment_button.isEnabled()
-    assert not dialog.add_pathing_point_button.isEnabled()
+    assert dialog.add_pathing_point_button.isEnabled()
     assert not dialog.back_away_surface_button.isEnabled()
-    assert not controls.use_current_alignment_button.isEnabled()
+    assert controls.use_current_alignment_button.isEnabled()
 
     target = probe._drafts[initial.context.context_id].refinement.pending_motion.target_pose_object
     probe.motion_state_source.pose = deepcopy(target)

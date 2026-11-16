@@ -84,8 +84,8 @@ def test_full_path_visits_each_point_then_final_and_reports_one_result(tmp_path)
     assert [target.position.x for target in targets] == [final.position.x, .9, .75]
     assert len(operation.request.command.pre_approach_offsets) == 2
     assert operation.request.command.command_id is CommandID.FOLLOW_MOVE_TO_TAG_PATH
-    with pytest.raises(RuntimeError, match="Robot command lane must be idle"):
-        probe.add_pathing_point(state.context, "Blocked")
+    captured = probe.add_pathing_point(state.context, "During movement")
+    assert captured.pre_approach_path[-1].name == "During movement"
     probe.motion_state_source.pose = deepcopy(final)
     commands.succeed(operation.request)
     assert len(statuses) == 1
@@ -247,3 +247,12 @@ def test_path_point_tolerance_defaults_for_existing_saved_data():
     assert PreApproachPathPoint.from_dict(data).position_tolerance_m == .035
     del data["position_tolerance_m"]
     assert PreApproachPathPoint.from_dict(data).position_tolerance_m == .01
+
+
+def test_alignment_can_be_captured_immediately_after_pathing_point(tmp_path):
+    probe, commands = coordinator(tmp_path)
+    state = add_points(probe, begin_setup(probe, commands))
+    assert state.refinement.motion_states[RefinementStage.ALIGNMENT] is RefinementMotionState.NOT_TESTED
+    state = probe.approve_aligned_pose(state.context, allow_unmeasured_alignment=True)
+    assert state.refinement.approved_pose(RefinementStage.ALIGNMENT) == probe.motion_state_source.pose
+    assert state.setup.surface_alignment_approved

@@ -262,7 +262,8 @@ def test_live_alignment_clearance_gate_delegates_to_state_source():
 
 
 @pytest.mark.parametrize("allow_unmeasured,missing_distance", [(False, False), (True, True), (False, True)])
-def test_explicit_alignment_approval_promotes_failed_pose_to_reached(allow_unmeasured, missing_distance):
+@pytest.mark.parametrize("motion_state", list(RefinementMotionState))
+def test_explicit_alignment_approval_captures_any_motion_state(allow_unmeasured, missing_distance, motion_state):
     calculated = make_setup(aligned_distance=0.12)
     safe_approved = approve_safe_approach_pose(
         calculated,
@@ -272,9 +273,7 @@ def test_explicit_alignment_approval_promotes_failed_pose_to_reached(allow_unmea
         calculated,
         safe_approved,
     )
-    refinement.motion_states[RefinementStage.ALIGNMENT] = (
-        RefinementMotionState.FAILED
-    )
+    refinement.motion_states[RefinementStage.ALIGNMENT] = motion_state
     draft = SimpleNamespace(
         setup=safe_approved,
         refinement=refinement,
