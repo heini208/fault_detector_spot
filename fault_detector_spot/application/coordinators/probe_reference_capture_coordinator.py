@@ -138,7 +138,9 @@ class ProbeReferenceCaptureCoordinator:
 
             synchronizers = self._create_synchronizers(selected)
             last_error = None
-            for attempt in range(1, self.capture_max_attempts + 1):
+            attempt = 1
+            attempt_deadline = time.monotonic() + self.capture_timeout_sec
+            while attempt <= self.capture_max_attempts:
                 self._check_cancel(cancel_requested)
                 self._emit(
                     state_changed,
@@ -237,8 +239,16 @@ class ProbeReferenceCaptureCoordinator:
                 ) as exception:
                     last_error = exception
                     self._cancel_collections(synchronizers)
-                    if attempt >= self.capture_max_attempts:
-                        break
+                    # A completed collection window is not a capture timeout.
+                    # Keep trying fresh windows when streams stall or a valid
+                    # triplet is missing, without spending an attempt early.
+                    if time.monotonic() >= attempt_deadline:
+                        attempt += 1
+                        attempt_deadline = (
+                            time.monotonic() + self.capture_timeout_sec
+                        )
+                    if attempt <= self.capture_max_attempts:
+                        self._shutdown.wait(self.poll_sec)
             raise RuntimeError(
                 "Reference-view capture failed after "
                 f"{self.capture_max_attempts} attempts: {last_error}"

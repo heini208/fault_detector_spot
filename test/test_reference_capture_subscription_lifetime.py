@@ -170,3 +170,57 @@ def test_suspended_synchronizer_drops_history_and_requires_fresh_input():
         subscription.callback(message)
     assert synchronizer.ready_for_collection()
     assert synchronizer.input_sequence == sequence + 2
+
+
+@pytest.mark.parametrize('valid_after_windows', [4, None])
+def test_empty_windows_do_not_exhaust_attempts_before_timeout(
+    coordinator, monkeypatch, valid_after_windows,
+):
+    clock = [0.0]
+    monkeypatch.setattr(capture_module.time, 'monotonic', lambda: clock[0])
+    coordinator._wait_for_ready_inputs = lambda *_: None
+
+    def finish_window(*_):
+        clock[0] += coordinator.collection_duration_sec
+
+    coordinator._wait_for_collections = finish_window
+    windows = []
+
+    def capture(*args, **kwargs):
+        windows.append(clock[0])
+        if valid_after_windows is None or len(windows) < valid_after_windows:
+            raise capture_module.ReferenceViewCaptureNotReady('no images')
+
+    monkeypatch.setattr(capture_module, 'capture_reference_views', capture)
+    context = SimpleNamespace(context_id='context', client_id='client')
+    spec = capture_module.ProbeReferenceCaptureSpec(replace_existing=False)
+    if valid_after_windows is None:
+        with pytest.raises(RuntimeError, match='failed after 3 attempts: no images'):
+            coordinator.run(context, 'capture', spec, lambda: False)
+        assert clock[0] >= (
+            coordinator.capture_timeout_sec * coordinator.capture_max_attempts
+        )
+    else:
+        coordinator.run(context, 'capture', spec, lambda: False)
+        assert len(windows) == valid_after_windows
+    assert not coordinator._active_request_id
+    assert all(not value.collection_active for value in coordinator._synchronizers.values())
+
+
+def test_capture_can_be_cancelled_between_empty_windows(coordinator, monkeypatch):
+    coordinator._wait_for_ready_inputs = lambda *_: None
+    cancelled = [False]
+
+    def capture(*args, **kwargs):
+        cancelled[0] = True
+        raise capture_module.ReferenceViewCaptureNotReady('no images')
+
+    monkeypatch.setattr(capture_module, 'capture_reference_views', capture)
+    with pytest.raises(capture_module.ReferenceCaptureCancelled):
+        coordinator.run(
+            SimpleNamespace(context_id='context', client_id='client'),
+            'capture', capture_module.ProbeReferenceCaptureSpec(False),
+            lambda: cancelled[0],
+        )
+    assert not coordinator._active_request_id
+    assert all(not value.collection_active for value in coordinator._synchronizers.values())
