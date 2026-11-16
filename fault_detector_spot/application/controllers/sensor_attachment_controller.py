@@ -28,6 +28,7 @@ from fault_detector_spot.inspection.repository.sensor_attachment_state_store imp
 _AUTOMATIC_SENSOR_COMMANDS = frozenset({
     CommandID.EXECUTE_PROBE_POINT,
     CommandID.MOVE_ARM_TO_TAG,
+    CommandID.MOVE_SAFE_APPROACH,
     CommandID.FOLLOW_MOVE_TO_TAG_PATH,
     CommandID.MOVE_ARM_TO_TAG_AND_WAIT,
     CommandID.ORIENT_TO_SURFACE,
@@ -38,7 +39,6 @@ _AUTOMATIC_SENSOR_COMMANDS = frozenset({
 _PLANNED_ARM_COMMANDS = _AUTOMATIC_SENSOR_COMMANDS | {
     CommandID.MOVE_ARM_RELATIVE,
     CommandID.MOVE_ARM_TO_POSE,
-    CommandID.MOVE_SAFE_APPROACH,
     CommandID.ADJUST_SAFE_APPROACH,
     CommandID.MOVE_CLOSE_TO_SURFACE,
     CommandID.MEASURE_SENSOR_TIP_DISTANCE,

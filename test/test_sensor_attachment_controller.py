@@ -537,6 +537,7 @@ def test_reserved_head_geometry_is_isolated_from_definition_and_callers():
 
 @pytest.mark.parametrize("command_id", [
     CommandID.MOVE_ARM_TO_TAG, CommandID.FOLLOW_MOVE_TO_TAG_PATH,
+    CommandID.MOVE_SAFE_APPROACH,
     CommandID.MOVE_CLOSE_TO_SURFACE, CommandID.MEASURE_SENSOR_TIP_DISTANCE,
 ])
 def test_move_to_tag_request_is_bound_to_confirmed_sensor(tmp_path, command_id):
@@ -566,6 +567,7 @@ def test_move_to_tag_request_is_bound_to_confirmed_sensor(tmp_path, command_id):
 
 @pytest.mark.parametrize("command_id", [
     CommandID.MOVE_ARM_TO_TAG, CommandID.FOLLOW_MOVE_TO_TAG_PATH,
+    CommandID.MOVE_SAFE_APPROACH,
     CommandID.MOVE_CLOSE_TO_SURFACE, CommandID.MEASURE_SENSOR_TIP_DISTANCE,
 ])
 def test_move_to_tag_requires_then_uses_confirmed_bare_hand(tmp_path, command_id):
@@ -591,7 +593,6 @@ def test_move_to_tag_requires_then_uses_confirmed_bare_hand(tmp_path, command_id
 
 @pytest.mark.parametrize("command_id", (
     CommandID.MOVE_ARM_RELATIVE,
-    CommandID.MOVE_SAFE_APPROACH,
     CommandID.ADJUST_SAFE_APPROACH,
     CommandID.MOVE_CLOSE_TO_SURFACE,
     CommandID.MEASURE_SENSOR_TIP_DISTANCE,
@@ -707,3 +708,42 @@ def test_absolute_arm_retry_obeys_attachment_admission(tmp_path, monkeypatch):
     commands.add_accepted_listener(accepted.append)
     commands.submit(request)
     assert accepted[0].command.offset == target
+
+
+@pytest.mark.parametrize("sensor_id", ["", "bmm150_01"])
+def test_recorded_safe_approach_rebinds_current_attachment(tmp_path, sensor_id):
+    from fault_detector_spot.application.recording.recording_repository import RecordingRepository
+
+    controller, sensors, _, commands = build_controller(tmp_path)
+    if sensor_id:
+        sensors.create(sensor_definition(sensor_id))
+        controller.select_sensor(sensor_id)
+    recordings = RecordingRepository(tmp_path / "recordings")
+    recordings.save("approach", [SemanticCommand(
+        command_id=CommandID.MOVE_SAFE_APPROACH,
+        tag=SemanticTag(7, StampedPose()),
+        motion_sensor_id="previous_sensor",
+    )])
+    recorded = recordings.load("approach")[0]
+    assert recorded.motion_sensor_id == ""
+    commands.add_request_preparer(controller.prepare_request)
+    dispatched = []
+    commands.configure_dispatch(dispatched.append)
+    request = CommandRequest.create(
+        command=recorded,
+        client_id="record_manager",
+        origin=CommandOrigin.PLAYBACK,
+        recording_policy=RecordingPolicy.INCLUDE_IF_RECORDING_ACTIVE,
+    )
+
+    with pytest.raises(RuntimeError, match="confirmation is pending"):
+        commands.submit(request)
+    assert not dispatched
+
+    controller.confirm_sensor(sensor_id, controller.snapshot().attachment_revision)
+    commands.submit(request)
+
+    assert len(dispatched) == 1
+    assert dispatched[0].command.motion_sensor_id == (sensor_id or BARE_HAND_MOTION_ID)
+    assert dispatched[0].command.tag == recorded.tag
+    assert dispatched[0].command.offset == recorded.offset
