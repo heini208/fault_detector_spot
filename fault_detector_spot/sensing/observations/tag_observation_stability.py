@@ -10,7 +10,7 @@ import math
 from fault_detector_msgs.msg import TagElement
 
 from fault_detector_spot.shared.geometry.rotation import (
-    quaternion_to_rpy,
+    tag_inward_normal_heading,
 )
 from fault_detector_spot.shared.geometry.models import (
     QuaternionData,
@@ -157,8 +157,9 @@ class StableTagObservationTracker:
 
         try:
             sample = self._sample(observation, stamp_sec)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError) as exception:
             self._reset_samples()
+            self.detail = f"Invalid tag observation: {exception}"
             return None
 
         self._frame_id = frame_id
@@ -231,7 +232,7 @@ class StableTagObservationTracker:
     def _sample(cls, observation: TagElement, stamp_sec: float):
         pose = observation.pose.pose
         orientation = pose.orientation
-        _, _, yaw = quaternion_to_rpy(
+        yaw = tag_inward_normal_heading(
             QuaternionData(
                 x=float(orientation.x),
                 y=float(orientation.y),

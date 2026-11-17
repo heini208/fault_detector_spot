@@ -7,6 +7,7 @@ from fault_detector_msgs.msg import TagElement
 
 from fault_detector_spot.shared.geometry.rotation import (
     quaternion_from_euler,
+    multiply_quaternions,
 )
 from fault_detector_spot.sensing.observations.tag_observation_stability import (
     StableTagObservationTracker,
@@ -40,7 +41,10 @@ def observation(
     )
     value.pose.pose.position.x = x
     value.pose.pose.position.y = y
-    quaternion = quaternion_from_euler("z", yaw)
+    quaternion = multiply_quaternions(
+        quaternion_from_euler("z", yaw),
+        quaternion_from_euler("y", -math.pi / 2),
+    )
     value.pose.pose.orientation.x = quaternion.x
     value.pose.pose.orientation.y = quaternion.y
     value.pose.pose.orientation.z = quaternion.z
@@ -216,3 +220,46 @@ def test_invalid_stability_config_is_rejected(kwargs):
 
     with pytest.raises(ValueError):
         TagObservationStabilityConfig(**values)
+
+
+@pytest.mark.parametrize("tilt", [-89.0, -91.0])
+def test_normal_heading_stays_stable_across_euler_singularity(tilt):
+    tracker = StableTagObservationTracker(config())
+    tracker.update(observation(10.1), 10.0)
+    tracker.update(observation(10.2), 10.0)
+    sample = observation(10.3)
+    q = quaternion_from_euler("y", math.radians(tilt))
+    orientation = sample.pose.pose.orientation
+    orientation.x, orientation.y, orientation.z, orientation.w = q.x, q.y, q.z, q.w
+    assert tracker.update(sample, 10.0) is not None
+
+
+def test_vertical_normal_is_rejected_and_resets_window():
+    tracker = StableTagObservationTracker(config())
+    tracker.update(observation(10.1), 10.0)
+    sample = observation(10.2)
+    orientation = sample.pose.pose.orientation
+    orientation.x = orientation.y = orientation.z = 0.0
+    orientation.w = 1.0
+    assert tracker.update(sample, 10.0) is None
+    assert tracker.sample_count == 0
+    assert "no horizontal heading" in tracker.detail
+
+
+def test_normal_heading_change_is_rejected_even_with_unchanged_euler_yaw():
+    tracker = StableTagObservationTracker(config())
+    for stamp, tilt in [(10.1, -45), (10.2, -45), (10.3, 45)]:
+        sample = observation(stamp)
+        q = quaternion_from_euler("y", math.radians(tilt))
+        orientation = sample.pose.pose.orientation
+        orientation.x, orientation.y, orientation.z, orientation.w = q.x, q.y, q.z, q.w
+        assert tracker.update(sample, 10.0) is None
+    assert tracker.sample_count == 1
+    assert "180.00 deg" in tracker.detail
+
+
+def test_normal_heading_wraparound_is_stable():
+    tracker = StableTagObservationTracker(config())
+    tracker.update(observation(10.1, yaw=math.radians(179.5)), 10.0)
+    tracker.update(observation(10.2, yaw=math.radians(-179.5)), 10.0)
+    assert tracker.update(observation(10.3, yaw=math.pi), 10.0) is not None

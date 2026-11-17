@@ -131,6 +131,14 @@ def rotation_distance_rad(
     return distance
 
 
+def tag_inward_normal_heading(quaternion: QuaternionData) -> float:
+    """Heading of the tag's local -Z normal projected into the XY plane."""
+    normal = rotation_from_quaternion(quaternion).apply([0.0, 0.0, -1.0])
+    if math.hypot(normal[0], normal[1]) <= 1e-12:
+        raise ValueError("Tag normal has no horizontal heading")
+    return math.atan2(normal[1], normal[0])
+
+
 def quaternion_to_rpy(
     quaternion: QuaternionData,
 ) -> tuple[float, float, float]:
@@ -150,6 +158,7 @@ __all__ = [
     "quaternion_from_matrix",
     "quaternion_from_rotation",
     "quaternion_to_rpy",
+    "tag_inward_normal_heading",
     "rotate_vector",
     "rotation_distance_rad",
     "rotation_from_quaternion",

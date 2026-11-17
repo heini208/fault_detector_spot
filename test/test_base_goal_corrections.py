@@ -3,6 +3,7 @@
 from test_base_movement_executor import ReadyHeight
 
 from copy import deepcopy
+import math
 from types import SimpleNamespace
 
 import pytest
@@ -47,7 +48,9 @@ class FakeTagStateSource:
             (float(stamp_sec) - whole) * 1e9
         )
         tag.pose.pose.position.x = float(x)
-        tag.pose.pose.orientation.w = 1.0
+        # Vertical tag with its inward normal along odom +X.
+        tag.pose.pose.orientation.y = -math.sqrt(0.5)
+        tag.pose.pose.orientation.w = math.sqrt(0.5)
         self.tag = tag
 
     def clear(self):

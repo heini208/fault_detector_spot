@@ -41,12 +41,17 @@ settled, execution enters `WAITING_FOR_FRESH_TAG`. Only tag observations newer
 than that settle timestamp may be used. Several unique observations must remain
 within the configured position and yaw spans before they are accepted as
 stable. Observations are transformed into odom at their capture timestamps
-before comparison, so body sway does not appear as tag motion. Missing
+before comparison, so body sway does not appear as tag motion. The stability
+filter and selected-tag movement target share the same heading calculation:
+the horizontal projection of the tag's inward (-Z) normal, rather than Euler
+yaw of the tag frame. Observations with no horizontal normal are rejected. Missing
 capture-time transforms are retried within the observation timeout.
 When the offset frame is the selected `Tag_N`, its offset and heading use
 that same observation. Zero yaw follows the horizontal projection of the
 tag's inward (-Z) normal; it does not mean zero odom yaw. The observation
-yaw-span limit is 3 degrees, independently of the endpoint heading tolerance.
+yaw-span limit configured in `base_motion.yaml` is 25 degrees, independently
+of the endpoint heading tolerance. This permits noisier observations; the latest
+accepted observation supplies the correction target without averaging.
 The original semantic tag request is then resolved again from that
 stable observation. If the measured base pose is already within tolerance of
 the fresh target, the operation succeeds; otherwise the freshly resolved plan
@@ -63,10 +68,12 @@ The post-settle tag window is bounded by
 `base.tag_correction.stability.required_samples`,
 `maximum_position_span_m`, `maximum_yaw_span_rad`, and
 `maximum_sample_span_sec`. These values should be tuned from real robot
-measurements. The default sample span is 4 seconds to accommodate three
+measurements. The configured sample span is 4 seconds to accommodate two
 distinct observations at the observed roughly 1 Hz Spot world-object cadence.
 Repeated publications of the same observation do not count as new samples.
-The 5-second observation timeout starts when physical settling is confirmed.
+The configured 20-second observation timeout starts when physical settling is
+confirmed. Rejected windows are retried within this timeout; increasing the
+movement correction count does not extend this observation window.
 
 Cancellation retains base-operation ownership until the active RobotCommand
 reaches a terminal state. Goal-response and result timeouts follow the same

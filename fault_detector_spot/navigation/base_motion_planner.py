@@ -20,7 +20,7 @@ from tf2_geometry_msgs import do_transform_pose_stamped
 from fault_detector_spot.shared.geometry.rotation import (
     multiply_quaternions,
     quaternion_from_euler,
-    rotation_from_quaternion,
+    tag_inward_normal_heading,
     quaternion_to_rpy,
 )
 from fault_detector_spot.shared.geometry.models import (
@@ -258,13 +258,9 @@ class BaseMotionPlanner:
         if alias is None or int(alias.group(1)) != tag_id:
             return
         q = command.tag_pose.pose.orientation
-        rotation = rotation_from_quaternion(
+        yaw = tag_inward_normal_heading(
             QuaternionData(x=q.x, y=q.y, z=q.z, w=q.w)
         )
-        normal = rotation.apply([0.0, 0.0, -1.0])
-        if math.hypot(normal[0], normal[1]) <= 1e-12:
-            raise ValueError("Tag normal has no horizontal heading in odom")
-        yaw = math.atan2(normal[1], normal[0])
         x, y = offset.pose.position.x, offset.pose.position.y
         offset.pose.position.x = math.cos(yaw) * x - math.sin(yaw) * y
         offset.pose.position.y = math.sin(yaw) * x + math.cos(yaw) * y
