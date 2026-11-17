@@ -36,10 +36,12 @@ SECTIONS = (
         ('arm.contact.retreat_speed_mps', 'Speed when backing away', 1000., ' mm/s'),
     )),
     ('Approaching a surface', 'Far and near speeds are blended using the distance to the surface at the start '
-     'of each movement. Speed is not continuously reduced during a move. Contact search uses its own force threshold.', (
+     'of each movement. Speed is not continuously reduced during a move. '
+     'Zero-distance contact search uses its own speed and force threshold.', (
         ('close_surface.approach_far_speed_mps', 'Speed farther from the surface', 1000., ' mm/s'),
         ('close_surface.approach_near_speed_mps', 'Speed near the surface', 1000., ' mm/s'),
         ('close_surface.approach_slowdown_distance_m', 'Distance used to select a slower speed', 1000., ' mm'),
+        ('close_surface.contact_search_speed_mps', 'Speed for zero-distance contact', 1000., ' mm/s'),
         ('close_surface.contact_search_force_threshold_n', 'Force threshold for zero-distance contact', 1., ' N'),
     )),
     ('Sensor observation', 'Automatic viewing follows the mounted sensor axis. A custom reference point bounds '

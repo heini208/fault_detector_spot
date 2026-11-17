@@ -1774,6 +1774,11 @@ settings tabs share the existing settings file; saving or resetting one tab pres
 the other tab's saved values. Reset remains unsaved until Save is clicked. The fields
 use mm, degrees, seconds, newtons, and percentages and ignore mouse-wheel edits.
 
+Under **Approaching a surface**, **Speed for zero-distance contact** controls the
+force-guarded search when the target distance is 0 mm. It defaults to 1 mm/s and
+is independent of the near/far approach speeds. Save settings, then restart both
+the control window and robot application to apply the change.
+
 Arm position defaults populate new command and path-point editors; explicit and saved
 point tolerances are retained. Separate turning defaults preserve the original
 manual Precision tolerance (2 degrees) and probe setup tolerance (0.087 radians,

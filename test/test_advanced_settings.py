@@ -82,6 +82,7 @@ def test_advanced_parameters_reach_existing_owners():
         'close_surface.approach_far_speed_mps': .008,
         'close_surface.approach_near_speed_mps': .001,
         'close_surface.approach_slowdown_distance_m': .04,
+        'close_surface.contact_search_speed_mps': .003,
         'close_surface.contact_search_force_threshold_n': 1.5,
     }
     BasicSettingsRepository().save(values)

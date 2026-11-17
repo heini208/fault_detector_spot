@@ -24,7 +24,8 @@ BASE_KEYS = (
 )
 SURFACE_KEYS = (
     'close_surface.approach_far_speed_mps', 'close_surface.approach_near_speed_mps',
-    'close_surface.approach_slowdown_distance_m', 'close_surface.contact_search_force_threshold_n',
+    'close_surface.approach_slowdown_distance_m', 'close_surface.contact_search_speed_mps',
+    'close_surface.contact_search_force_threshold_n',
     'close_surface.observation_custom_region_enabled',
     'close_surface.observation_reference_u', 'close_surface.observation_reference_v',
 )
